@@ -3,6 +3,7 @@ import { Command } from "commander";
 import React from "react";
 import { render, Text, Box } from "ink";
 import { scan, switchBack } from "./scanner.js";
+import { reportState } from "./state.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
@@ -50,15 +51,14 @@ program
     const interval = parseInt(seconds, 10) || 5;
     // Set tmux pane title
     process.stdout.write("\x1b]2;Agent Dashboard\x1b\\");
-    // Enter alternate screen buffer (like vim/less)
-    process.stdout.write("\x1b[?1049h");
-    process.stdout.write("\x1b[H");
+    // Clear screen for clean start (no alternate screen — conflicts with pane splits)
+    process.stdout.write("\x1b[2J\x1b[H");
     const { waitUntilExit } = render(
       React.createElement(Dashboard, { interval }),
       { exitOnCtrlC: false }
     );
     waitUntilExit().then(() => {
-      process.stdout.write("\x1b[?1049l");
+      process.stdout.write("\x1b[2J\x1b[H");
       process.exit(0);
     });
   });
@@ -101,6 +101,28 @@ program
     if (!switchBack()) {
       process.exit(1);
     }
+  });
+
+program
+  .command("report")
+  .description("Report agent state (called by agent hooks)")
+  .requiredOption("--agent <name>", "Agent name (claude, copilot, pi)")
+  .requiredOption("--state <state>", "State: working, idle, approval")
+  .option("--session <id>", "Session ID (reads from stdin if not provided)")
+  .action(async (opts) => {
+    let session = opts.session;
+    if (!session) {
+      // Try reading session_id from stdin (hooks pipe JSON)
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of process.stdin) chunks.push(chunk);
+        const input = JSON.parse(Buffer.concat(chunks).toString());
+        session = input.session_id || "default";
+      } catch {
+        session = "default";
+      }
+    }
+    reportState(opts.agent, session, opts.state);
   });
 
 program.parse();

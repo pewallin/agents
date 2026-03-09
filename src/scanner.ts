@@ -1,5 +1,9 @@
 import { execSync, exec as execCb } from "child_process";
+import { writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { promisify } from "util";
+import { getAgentState } from "./state.js";
 
 const execAsync = promisify(execCb);
 
@@ -8,6 +12,7 @@ export type AgentStatus = "approval" | "working" | "stalled" | "waiting" | "idle
 export interface AgentPane {
   pane: string;
   paneId: string;
+  tmuxPaneId: string;  // %N format for swap operations
   title: string;
   agent: string;
   status: AgentStatus;
@@ -26,59 +31,20 @@ interface AgentDetector {
   isApproval(content: string): boolean;
 }
 
-// Copilot / opencode: status bar with ❯ and shift+tab is ALWAYS visible.
-// Must look above it for progress indicators.
-const copilotDetector: AgentDetector = {
-  isWorking(content, title) {
-    // 1. Title shows 🤖 when actively working
-    if (/🤖/.test(title)) return true;
-    // 2. "Esc to cancel" in status bar = actively processing
-    if (/Esc to cancel/.test(content)) return true;
-    // 3. If the idle prompt (❯ Type @, shift+tab) is NOT visible, copilot is busy
-    //    (it may be in a sub-tool like diff viewer, file editor, etc.)
-    const hasIdlePrompt = /❯.*Type @|shift.tab switch mode/.test(content);
-    return !hasIdlePrompt && content.trim().length > 0;
-  },
-  isIdle(content) {
-    // Idle only if the prompt is visible AND not actively processing
-    return /❯.*Type @|shift.tab switch mode/.test(content) && !/Esc to cancel/.test(content);
-  },
-  isApproval(content) {
-    return /↑↓ navigate.*enter select|Do you want to run|\(Y\/n\)|\(y\/N\)/.test(content);
-  },
-};
+const copilotDetector = makeHookDetector("copilot");
+const piDetector = makeHookDetector("pi");
 
-// Pi: shows ⠋ Working... but it stays on screen after completion.
-// Reliable idle signal is the ↳ › prompt at the bottom.
-const piDetector: AgentDetector = {
-  isWorking(_content, title) {
-    // Title spinner is the reliable signal for pi
-    return /[⠁-⠿]/.test(title);
-  },
-  isIdle(content) {
-    // Bottom prompt visible = idle
-    const bottom = content.split("\n").filter(Boolean).slice(-3).join("\n");
-    return /↳ ›|› /.test(bottom) || /claude-[0-9]|anthropic[\/)]|% left/.test(bottom);
-  },
-  isApproval(content) {
-    return /Allow .*—|\(Y\/n\)|\(y\/N\)|needs-approval/.test(content);
-  },
-};
+// Hook-based detector: reads state from ~/.agents/state/ files
+// written by `agents report` command (called from agent hooks).
+function makeHookDetector(agentName: string): AgentDetector {
+  return {
+    isWorking() { return getAgentState(agentName) === "working"; },
+    isIdle() { const s = getAgentState(agentName); return s === "idle" || s === null; },
+    isApproval() { return getAgentState(agentName) === "approval"; },
+  };
+}
 
-// Claude: the node process often lives on a different pane than the UI,
-// so screen content is unreliable. Use title only.
-const claudeDetector: AgentDetector = {
-  isWorking(_content, title) {
-    return /[⠁-⠿]/.test(title) || /✢/.test(title);
-  },
-  isIdle(_content, title) {
-    return !/[⠁-⠿]/.test(title);
-  },
-  isApproval(_content) {
-    // Can't reliably detect from screen — title doesn't indicate approval
-    return false;
-  },
-};
+const claudeDetector = makeHookDetector("claude");
 
 // Generic fallback for codex, aider, cursor, etc.
 const genericDetector: AgentDetector = {
@@ -209,14 +175,14 @@ export function scan(): AgentPane[] {
 
 function scanSync(): AgentPane[] {
   const raw = execSync_(
-    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}' 2>/dev/null`
+    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}' 2>/dev/null`
   );
   if (!raw) return [];
 
   const results: AgentPane[] = [];
   for (const line of raw.split("\n")) {
     if (!line) continue;
-    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId] = line.split("§");
+    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId] = line.split("§");
 
     const leafCmd = findLeafProcessSync(pid);
     let agentName: string | null = null;
@@ -232,11 +198,10 @@ function scanSync(): AgentPane[] {
     const paneShort = pane.replace(/\.0$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
 
-    results.push({ pane: paneShort, paneId, title: titleClean, agent: friendlyName(agentName), status, detail });
+    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail });
   }
 
-  const order: Record<AgentStatus, number> = { approval: 0, working: 1, stalled: 2, waiting: 3, idle: 4 };
-  results.sort((a, b) => order[a.status] - order[b.status]);
+  results.sort((a, b) => a.pane.localeCompare(b.pane));
   return results;
 }
 
@@ -282,17 +247,21 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
 }
 
 // Async version for watch mode — doesn't block the Ink render loop
-export async function scanAsync(): Promise<AgentPane[]> {
+export async function scanAsync(excludePaneIds?: Set<string>): Promise<AgentPane[]> {
   const raw = await run(
-    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}' 2>/dev/null`
+    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}' 2>/dev/null`
   );
   if (!raw) return [];
 
-  const lines = raw.split("\n").filter(Boolean);
+  const lines = raw.split("\n").filter((l) => {
+    if (!l || !excludePaneIds) return !!l;
+    const paneId = l.split("§")[8];
+    return !excludePaneIds.has(paneId);
+  });
 
   // Process all panes concurrently
   const promises = lines.map(async (line) => {
-    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId] = line.split("§");
+    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId] = line.split("§");
 
     const leafCmd = await findLeafProcess(pid);
     let agentName: string | null = null;
@@ -308,13 +277,12 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const paneShort = pane.replace(/\.0$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
 
-    return { pane: paneShort, paneId, title: titleClean, agent: friendlyName(agentName), status, detail } as AgentPane;
+    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);
 
-  const order: Record<AgentStatus, number> = { approval: 0, working: 1, stalled: 2, waiting: 3, idle: 4 };
-  results.sort((a, b) => order[a.status] - order[b.status]);
+  results.sort((a, b) => a.pane.localeCompare(b.pane));
   return results;
 }
 
@@ -335,4 +303,48 @@ export function switchBack(): boolean {
   execSync_(`tmux select-window -t ${JSON.stringify(back)}`);
   execSync_(`tmux switch-client -t ${JSON.stringify(back)}`);
   return true;
+}
+
+// ── Preview / swap helpers ──────────────────────────────────────────
+
+/** Create a split below the current pane for preview. Returns the new pane's %N id. */
+export function createPreviewSplit(percent: number = 65): string {
+  return execSync_(`tmux split-window -v -l ${percent}% -d -P -F '#{pane_id}' 'while true; do sleep 86400; done'`);
+}
+
+/** Swap two panes by their %N ids. */
+export function swapPanes(src: string, dst: string): void {
+  execSync_(`tmux swap-pane -d -s ${src} -t ${dst}`);
+}
+
+/** Kill a pane by its %N id. */
+export function killPane(id: string): void {
+  execSync_(`tmux kill-pane -t ${id} 2>/dev/null`);
+}
+
+/** Replace a pane's content with a centered placeholder message. */
+export function showPlaceholder(paneId: string, agentName: string, agentPane: string): void {
+  const script = `#!/bin/bash
+tput clear
+c=$(tput cols)
+r=$(tput lines)
+l=$((r/2-3))
+tput cup $l 0
+msg="Pane previewing in Agent Dashboard"
+printf "%*s\\n" $(( (c + \${#msg}) / 2 )) "$msg"
+echo
+msg="Agent: ${agentName}"
+printf "%*s\\n" $(( (c + \${#msg}) / 2 )) "$msg"
+msg="From:  ${agentPane}"
+printf "%*s\\n" $(( (c + \${#msg}) / 2 )) "$msg"
+echo
+tput dim
+msg="Press Ctrl-b b to return"
+printf "%*s\\n" $(( (c + \${#msg}) / 2 )) "$msg"
+tput sgr0
+while true; do sleep 86400; done
+`;
+  const path = join(tmpdir(), `agents-ph-${paneId.replace("%", "")}.sh`);
+  writeFileSync(path, script, { mode: 0o755 });
+  execSync_(`tmux respawn-pane -k -t ${paneId} 'bash ${path}'`);
 }
