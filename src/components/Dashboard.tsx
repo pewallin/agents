@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Text, Box, useApp, useInput } from "ink";
-import { scan, switchToPane } from "../scanner.js";
+import { scanAsync, switchToPane } from "../scanner.js";
 import type { AgentPane } from "../scanner.js";
 import { AgentTable } from "./AgentTable.js";
 
@@ -14,8 +14,10 @@ export function Dashboard({ interval }: Props) {
   const { exit } = useApp();
 
   useEffect(() => {
-    setAgents(scan());
-    const timer = setInterval(() => setAgents(scan()), interval * 1000);
+    scanAsync().then(setAgents);
+    const timer = setInterval(() => {
+      scanAsync().then(setAgents);
+    }, interval * 1000);
     return () => clearInterval(timer);
   }, [interval]);
 
@@ -32,7 +34,6 @@ export function Dashboard({ interval }: Props) {
     }
     if (key.return && agents[selectedIndex]) {
       switchToPane(agents[selectedIndex].paneId);
-      exit();
     }
   });
 

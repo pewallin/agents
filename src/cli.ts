@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import React from "react";
 import { render, Text, Box } from "ink";
-import { scan } from "./scanner.js";
+import { scan, switchBack } from "./scanner.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
@@ -19,8 +19,13 @@ program
   .alias("ls")
   .description("Show agent status with interactive selection")
   .option("--no-interactive", "Print status without interactive selection")
+  .option("--json", "Output as JSON")
   .action((opts) => {
     const agents = scan();
+    if (opts.json) {
+      console.log(JSON.stringify(agents, null, 2));
+      return;
+    }
     if (!opts.interactive || !process.stdin.isTTY) {
       const { unmount, waitUntilExit } = render(
         React.createElement(AgentTable, { agents })
@@ -43,11 +48,19 @@ program
   .argument("[seconds]", "Refresh interval", "5")
   .action((seconds) => {
     const interval = parseInt(seconds, 10) || 5;
+    // Set tmux pane title
+    process.stdout.write("\x1b]2;Agent Dashboard\x1b\\");
+    // Enter alternate screen buffer (like vim/less)
+    process.stdout.write("\x1b[?1049h");
+    process.stdout.write("\x1b[H");
     const { waitUntilExit } = render(
       React.createElement(Dashboard, { interval }),
       { exitOnCtrlC: false }
     );
-    waitUntilExit().then(() => process.exit(0));
+    waitUntilExit().then(() => {
+      process.stdout.write("\x1b[?1049l");
+      process.exit(0);
+    });
   });
 
 program
@@ -79,6 +92,15 @@ program
   .description("Print number of running agents")
   .action(() => {
     console.log(scan().length);
+  });
+
+program
+  .command("back")
+  .description("Jump back to where you were before last agents jump")
+  .action(() => {
+    if (!switchBack()) {
+      process.exit(1);
+    }
   });
 
 program.parse();
