@@ -31,7 +31,7 @@ Add `bind b run-shell "agents back"` to `~/.tmux.conf` to jump back after select
 
 ## Detected Agents
 
-`claude`, `copilot`, `opencode`, `codex`, `aider`, `cursor`
+`claude`, `copilot`, `opencode`, `codex`, `pi`, `cursor`
 
 Edit `AGENT_PROCS` in `src/scanner.ts` to add your own.
 
