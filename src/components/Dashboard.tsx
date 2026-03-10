@@ -12,8 +12,8 @@ interface PreviewState {
   splitPaneId: string;        // %N of placeholder pane (at agent's original spot)
   agentTmuxId: string;        // %N of agent pane (now in preview split)
   agentName: string;
-  agentPane: string;
-  frozenAgent: AgentPane;     // snapshot of agent data from before swap
+  agentPane: string;          // original pane display name
+  agentPaneId: string;        // original paneId (session:window_index)
 }
 
 export function Dashboard({ interval }: Props) {
@@ -24,16 +24,21 @@ export function Dashboard({ interval }: Props) {
   const { exit } = useApp();
 
   const doScan = useCallback(() => {
-    const pv = previewRef.current;
-    // Exclude placeholder pane and the swapped agent pane from scan
-    // (they're in wrong positions during preview)
-    const exclude = pv ? new Set([pv.splitPaneId, pv.agentTmuxId]) : undefined;
-    scanAsync(exclude).then((scanned) => {
+    scanAsync().then((scanned) => {
+      const pv = previewRef.current;
       if (pv) {
-        // Re-insert the frozen agent data at its sorted position
-        const merged = [...scanned, pv.frozenAgent];
-        merged.sort((a, b) => a.pane.localeCompare(b.pane));
-        setAgents(merged);
+        // The swapped agent appears at the preview split position and
+        // the placeholder may ghost-detect at the original position.
+        // Filter both out, then re-inject the agent with its original location.
+        const swapped = scanned.find((a) => a.tmuxPaneId === pv.agentTmuxId);
+        const filtered = scanned.filter(
+          (a) => a.tmuxPaneId !== pv.agentTmuxId && a.tmuxPaneId !== pv.splitPaneId
+        );
+        if (swapped) {
+          filtered.push({ ...swapped, pane: pv.agentPane, paneId: pv.agentPaneId });
+        }
+        filtered.sort((a, b) => a.pane.localeCompare(b.pane));
+        setAgents(filtered);
       } else {
         setAgents(scanned);
       }
@@ -57,14 +62,20 @@ export function Dashboard({ interval }: Props) {
       killPane(pv.splitPaneId);
       previewRef.current = null;
     };
+    const onSignal = () => {
+      cleanup();
+      process.exit(0);
+    };
     process.on("exit", cleanup);
-    process.on("SIGINT", cleanup);
-    process.on("SIGTERM", cleanup);
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    process.on("SIGHUP", onSignal);
     return () => {
       cleanup();
       process.off("exit", cleanup);
-      process.off("SIGINT", cleanup);
-      process.off("SIGTERM", cleanup);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      process.off("SIGHUP", onSignal);
     };
   }, []);
 
@@ -77,7 +88,9 @@ export function Dashboard({ interval }: Props) {
   const idx = Math.min(selectedIndex, Math.max(0, agents.length - 1));
 
   const openPreview = useCallback((agent: AgentPane) => {
-    const splitId = createPreviewSplit(65);
+    // header(1) + blank(1) + table header(1) + agents + blank(1) + preview label(1) + ink overhead(2) + breathing room(2)
+    const dashboardRows = 9 + agents.length;
+    const splitId = createPreviewSplit(dashboardRows);
     if (!splitId) return;
     swapPanes(agent.tmuxPaneId, splitId);
     showPlaceholder(splitId, agent.agent, agent.pane);
@@ -86,7 +99,7 @@ export function Dashboard({ interval }: Props) {
       agentTmuxId: agent.tmuxPaneId,
       agentName: agent.agent,
       agentPane: agent.pane,
-      frozenAgent: { ...agent },
+      agentPaneId: agent.paneId,
     };
     setPreviewing(true);
   }, []);
@@ -102,7 +115,7 @@ export function Dashboard({ interval }: Props) {
       agentTmuxId: agent.tmuxPaneId,
       agentName: agent.agent,
       agentPane: agent.pane,
-      frozenAgent: { ...agent },
+      agentPaneId: agent.paneId,
     };
   }, []);
 
@@ -144,10 +157,6 @@ export function Dashboard({ interval }: Props) {
     }
   });
 
-  const contentLines = 2 + agents.length + 1;
-  const termRows = process.stdout.rows || 24;
-  const spacerLines = previewing ? Math.max(0, termRows - contentLines - 1) : 0;
-
   return (
     <Box flexDirection="column">
       <Box paddingLeft={2} gap={1}>
@@ -158,7 +167,7 @@ export function Dashboard({ interval }: Props) {
       <AgentTable agents={agents} selectedIndex={idx} showCursor />
       {previewing && previewRef.current && (
         <>
-          {spacerLines > 0 && <Text>{"\n".repeat(spacerLines - 1)}</Text>}
+          <Text> </Text>
           <Box paddingLeft={2}>
             <Text dimColor>▼ Preview: {previewRef.current.agentName} — {previewRef.current.agentPane}</Text>
           </Box>

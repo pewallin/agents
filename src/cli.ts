@@ -4,6 +4,7 @@ import React from "react";
 import { render, Text, Box } from "ink";
 import { scan, switchBack } from "./scanner.js";
 import { reportState } from "./state.js";
+import { setup, uninstall } from "./setup.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
@@ -123,6 +124,30 @@ program
       }
     }
     reportState(opts.agent, session, opts.state);
+  });
+
+program
+  .command("setup")
+  .description("Install agent hooks for Claude, Copilot, and Pi")
+  .action(() => {
+    const results = setup();
+    for (const r of results) {
+      const icon = r.action === "installed" ? "✓" : r.action === "already-installed" ? "•" : "–";
+      const detail = r.detail ? ` (${r.detail})` : "";
+      console.log(`  ${icon} ${r.agent}: ${r.action}${detail}`);
+    }
+  });
+
+program
+  .command("uninstall")
+  .description("Remove agent hooks installed by setup")
+  .action(() => {
+    const results = uninstall();
+    for (const r of results) {
+      const icon = r.action === "uninstalled" ? "✓" : "–";
+      const detail = r.detail ? ` (${r.detail})` : "";
+      console.log(`  ${icon} ${r.agent}: ${r.action}${detail}`);
+    }
   });
 
 program.parse();

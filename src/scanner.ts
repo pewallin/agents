@@ -247,17 +247,13 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
 }
 
 // Async version for watch mode — doesn't block the Ink render loop
-export async function scanAsync(excludePaneIds?: Set<string>): Promise<AgentPane[]> {
+export async function scanAsync(): Promise<AgentPane[]> {
   const raw = await run(
     `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}' 2>/dev/null`
   );
   if (!raw) return [];
 
-  const lines = raw.split("\n").filter((l) => {
-    if (!l || !excludePaneIds) return !!l;
-    const paneId = l.split("§")[8];
-    return !excludePaneIds.has(paneId);
-  });
+  const lines = raw.split("\n").filter(Boolean);
 
   // Process all panes concurrently
   const promises = lines.map(async (line) => {
@@ -307,9 +303,15 @@ export function switchBack(): boolean {
 
 // ── Preview / swap helpers ──────────────────────────────────────────
 
-/** Create a split below the current pane for preview. Returns the new pane's %N id. */
-export function createPreviewSplit(percent: number = 65): string {
-  return execSync_(`tmux split-window -v -l ${percent}% -d -P -F '#{pane_id}' 'while true; do sleep 86400; done'`);
+/** Create a split below the current pane for preview. `dashboardRows` sets the
+ *  number of rows reserved for the dashboard; the rest goes to the preview. */
+export function createPreviewSplit(dashboardRows: number): string {
+  const paneId = execSync_(`tmux split-window -v -d -P -F '#{pane_id}' 'tail -f /dev/null'`);
+  if (paneId) {
+    // Resize the dashboard (current pane) to the exact rows needed
+    execSync_(`tmux resize-pane -y ${dashboardRows}`);
+  }
+  return paneId;
 }
 
 /** Swap two panes by their %N ids. */
