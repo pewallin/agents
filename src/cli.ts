@@ -47,9 +47,9 @@ program
   .command("watch")
   .alias("w")
   .description("Live dashboard with auto-refresh")
-  .argument("[seconds]", "Refresh interval", "5")
+  .argument("[seconds]", "Refresh interval", "2")
   .action((seconds) => {
-    const interval = parseInt(seconds, 10) || 5;
+    const interval = parseInt(seconds, 10) || 2;
     // Set tmux pane title
     process.stdout.write("\x1b]2;Agent Dashboard\x1b\\");
     // Clear screen for clean start (no alternate screen — conflicts with pane splits)
