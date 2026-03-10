@@ -25,10 +25,9 @@ const AGENT_PROCS = /^(claude|copilot|opencode|codex|aider|cursor|pi)$/i;
 // ── Per-agent detection ──────────────────────────────────────────────
 
 interface AgentDetector {
-  // Lines above the status bar area
-  isWorking(content: string, title: string): boolean;
-  isIdle(content: string, title: string): boolean;
-  isApproval(content: string): boolean;
+  isWorking(content: string, title: string, tmuxPaneId?: string): boolean;
+  isIdle(content: string, title: string, tmuxPaneId?: string): boolean;
+  isApproval(content: string, tmuxPaneId?: string): boolean;
 }
 
 const copilotDetector = makeHookDetector("copilot");
@@ -36,11 +35,16 @@ const piDetector = makeHookDetector("pi");
 
 // Hook-based detector: reads state from ~/.agents/state/ files
 // written by `agents report` command (called from agent hooks).
+// Uses tmuxPaneId as session key for per-pane status.
+// Falls back to screen-scraping for approval since not all agents
+// emit approval events via hooks.
 function makeHookDetector(agentName: string): AgentDetector {
   return {
-    isWorking() { return getAgentState(agentName) === "working"; },
-    isIdle() { const s = getAgentState(agentName); return s === "idle" || s === null; },
-    isApproval() { return getAgentState(agentName) === "approval"; },
+    isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
+    isIdle(_c, _t, paneId) { const s = getAgentState(agentName, paneId); return s === "idle" || s === null; },
+    isApproval(content, paneId) {
+      return getAgentState(agentName, paneId) === "approval" || genericDetector.isApproval(content);
+    },
   };
 }
 
@@ -57,7 +61,7 @@ const genericDetector: AgentDetector = {
     return /❯|›|➜|\$\s*$|>\s*$|press enter|waiting/i.test(bottom);
   },
   isApproval(content) {
-    return /needs-approval|Allow .*—|Do you want to run|Allow this|approve this|\(Y\/n\)|\(y\/N\)/.test(content);
+    return /needs-approval|Allow .*—|Do you want to run|Allow this|approve this|\(Y\/n\)|\(y\/N\)|↑↓ to select|↑↓ to navigate/.test(content);
   },
 };
 
@@ -124,7 +128,8 @@ async function detectStatus(
   paneRef: string,
   title: string,
   windowActivity: number,
-  agent: string
+  agent: string,
+  tmuxPaneId?: string
 ): Promise<{ status: AgentStatus; detail?: string }> {
   const detector = getDetector(agent);
 
@@ -134,17 +139,17 @@ async function detectStatus(
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
   // 1. Approval — always highest priority
-  if (detector.isApproval(content)) {
+  if (detector.isApproval(content, tmuxPaneId)) {
     return { status: "approval" };
   }
 
   // 2. Working
-  if (detector.isWorking(content, title)) {
+  if (detector.isWorking(content, title, tmuxPaneId)) {
     return { status: "working" };
   }
 
   // 3. Idle prompt visible
-  if (detector.isIdle(content, title)) {
+  if (detector.isIdle(content, title, tmuxPaneId)) {
     return { status: "waiting" };
   }
 
@@ -194,7 +199,7 @@ function scanSync(): AgentPane[] {
     if (!agentName) continue;
 
     const wact = parseInt(wactStr, 10) || 0;
-    const { status, detail } = detectStatusSync(pane, title, wact, agentName);
+    const { status, detail } = detectStatusSync(pane, title, wact, agentName, tmuxPaneId);
     const paneShort = pane.replace(/\.0$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
 
@@ -225,15 +230,15 @@ function findAgentOnTtySync(tty: string): string | null {
   return null;
 }
 
-function detectStatusSync(paneRef: string, title: string, windowActivity: number, agent: string): { status: AgentStatus; detail?: string } {
+function detectStatusSync(paneRef: string, title: string, windowActivity: number, agent: string, tmuxPaneId?: string): { status: AgentStatus; detail?: string } {
   const detector = getDetector(agent);
 
   const rawLines = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`);
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
-  if (detector.isApproval(content)) return { status: "approval" };
-  if (detector.isWorking(content, title)) return { status: "working" };
-  if (detector.isIdle(content, title)) return { status: "waiting" };
+  if (detector.isApproval(content, tmuxPaneId)) return { status: "approval" };
+  if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working" };
+  if (detector.isIdle(content, title, tmuxPaneId)) return { status: "waiting" };
 
   const fullPane = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`);
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
@@ -269,7 +274,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     if (!agentName) return null;
 
     const wact = parseInt(wactStr, 10) || 0;
-    const { status, detail } = await detectStatus(pane, title, wact, agentName);
+    const { status, detail } = await detectStatus(pane, title, wact, agentName, tmuxPaneId);
     const paneShort = pane.replace(/\.0$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
 
@@ -319,6 +324,16 @@ export function createPreviewSplit(dashboardSize: number, vertical: boolean = fa
 /** Swap two panes by their %N ids. */
 export function swapPanes(src: string, dst: string): void {
   execSync_(`tmux swap-pane -d -s ${src} -t ${dst}`);
+}
+
+/** Focus a pane by its %N id (select it without switching the dashboard away). */
+export function focusPane(tmuxPaneId: string): void {
+  execSync_(`tmux select-pane -t ${tmuxPaneId}`);
+}
+
+/** Get the current pane's %N id. */
+export function ownPaneId(): string {
+  return execSync_(`tmux display-message -p '#{pane_id}'`);
 }
 
 /** Kill a pane by its %N id. */

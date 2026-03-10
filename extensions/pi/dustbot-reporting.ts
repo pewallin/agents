@@ -12,9 +12,21 @@
  */
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+
+// Resolve agents binary — may not be on PATH in sandboxed pi processes
+const AGENTS_BIN = [
+  join(homedir(), ".local", "bin", "agents"),
+  "agents", // fallback to PATH
+].find((p) => p === "agents" || existsSync(p)) || "agents";
+
+// Use TMUX_PANE (%N) as session ID so each pane gets independent status
+const SESSION_ID = process.env.TMUX_PANE || "default";
 
 function report(state: string): void {
-  execFile("agents", ["report", "--agent", "pi", "--state", state], (err) => {
+  execFile(AGENTS_BIN, ["report", "--agent", "pi", "--state", state, "--session", SESSION_ID], (err) => {
     // Silently ignore — agents CLI may not be on PATH
   });
 }

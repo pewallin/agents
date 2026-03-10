@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Text, Box, useApp, useInput } from "ink";
-import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, showPlaceholder } from "../scanner.js";
+import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, showPlaceholder, focusPane, ownPaneId } from "../scanner.js";
 import type { AgentPane } from "../scanner.js";
 import { AgentTable } from "./AgentTable.js";
+import { useMouse } from "../mouse.js";
 
 interface Props {
   interval: number;
@@ -21,27 +22,30 @@ export function Dashboard({ interval }: Props) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [previewing, setPreviewing] = useState(false);
   const previewRef = useRef<PreviewState | null>(null);
+  const selfPaneId = useRef(ownPaneId());
   const { exit } = useApp();
 
   const doScan = useCallback(() => {
     scanAsync().then((scanned) => {
+      // Filter out our own pane
+      const self = selfPaneId.current;
+      let list = self ? scanned.filter((a) => a.tmuxPaneId !== self) : scanned;
+
       const pv = previewRef.current;
       if (pv) {
         // The swapped agent appears at the preview split position and
         // the placeholder may ghost-detect at the original position.
         // Filter both out, then re-inject the agent with its original location.
-        const swapped = scanned.find((a) => a.tmuxPaneId === pv.agentTmuxId);
-        const filtered = scanned.filter(
+        const swapped = list.find((a) => a.tmuxPaneId === pv.agentTmuxId);
+        list = list.filter(
           (a) => a.tmuxPaneId !== pv.agentTmuxId && a.tmuxPaneId !== pv.splitPaneId
         );
         if (swapped) {
-          filtered.push({ ...swapped, pane: pv.agentPane, paneId: pv.agentPaneId });
+          list.push({ ...swapped, pane: pv.agentPane, paneId: pv.agentPaneId });
         }
-        filtered.sort((a, b) => a.pane.localeCompare(b.pane));
-        setAgents(filtered);
-      } else {
-        setAgents(scanned);
       }
+      list.sort((a, b) => a.pane.localeCompare(b.pane));
+      setAgents(list);
     });
   }, []);
 
@@ -121,6 +125,40 @@ export function Dashboard({ interval }: Props) {
     };
   }, []);
 
+  const focusPreviewPane = useCallback(() => {
+    const pv = previewRef.current;
+    if (pv) {
+      focusPane(pv.agentTmuxId);
+    }
+  }, []);
+
+  const openPreviewAndFocus = useCallback((agent: AgentPane, forceVertical: boolean = false) => {
+    if (previewRef.current) {
+      switchPreview(agent);
+    } else {
+      openPreview(agent, forceVertical);
+    }
+    // Focus after a tick to let tmux finish the split
+    setTimeout(() => {
+      const pv = previewRef.current;
+      if (pv) focusPane(pv.agentTmuxId);
+    }, 50);
+  }, [openPreview, switchPreview]);
+
+  // Mouse click: select agent row, open/switch preview, focus it
+  useMouse(useCallback((event) => {
+    if (event.button !== 0) return; // left click only
+    // Layout: row 1 = header, row 2 = blank, row 3 = column headers, row 4+ = agents
+    const agentRow = event.y - 4; // 0-indexed into agents array
+    if (agentRow < 0 || agentRow >= agents.length) return;
+
+    setSelectedIndex(agentRow);
+    const agent = agents[agentRow];
+    if (!agent) return;
+
+    openPreviewAndFocus(agent, true);
+  }, [agents, openPreviewAndFocus]));
+
   useInput((input, key) => {
     if (input === "q" || (key.ctrl && input === "c")) {
       restorePreview();
@@ -145,6 +183,13 @@ export function Dashboard({ interval }: Props) {
         return next;
       });
     }
+    if (input === " ") {
+      // Space: open preview if needed, then focus it
+      if (agents[idx]) {
+        openPreviewAndFocus(agents[idx]);
+      }
+      return;
+    }
     if (input === "p" || input === "P") {
       if (previewRef.current) {
         restorePreview();
@@ -163,7 +208,7 @@ export function Dashboard({ interval }: Props) {
     <Box flexDirection="column">
       <Box paddingLeft={2} gap={1}>
         <Text bold>Agent Dashboard</Text>
-        <Text dimColor>(every {interval}s · j/k · enter jump · p/P preview · q quit)</Text>
+        <Text dimColor>(enter jump · space/click preview · p/P toggle · q quit)</Text>
       </Box>
       <Text> </Text>
       <AgentTable agents={agents} selectedIndex={idx} showCursor />

@@ -47,11 +47,15 @@ export function readStates(maxAge: number = 300): StateEntry[] {
 }
 
 /** Get the aggregate state for an agent type (e.g. "claude").
+ *  If session is provided, only check that specific session.
  *  If ANY session is in approval → approval.
  *  If ANY session is working → working.
  *  Otherwise → idle (or null if no data). */
-export function getAgentState(agent: string): ReportedState | null {
-  const entries = readStates().filter((e) => e.agent === agent);
+export function getAgentState(agent: string, session?: string): ReportedState | null {
+  let entries = readStates().filter((e) => e.agent === agent);
+  if (session) {
+    entries = entries.filter((e) => e.session === session);
+  }
   if (entries.length === 0) return null;
   if (entries.some((e) => e.state === "approval")) return "approval";
   if (entries.some((e) => e.state === "working")) return "working";
