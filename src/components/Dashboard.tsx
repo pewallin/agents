@@ -87,10 +87,12 @@ export function Dashboard({ interval }: Props) {
 
   const idx = Math.min(selectedIndex, Math.max(0, agents.length - 1));
 
-  const openPreview = useCallback((agent: AgentPane) => {
-    // header(1) + blank(1) + table header(1) + agents + blank(1) + preview label(1) + ink overhead(2) + breathing room(2)
+  const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false) => {
     const dashboardRows = 9 + agents.length;
-    const splitId = createPreviewSplit(dashboardRows);
+    const termRows = process.stdout.rows || 24;
+    // Use vertical split if forced (Shift+P) or if not enough room for horizontal
+    const vertical = forceVertical || termRows < dashboardRows + 10;
+    const splitId = createPreviewSplit(dashboardRows, vertical);
     if (!splitId) return;
     swapPanes(agent.tmuxPaneId, splitId);
     showPlaceholder(splitId, agent.agent, agent.pane);
@@ -102,7 +104,7 @@ export function Dashboard({ interval }: Props) {
       agentPaneId: agent.paneId,
     };
     setPreviewing(true);
-  }, []);
+  }, [agents.length]);
 
   const switchPreview = useCallback((agent: AgentPane) => {
     const pv = previewRef.current;
@@ -143,11 +145,11 @@ export function Dashboard({ interval }: Props) {
         return next;
       });
     }
-    if (input === "p") {
+    if (input === "p" || input === "P") {
       if (previewRef.current) {
         restorePreview();
       } else if (agents[idx]) {
-        openPreview(agents[idx]);
+        openPreview(agents[idx], input === "P");
       }
       return;
     }
@@ -161,7 +163,7 @@ export function Dashboard({ interval }: Props) {
     <Box flexDirection="column">
       <Box paddingLeft={2} gap={1}>
         <Text bold>Agent Dashboard</Text>
-        <Text dimColor>(every {interval}s · j/k · enter jump · p preview · q quit)</Text>
+        <Text dimColor>(every {interval}s · j/k · enter jump · p/P preview · q quit)</Text>
       </Box>
       <Text> </Text>
       <AgentTable agents={agents} selectedIndex={idx} showCursor />

@@ -303,13 +303,15 @@ export function switchBack(): boolean {
 
 // ── Preview / swap helpers ──────────────────────────────────────────
 
-/** Create a split below the current pane for preview. `dashboardRows` sets the
- *  number of rows reserved for the dashboard; the rest goes to the preview. */
-export function createPreviewSplit(dashboardRows: number): string {
+/** Create a split for preview. For horizontal (below), `dashboardSize` is rows
+ *  reserved for the dashboard. For vertical (right), it splits 50/50. */
+export function createPreviewSplit(dashboardSize: number, vertical: boolean = false): string {
+  if (vertical) {
+    return execSync_(`tmux split-window -h -d -P -F '#{pane_id}' 'tail -f /dev/null'`);
+  }
   const paneId = execSync_(`tmux split-window -v -d -P -F '#{pane_id}' 'tail -f /dev/null'`);
   if (paneId) {
-    // Resize the dashboard (current pane) to the exact rows needed
-    execSync_(`tmux resize-pane -y ${dashboardRows}`);
+    execSync_(`tmux resize-pane -y ${dashboardSize}`);
   }
   return paneId;
 }
