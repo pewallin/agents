@@ -1,6 +1,6 @@
 # agents
 
-Monitor AI coding agent panes across tmux sessions. See which agents are working, waiting for input, or need approval — and jump to them instantly.
+Monitor AI coding agents across tmux sessions. See which agents are working, waiting, or need approval — and jump to them instantly.
 
 ## Install
 
@@ -8,45 +8,59 @@ Monitor AI coding agent panes across tmux sessions. See which agents are working
 git clone https://github.com/pewallin/agents.git
 cd agents
 npm install && npm run build && npm link
-agents setup   # install hooks for detected agents
+agents setup   # install reporting extensions for detected agents
 ```
 
 ## Usage
 
 ```
-agents                  Select an agent and jump to it (j/k, enter)
-agents watch [secs]     Live dashboard with auto-refresh
+agents                  Interactive agent list (j/k, enter to jump)
+agents watch [secs]     Live dashboard (default: 2s refresh)
 agents working          Show only busy agents
-agents setup            Install reporting hooks for Claude, Copilot, Pi
-agents uninstall        Remove installed hooks
+agents report           Report agent state (used by extensions)
+agents setup            Install reporting extensions
+agents uninstall        Remove installed extensions
 ```
 
 ### Dashboard keys
 
 | Key | Action |
 |-----|--------|
-| `j/k` | Navigate list |
-| `enter` | Jump to agent pane |
-| `p` | Toggle preview (horizontal split) |
-| `P` | Toggle preview (vertical split) |
+| `j/k` / `↑↓` | Navigate |
+| `enter` / `space` | Open preview + focus pane |
+| `click` | Open preview + focus clicked agent |
+| `p` | Toggle preview (horizontal) |
+| `P` | Toggle preview (vertical) |
 | `q` | Quit |
 
-Add `bind b run-shell "agents back"` to `~/.tmux.conf` to jump back after selecting an agent.
+Add `bind b run-shell "agents back"` to `~/.tmux.conf` to jump back.
 
 ## Status Detection
 
-Hook-based detection for Claude, Copilot, and Pi (via `agents report`). Falls back to screen-scraping for other agents.
+Extensions report state via `agents report` for Copilot and Pi. Falls back to screen-scraping for agents without extensions.
 
 | Indicator | Meaning |
 |-----------|---------|
-| `⚠ approval` | Agent needs permission to proceed |
-| `● working` | Agent is actively processing |
+| `⚠ approval` | Needs user input (permission prompt, ask_user) |
+| `● working` | Actively processing |
 | `◐ stalled?` | No output for 30s–2m |
-| `○ waiting` | Idle / awaiting input |
+| `○ waiting` | Idle / awaiting prompt |
+
+### Copilot extension
+
+Detects `ask_user`, `permission.requested`, `tool.execution_start/complete`, and `session.idle` events via the SDK.
+
+### Pi extension
+
+Reports approval/working state from the sandbox approval UI.
+
+### Screen-scrape fallback
+
+Matches common patterns (`Allow`, `(Y/n)`, `↑↓ to select`, spinner characters) for agents without extensions.
 
 ## Detected Agents
 
-`claude`, `copilot`, `opencode`, `codex`, `pi`, `cursor`
+`claude`, `copilot`, `opencode`, `codex`, `pi`, `aider`, `cursor`
 
 Edit `AGENT_PROCS` in `src/scanner.ts` to add your own.
 
