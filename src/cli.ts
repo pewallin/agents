@@ -65,29 +65,6 @@ program
   });
 
 program
-  .command("working")
-  .alias("busy")
-  .description("Show only agents currently working")
-  .action(() => {
-    const agents = scan().filter((a) => a.status === "working");
-    const { unmount, waitUntilExit } = render(
-      React.createElement(
-        Box,
-        { flexDirection: "column" },
-        agents.length === 0
-          ? React.createElement(
-              Box,
-              { paddingLeft: 2 },
-              React.createElement(Text, { dimColor: true }, "No agents currently working")
-            )
-          : React.createElement(AgentTable, { agents })
-      )
-    );
-    waitUntilExit().then(() => process.exit(0));
-    setTimeout(() => unmount(), 100);
-  });
-
-program
   .command("count")
   .alias("c")
   .description("Print number of running agents")

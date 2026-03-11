@@ -16,7 +16,6 @@ agents setup   # install reporting extensions for detected agents
 ```
 agents                  Interactive agent list (j/k, enter to jump)
 agents watch [secs]     Live dashboard (default: 2s refresh)
-agents working          Show only busy agents
 agents report           Report agent state (used by extensions)
 agents setup            Install reporting extensions
 agents uninstall        Remove installed extensions
