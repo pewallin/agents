@@ -76,7 +76,7 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
       {agents.map((agent, i) => {
         const selected = showCursor && i === selectedIndex;
         return (
-          <Box key={agent.pane} paddingLeft={2} gap={2}>
+          <Box key={agent.tmuxPaneId} paddingLeft={2} gap={2}>
             {showCursor && (
               <Text color="cyan" bold={selected}>
                 {selected ? "›" : " "}
