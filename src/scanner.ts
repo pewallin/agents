@@ -20,7 +20,7 @@ export interface AgentPane {
 }
 
 // Agent process names to detect — extend this list for custom agents
-const AGENT_PROCS = /^(claude|copilot|opencode|codex|aider|cursor|pi)$/i;
+const AGENT_PROCS = /^(claude|copilot|opencode|codex|cursor|pi)$/i;
 
 // ── Per-agent detection ──────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ interface AgentDetector {
   isIdle(content: string, title: string, tmuxPaneId?: string): boolean;
   isApproval(content: string, tmuxPaneId?: string): boolean;
 }
-
+const claudeDetector = makeHookDetector("claude");
 const copilotDetector = makeHookDetector("copilot");
 const piDetector = makeHookDetector("pi");
 
@@ -48,9 +48,9 @@ function makeHookDetector(agentName: string): AgentDetector {
   };
 }
 
-const claudeDetector = makeHookDetector("claude");
 
-// Generic fallback for codex, aider, cursor, etc.
+
+// Generic fallback for codex, cursor, etc.
 const genericDetector: AgentDetector = {
   isWorking(content, title) {
     return /[⠁-⠿⏳🔄]/.test(title) ||

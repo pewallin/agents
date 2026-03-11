@@ -51,11 +51,11 @@ Detects `ask_user`, `permission.requested`, `tool.execution_start/complete`, and
 
 ### Screen-scrape fallback
 
-Used for Claude, Codex, aider, and any agent without an extension. Matches common patterns (`Allow`, `(Y/n)`, `↑↓ to select`, spinner characters).
+Used for Claude, Codex, and any agent without an extension. Matches common patterns (`Allow`, `(Y/n)`, `↑↓ to select`, spinner characters).
 
 ## Detected Agents
 
-`claude`, `copilot`, `opencode`, `codex`, `pi`, `aider`, `cursor`
+`claude`, `copilot`, `opencode`, `codex`, `pi`, `cursor`
 
 Edit `AGENT_PROCS` in `src/scanner.ts` to add your own.
 
