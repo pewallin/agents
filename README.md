@@ -36,7 +36,7 @@ Add `bind b run-shell "agents back"` to `~/.tmux.conf` to jump back.
 
 ## Status Detection
 
-Extensions report state via `agents report` for Copilot and Pi. Falls back to screen-scraping for agents without extensions.
+Agents with extensions report state via `agents report`. All others use screen-scrape detection.
 
 | Indicator | Meaning |
 |-----------|---------|
@@ -45,17 +45,13 @@ Extensions report state via `agents report` for Copilot and Pi. Falls back to sc
 | `◐ stalled?` | No output for 30s–2m |
 | `○ waiting` | Idle / awaiting prompt |
 
-### Copilot extension
+### Copilot extension (included)
 
-Detects `ask_user`, `permission.requested`, `tool.execution_start/complete`, and `session.idle` events via the SDK.
-
-### Pi extension
-
-Reports approval/working state from the sandbox approval UI.
+Detects `ask_user`, `permission.requested`, `tool.execution_start/complete`, and `session.idle` events via the SDK. Installed by `agents setup`.
 
 ### Screen-scrape fallback
 
-Matches common patterns (`Allow`, `(Y/n)`, `↑↓ to select`, spinner characters) for agents without extensions.
+Used for Claude, Codex, aider, and any agent without an extension. Matches common patterns (`Allow`, `(Y/n)`, `↑↓ to select`, spinner characters).
 
 ## Detected Agents
 
