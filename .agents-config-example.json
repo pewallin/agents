@@ -1,0 +1,24 @@
+{
+  "helpers": {
+    "default": [
+      { "process": "lazygit", "split": "left", "size": "15%" },
+      { "process": "bv", "split": "right", "size": "20%" },
+      { "process": "zsh", "split": "below", "of": "bv", "size": "20%" }
+    ],
+    "small": [
+      { "process": "bv", "split": "below", "size": "20%" },
+      { "process": "lazygit", "split": "right", "size": "35%" }
+    ]
+  },
+  "workspace": {
+    "default": [
+      { "command": "lazygit", "split": "left", "size": "23%" },
+      { "command": "bv", "split": "right", "size": "25%" },
+      { "command": "$SHELL", "split": "below", "of": "bv", "size": "18%" }
+    ],
+    "small": [
+      { "command": "bv", "split": "below", "size": "20%" },
+      { "command": "lazygit", "split": "right", "size": "35%" }
+    ]
+  }
+}

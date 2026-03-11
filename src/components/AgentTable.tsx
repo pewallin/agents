@@ -33,20 +33,44 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
     );
   }
 
-  // Calculate column widths with caps to prevent wrapping
-  const MAX_PANE = 28;
-  const MAX_TITLE = 26;
-  const maxPane = Math.min(MAX_PANE, Math.max(4, ...agents.map((a) => visualWidth(a.pane))));
-  const maxTitle = Math.min(MAX_TITLE, Math.max(5, ...agents.map((a) => visualWidth(a.title))));
-  const maxAgent = Math.max(5, ...agents.map((a) => visualWidth(a.agent)));
+  const termCols = process.stdout.columns || 80;
+
+  // Measure ideal data widths (capped)
+  const paneData = Math.min(28, Math.max(4, ...agents.map((a) => visualWidth(a.pane))));
+  const titleData = Math.min(26, Math.max(5, ...agents.map((a) => visualWidth(a.title))));
+  const agentData = Math.max(5, ...agents.map((a) => visualWidth(a.agent)));
+  const statusData = 15; // enough for "● working (xyz)"
+
+  // Overhead: paddingLeft(2) + cursor(1 if shown) + gap(2) between each child
+  const cursorCols = showCursor ? 1 : 0;
+  const gapsFull = (showCursor ? 4 : 3) * 2;   // with title column
+  const gapsCompact = (showCursor ? 3 : 2) * 2; // without title column
+  const fixedFull = 2 + cursorCols + gapsFull + agentData + statusData;
+  const fixedCompact = 2 + cursorCols + gapsCompact + agentData + statusData;
+
+  let showTitle = true;
+  let maxPane = paneData;
+  let maxTitle = titleData;
+
+  if (fixedFull + paneData + titleData > termCols) {
+    // Shrink title first
+    const availForTitle = termCols - fixedFull - paneData;
+    if (availForTitle >= 8) {
+      maxTitle = availForTitle;
+    } else {
+      // Drop title, give all remaining to pane
+      showTitle = false;
+      maxPane = Math.max(4, Math.min(paneData, termCols - fixedCompact));
+    }
+  }
 
   return (
     <Box flexDirection="column">
       <Box paddingLeft={2} gap={2}>
         {showCursor && <Text>  </Text>}
         <Text bold>{pad("PANE", maxPane)}</Text>
-        <Text bold>{pad("TITLE", maxTitle)}</Text>
-        <Text bold>{pad("AGENT", maxAgent)}</Text>
+        {showTitle && <Text bold>{pad("TITLE", maxTitle)}</Text>}
+        <Text bold>{pad("AGENT", agentData)}</Text>
         <Text bold>STATUS</Text>
       </Box>
       {agents.map((agent, i) => {
@@ -61,11 +85,13 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
             <Text color={selected ? "cyan" : undefined} bold={selected}>
               {pad(agent.pane, maxPane)}
             </Text>
-            <Text color={selected ? "cyan" : undefined} bold={selected}>
-              {pad(agent.title, maxTitle)}
-            </Text>
+            {showTitle && (
+              <Text color={selected ? "cyan" : undefined} bold={selected}>
+                {pad(agent.title, maxTitle)}
+              </Text>
+            )}
             <Text color="cyan" bold={selected}>
-              {pad(agent.agent, maxAgent)}
+              {pad(agent.agent, agentData)}
             </Text>
             <StatusBadge status={agent.status} detail={agent.detail} />
           </Box>

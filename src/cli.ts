@@ -5,6 +5,7 @@ import { render, Text, Box } from "ink";
 import { scan, switchBack } from "./scanner.js";
 import { reportState } from "./state.js";
 import { setup, uninstall } from "./setup.js";
+import { createWorkspace } from "./workspace.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
@@ -101,6 +102,17 @@ program
       }
     }
     reportState(opts.agent, session, opts.state);
+  });
+
+program
+  .command("workspace")
+  .alias("ws")
+  .description("Create a new workspace window with agent + helper panes")
+  .argument("<command>", "Agent command to run (e.g. 'claude', 'pi')")
+  .option("-n, --name <name>", "Window name (defaults to command basename)")
+  .option("-l, --layout <layout>", "Layout name (default, small, or custom)")
+  .action((command, opts) => {
+    createWorkspace(command, opts.name, opts.layout);
   });
 
 program

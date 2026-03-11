@@ -1,2 +1,5 @@
 node_modules/
 dist/
+
+# bv (beads viewer) local config and caches
+.bv/

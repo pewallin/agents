@@ -17,6 +17,15 @@ export interface AgentPane {
   agent: string;
   status: AgentStatus;
   detail?: string;
+  windowId?: string;   // session:window_index for sibling lookup
+}
+
+export interface SiblingPane {
+  tmuxPaneId: string;  // %N
+  command: string;     // pane_current_command
+  paneRef: string;     // session:window.pane_index
+  width: number;
+  height: number;
 }
 
 // Agent process names to detect — extend this list for custom agents
@@ -208,7 +217,7 @@ function scanSync(): AgentPane[] {
     const paneShort = pane.replace(/\.0$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
 
-    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail });
+    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId });
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane));
@@ -285,7 +294,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const paneShort = pane.replace(/\.0$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
 
-    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail } as AgentPane;
+    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);
@@ -318,17 +327,38 @@ export function switchBack(): boolean {
 
 // ── Preview / swap helpers ──────────────────────────────────────────
 
-/** Create a split for preview. For horizontal (below), `dashboardSize` is rows
- *  reserved for the dashboard. For vertical (right), it splits 50/50. */
+/** Create a split for preview. `dashboardSize` is rows (horizontal) or columns
+ *  (vertical) reserved for the dashboard pane – the agent gets the rest.
+ *  Always targets our own pane (via $TMUX_PANE) so focus doesn't matter. */
 export function createPreviewSplit(dashboardSize: number, vertical: boolean = false): string {
+  const self = process.env.TMUX_PANE || "";
+  const target = self ? ` -t ${self}` : "";
   if (vertical) {
-    return execSync_(`tmux split-window -h -d -P -F '#{pane_id}' 'tail -f /dev/null'`);
+    // Query current pane width so we can compute the preview size directly.
+    // Using -l at split time avoids resize-pane which can steal space from
+    // neighboring panes outside the split.
+    const curWidth = parseInt(execSync_(`tmux display-message -t ${self || ""} -p '#{pane_width}'`) || "120", 10);
+    const previewCols = Math.max(20, curWidth - dashboardSize - 1);
+    return execSync_(`tmux split-window -h -d${target} -l ${previewCols} -P -F '#{pane_id}' 'tail -f /dev/null'`);
   }
-  const paneId = execSync_(`tmux split-window -v -d -P -F '#{pane_id}' 'tail -f /dev/null'`);
-  if (paneId) {
-    execSync_(`tmux resize-pane -y ${dashboardSize}`);
-  }
-  return paneId;
+  const curHeight = parseInt(execSync_(`tmux display-message -t ${self || ""} -p '#{pane_height}'`) || "24", 10);
+  const previewRows = Math.max(5, curHeight - dashboardSize - 1);
+  return execSync_(`tmux split-window -v -d${target} -l ${previewRows} -P -F '#{pane_id}' 'tail -f /dev/null'`);
+}
+
+/** Check if a pane exists. */
+export function paneExists(paneId: string): boolean {
+  return execSync_(`tmux display-message -t ${paneId} -p '#{pane_id}' 2>/dev/null`) === paneId;
+}
+
+/** Get the current width of a pane. */
+export function getPaneWidth(paneId: string): number {
+  return parseInt(execSync_(`tmux display-message -t ${paneId} -p '#{pane_width}' 2>/dev/null`) || "0", 10);
+}
+
+/** Resize a pane to a specific width. */
+export function resizePaneWidth(paneId: string, width: number): void {
+  execSync_(`tmux resize-pane -t ${paneId} -x ${width} 2>/dev/null`);
 }
 
 /** Swap two panes by their %N ids. */
@@ -343,12 +373,125 @@ export function focusPane(tmuxPaneId: string): void {
 
 /** Get the current pane's %N id. */
 export function ownPaneId(): string {
-  return execSync_(`tmux display-message -p '#{pane_id}'`);
+  // TMUX_PANE is set per-pane by tmux and stays correct regardless of focus.
+  // display-message without -t returns the *focused* pane, which is wrong if
+  // another pane has focus (e.g. during HMR remount).
+  return process.env.TMUX_PANE || execSync_(`tmux display-message -p '#{pane_id}'`);
 }
 
 /** Kill a pane by its %N id. */
 export function killPane(id: string): void {
   execSync_(`tmux kill-pane -t ${id} 2>/dev/null`);
+}
+
+/** Find sibling panes in the same tmux window, excluding the given pane. */
+export function findSiblingPanes(windowId: string, excludePaneId: string): SiblingPane[] {
+  const raw = execSync_(
+    `tmux list-panes -t ${JSON.stringify(windowId)} -F '#{pane_id}§#{pane_current_command}§#{session_name}:#{window_name}.#{pane_index}§#{pane_width}§#{pane_height}' 2>/dev/null`
+  );
+  if (!raw) return [];
+  return raw.split("\n").filter(Boolean).map((line) => {
+    const [tmuxPaneId, command, paneRef, w, h] = line.split("§");
+    return { tmuxPaneId, command, paneRef, width: parseInt(w, 10) || 0, height: parseInt(h, 10) || 0 };
+  }).filter((p) => p.tmuxPaneId !== excludePaneId);
+}
+
+// ── Window snapshot / restore ────────────────────────────────────────
+
+export interface WindowSnapshot {
+  windowId: string;
+  layout: string;      // tmux window_layout string (includes pane IDs)
+}
+
+/** Capture a window's layout so it can be restored later. */
+export function snapshotWindow(windowId: string): WindowSnapshot {
+  const layout = execSync_(
+    `tmux display-message -t ${JSON.stringify(windowId)} -p '#{window_layout}'`
+  );
+  return { windowId, layout };
+}
+
+/** Extract ordered pane IDs from a tmux layout string.
+ *  Leaf panes match: WxH,X,Y,<ID> followed by , ] or } */
+function parsePaneIds(layout: string): string[] {
+  const ids: string[] = [];
+  const re = /\d+x\d+,\d+,\d+,(\d+)(?=[,\]\}])/g;
+  let m;
+  while ((m = re.exec(layout)) !== null) ids.push("%" + m[1]);
+  return ids;
+}
+
+/** Return a copy of the snapshot with one pane ID replaced by another.
+ *  Used when the agent pane replaces the placeholder before layout restore. */
+export function patchSnapshotId(snapshot: WindowSnapshot, oldId: string, newId: string): WindowSnapshot {
+  const oldNum = oldId.replace("%", "");
+  const newNum = newId.replace("%", "");
+  // Layout leaf format: WxH,X,Y,<ID> followed by , ] or }
+  const layout = snapshot.layout.replace(
+    new RegExp(`(\\d+x\\d+,\\d+,\\d+,)${oldNum}(?=[,\\]\\}])`, "g"),
+    `$1${newNum}`
+  );
+  return { ...snapshot, layout };
+}
+
+/** Restore a window's layout and pane ordering from a snapshot. */
+export function restoreWindowLayout(snapshot: WindowSnapshot): void {
+  // Apply geometry
+  execSync_(
+    `tmux select-layout -t ${JSON.stringify(snapshot.windowId)} '${snapshot.layout}' 2>/dev/null`
+  );
+  // Fix pane ordering — select-layout sets geometry but doesn't reorder panes
+  const targetOrder = parsePaneIds(snapshot.layout);
+  const currentOrder = execSync_(
+    `tmux list-panes -t ${JSON.stringify(snapshot.windowId)} -F '#{pane_id}' 2>/dev/null`
+  ).split("\n").filter(Boolean);
+
+  for (let i = 0; i < targetOrder.length; i++) {
+    if (currentOrder[i] !== targetOrder[i]) {
+      const j = currentOrder.indexOf(targetOrder[i]);
+      if (j >= 0) {
+        execSync_(`tmux swap-pane -d -s ${targetOrder[i]} -t ${currentOrder[i]}`);
+        [currentOrder[i], currentOrder[j]] = [currentOrder[j], currentOrder[i]];
+      }
+    }
+  }
+}
+
+/** Create a new placeholder pane by splitting an existing pane in the given direction.
+ *  Returns the new pane's %N id. Used for swap-based helper pane management. */
+export function createSplitPane(targetPaneId: string, direction: string, size?: string): string {
+  const flags = direction === "left"  ? "-hb" :
+                direction === "right" ? "-h" :
+                direction === "above" ? "-vb" :
+                                        "-v";
+  const sizeFlag = size ? ` -l ${size}` : "";
+  return execSync_(`tmux split-window ${flags} -d${sizeFlag} -t ${targetPaneId} -P -F '#{pane_id}' 'tail -f /dev/null'`);
+}
+
+/** Move a pane into another pane's window, splitting in the given direction. */
+export function joinPane(srcPaneId: string, targetPaneId: string, direction: string): void {
+  const flags = direction === "left"  ? "-hb" :
+                direction === "right" ? "-h" :
+                direction === "above" ? "-vb" :
+                                        "-v";
+  execSync_(`tmux join-pane -d ${flags} -s ${srcPaneId} -t ${targetPaneId}`);
+}
+
+/** Move a pane back into a window (joins to the first pane found there). */
+export function returnPaneToWindow(paneId: string, windowId: string): void {
+  const target = execSync_(
+    `tmux list-panes -t ${JSON.stringify(windowId)} -F '#{pane_id}' 2>/dev/null`
+  ).split("\n").filter(Boolean)[0];
+  if (target) {
+    execSync_(`tmux join-pane -d -s ${paneId} -t ${target}`);
+  }
+}
+
+/** Kill multiple panes by their %N ids. */
+export function killPanes(ids: string[]): void {
+  for (const id of ids) {
+    execSync_(`tmux kill-pane -t ${id} 2>/dev/null`);
+  }
 }
 
 /** Replace a pane's content with a centered placeholder message. */
