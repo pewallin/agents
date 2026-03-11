@@ -71,7 +71,7 @@ Hooks report state for claude, copilot, and pi. Screen-scraping detects approval
 
 | Indicator | Meaning |
 |-----------|---------|
-| `⚠ approval` | Needs user input |
+| `⚠ attention` | Needs user input |
 | `● working` | Actively processing |
 | `◐ stalled?` | No output 30s–2m |
 | `○ waiting` | Idle |

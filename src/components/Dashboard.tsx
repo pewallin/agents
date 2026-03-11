@@ -495,8 +495,8 @@ export function Dashboard({ interval }: Props) {
         <>
           {agents.map((agent, i) => {
             const sel = i === idx;
-            const icon = agent.status === "approval" ? "⚠" : agent.status === "working" ? "●" : agent.status === "stalled" ? "◐" : "○";
-            const iconColor = agent.status === "approval" ? "red" : agent.status === "working" ? "green" : agent.status === "stalled" ? "yellow" : undefined;
+            const icon = agent.status === "attention" ? "⚠" : agent.status === "working" ? "●" : agent.status === "stalled" ? "◐" : "○";
+            const iconColor = agent.status === "attention" ? "red" : agent.status === "working" ? "green" : agent.status === "stalled" ? "yellow" : undefined;
             return (
               <Text key={agent.tmuxPaneId}>
                 <Text color={sel ? "cyan" : "gray"} bold={sel}>{sel ? "›" : " "}{i + 1}</Text>

@@ -26,9 +26,9 @@ interface SetupResult {
 // ── Claude Code ─────────────────────────────────────────────────────
 
 const CLAUDE_HOOKS = {
-  UserPromptSubmit: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working" }] }],
-  Stop: [{ hooks: [{ type: "command", command: "agents report --agent claude --state idle" }] }],
-  PermissionRequest: [{ hooks: [{ type: "command", command: "agents report --agent claude --state approval" }] }],
+  UserPromptSubmit: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working --session \"$TMUX_PANE\"" }] }],
+  Stop: [{ hooks: [{ type: "command", command: "agents report --agent claude --state idle --session \"$TMUX_PANE\"" }] }],
+  PermissionRequest: [{ hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] }],
 };
 
 function setupClaude(): SetupResult {

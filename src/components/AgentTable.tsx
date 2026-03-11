@@ -5,8 +5,8 @@ import type { AgentPane, AgentStatus } from "../scanner.js";
 function StatusBadge({ status, detail }: { status: AgentStatus; detail?: string }) {
   const suffix = detail ? ` (${detail})` : "";
   switch (status) {
-    case "approval":
-      return <Text color="red" bold>⚠ approval</Text>;
+    case "attention":
+      return <Text color="red" bold>⚠ attention</Text>;
     case "working":
       return <Text color="green">● working{suffix}</Text>;
     case "stalled":

@@ -7,7 +7,7 @@ import { getAgentState } from "./state.js";
 
 const execAsync = promisify(execCb);
 
-export type AgentStatus = "approval" | "working" | "stalled" | "waiting" | "idle";
+export type AgentStatus = "attention" | "working" | "stalled" | "waiting" | "idle";
 
 export interface AgentPane {
   pane: string;
@@ -44,9 +44,8 @@ const piDetector = makeHookDetector("pi");
 
 // Hook-based detector: reads state from ~/.agents/state/ files
 // written by `agents report` command (called from agent hooks).
-// Uses tmuxPaneId as session key for per-pane status.
-// Falls back to screen-scraping for approval since not all agents
-// emit approval events via hooks.
+// Hooks key by $TMUX_PANE so each pane has independent status.
+// Falls back to screen-scraping for approval/attention detection.
 function makeHookDetector(agentName: string): AgentDetector {
   return {
     isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
@@ -154,7 +153,7 @@ async function detectStatus(
 
   // 1. Approval — always highest priority
   if (detector.isApproval(content, tmuxPaneId)) {
-    return { status: "approval" };
+    return { status: "attention" };
   }
 
   // 2. Working
@@ -252,7 +251,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
   const rawLines = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`);
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
-  if (detector.isApproval(content, tmuxPaneId)) return { status: "approval" };
+  if (detector.isApproval(content, tmuxPaneId)) return { status: "attention" };
   if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working" };
   if (detector.isIdle(content, title, tmuxPaneId)) return { status: "waiting" };
 
