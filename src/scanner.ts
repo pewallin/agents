@@ -322,6 +322,20 @@ export function switchBack(): boolean {
   if (!back) return false;
   execSync_(`tmux select-window -t ${JSON.stringify(back)}`);
   execSync_(`tmux switch-client -t ${JSON.stringify(back)}`);
+  // Signal the dashboard to exit fullscreen by sending 'f'
+  // Find the node pane in the back window (the dashboard)
+  const winRef = back.replace(/\.\d+$/, ""); // strip pane index
+  const panes = execSync_(`tmux list-panes -t ${JSON.stringify(winRef)} -F '#{pane_id}§#{pane_width}' 2>/dev/null`);
+  if (panes) {
+    for (const line of panes.split("\n")) {
+      const [paneId, width] = line.split("§");
+      if (paneId && parseInt(width, 10) <= 5) {
+        // Narrow pane = likely fullscreen dashboard, send 'f' to restore
+        execSync_(`tmux send-keys -t ${paneId} f`);
+        break;
+      }
+    }
+  }
   return true;
 }
 

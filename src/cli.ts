@@ -108,11 +108,13 @@ program
   .command("workspace")
   .alias("ws")
   .description("Create a new workspace window with agent + helper panes")
-  .argument("<command>", "Agent command to run (e.g. 'claude', 'pi')")
+  .argument("[command...]", "Agent command + args (defaults to config defaultCommand)")
   .option("-n, --name <name>", "Window name (defaults to command basename)")
   .option("-l, --layout <layout>", "Layout name (default, small, or custom)")
-  .action((command, opts) => {
-    createWorkspace(command, opts.name, opts.layout);
+  .allowUnknownOption()
+  .action((commandParts, opts) => {
+    const cmd = commandParts.length ? commandParts.join(" ") : undefined;
+    createWorkspace(cmd, opts.name, opts.layout);
   });
 
 program

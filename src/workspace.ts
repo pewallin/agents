@@ -17,8 +17,8 @@ const DEFAULT_LAYOUTS: Record<string, WorkspaceDef[]> = {
     { command: "$SHELL", split: "below", of: "bv", size: "18%" },
   ],
   small: [
-    { command: "bv", split: "below", size: "20%" },
     { command: "lazygit", split: "right", size: "35%" },
+    { command: "bv", split: "below", of: "lazygit", size: "40%" },
   ],
 };
 
@@ -35,11 +35,17 @@ function resolveLayout(config: ReturnType<typeof loadConfig>, layout?: string): 
   return DEFAULT_LAYOUTS.default;
 }
 
-export function createWorkspace(agentCmd: string, name?: string, layout?: string): void {
+export function createWorkspace(agentCmd?: string, name?: string, layout?: string): void {
   const config = loadConfig();
   const defs = resolveLayout(config, layout);
 
-  const windowName = name || agentCmd.split(/\s+/)[0];
+  const cmd = agentCmd || config.defaultCommand;
+  if (!cmd) {
+    console.error("No command specified and no defaultCommand in config");
+    process.exit(1);
+  }
+
+  const windowName = name || cmd.split(/\s+/)[0];
 
   // Create window with interactive shell, then send the agent command.
   // This ensures .zshrc/.bashrc is loaded so aliases and PATH are available.
@@ -50,7 +56,7 @@ export function createWorkspace(agentCmd: string, name?: string, layout?: string
     console.error("Failed to create tmux window");
     process.exit(1);
   }
-  exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(agentCmd)} Enter`);
+  exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);
 
   const paneMap: Record<string, string> = { agent: agentPaneId };
 

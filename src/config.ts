@@ -19,11 +19,40 @@ export interface WorkspaceDef {
 export interface Config {
   helpers: Record<string, HelperDef[]>;
   workspace: WorkspaceDef[] | Record<string, WorkspaceDef[]>;
+  defaultCommand: string;
 }
 
 const CONFIG_PATH = join(homedir(), ".agents", "config.json");
 
 let _cached: Config | null = null;
+
+const DEFAULT_CONFIG: Config = {
+  defaultCommand: "claude --dangerously-skip-permissions",
+  helpers: {
+    default: [
+      { process: "lazygit", split: "left", size: "20%" },
+      { process: "yazi", split: "below", of: "lazygit", size: "35%" },
+      { process: "bv", split: "right", size: "25%" },
+      { process: "zsh", split: "below", of: "bv", size: "25%" },
+    ],
+    small: [
+      { process: "lazygit", split: "right", size: "25%" },
+      { process: "bv", split: "below", of: "lazygit", size: "40%" },
+    ],
+  },
+  workspace: {
+    default: [
+      { command: "lazygit", split: "left", size: "23%" },
+      { command: "yazi", split: "below", of: "lazygit", size: "30%" },
+      { command: "bv", split: "right", size: "25%" },
+      { command: "$SHELL", split: "below", of: "bv", size: "18%" },
+    ],
+    small: [
+      { command: "lazygit", split: "right", size: "35%" },
+      { command: "bv", split: "below", of: "lazygit", size: "40%" },
+    ],
+  },
+};
 
 function parseHelpers(raw: any): Record<string, HelperDef[]> {
   if (Array.isArray(raw)) return raw.length ? { default: raw } : {};
@@ -37,11 +66,12 @@ export function loadConfig(): Config {
     const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
     const ws = raw.workspace;
     _cached = {
-      helpers: parseHelpers(raw.helpers),
-      workspace: Array.isArray(ws) ? ws : (ws && typeof ws === "object" ? ws : []),
+      helpers: parseHelpers(raw.helpers ?? DEFAULT_CONFIG.helpers),
+      workspace: Array.isArray(ws) ? ws : (ws && typeof ws === "object" ? ws : DEFAULT_CONFIG.workspace),
+      defaultCommand: raw.defaultCommand || DEFAULT_CONFIG.defaultCommand,
     };
   } catch {
-    _cached = { helpers: {}, workspace: [] };
+    _cached = { ...DEFAULT_CONFIG };
   }
   return _cached;
 }

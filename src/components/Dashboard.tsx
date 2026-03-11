@@ -89,6 +89,8 @@ function labelZones(zones: HelperZone[]): void {
   for (const zone of zones) {
     if (!paneExists(zone.zonePaneId)) continue;
     if (zone.occupantPaneId) {
+      // After swap: zonePaneId moved to agent's window (has tail -f).
+      // Label it as "(in preview)" so the user sees context.
       showPlaceholder(zone.zonePaneId, zone.process, "(in preview)");
     } else {
       showPlaceholder(zone.zonePaneId, zone.process, "(not found)");
@@ -159,8 +161,10 @@ export function Dashboard({ interval }: Props) {
   const [agents, setAgents] = useState<AgentPane[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [previewing, setPreviewing] = useState(!!_previewStore);
+  const [compact, setCompact] = useState(false);
   const previewRef = useRef<PreviewState | null>(_previewStore);
   const selfPaneId = useRef(ownPaneId());
+  const savedWidth = useRef(0);
   const { exit } = useApp();
 
   const doScan = useCallback(() => {
@@ -193,6 +197,11 @@ export function Dashboard({ interval }: Props) {
   const restorePreview = useCallback(() => {
     const pv = previewRef.current;
     if (!pv) return;
+    if (savedWidth.current) {
+      resizePaneWidth(selfPaneId.current, savedWidth.current);
+      savedWidth.current = 0;
+      setCompact(false);
+    }
     if (pv.zones.length) destroyZones(pv.zones);
     if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
       swapPanes(pv.agentTmuxId, pv.splitPaneId);
@@ -339,11 +348,11 @@ export function Dashboard({ interval }: Props) {
     }
   }, []);
 
-  const openPreviewAndFocus = useCallback((agent: AgentPane, forceVertical: boolean = false) => {
+  const openPreviewAndFocus = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
     if (previewRef.current) {
       switchPreview(agent);
     } else {
-      openPreview(agent, forceVertical);
+      openPreview(agent, forceVertical, layout);
     }
     setTimeout(() => {
       const pv = previewRef.current;
@@ -353,7 +362,7 @@ export function Dashboard({ interval }: Props) {
 
   useMouse(useCallback((event) => {
     if (event.button !== 0) return;
-    const agentRow = event.y - 4;
+    const agentRow = compact ? event.y - 1 : event.y - 4;
     if (agentRow < 0 || agentRow >= agents.length) return;
 
     setSelectedIndex(agentRow);
@@ -386,7 +395,27 @@ export function Dashboard({ interval }: Props) {
     }
     if (key.tab) {
       if (agents[idx]) {
-        openPreviewAndFocus(agents[idx]);
+        const defaultLayout = helperLayoutNames.current[0] || null;
+        openPreviewAndFocus(agents[idx], true, defaultLayout);
+        // Enter fullscreen after opening preview
+        if (!savedWidth.current) {
+          const self = selfPaneId.current;
+          process.stdout.write("\x1b[2J\x1b[H");
+          savedWidth.current = getPaneWidth(self);
+          resizePaneWidth(self, 5);
+          setCompact(true);
+          const pv = previewRef.current;
+          if (pv?.zones.length && pv.helperLayout) {
+            destroyZones(pv.zones, self);
+            const defs = helperLayouts.current[pv.helperLayout] || [];
+            const zones = defs.length ? createZones(pv.agentTmuxId, defs) : [];
+            if (zones.length && pv.windowId) {
+              populateZones(zones, pv.windowId, pv.agentTmuxId);
+              labelZones(zones);
+            }
+            setPreview({ ...pv, zones });
+          }
+        }
       }
       return;
     }
@@ -395,6 +424,34 @@ export function Dashboard({ interval }: Props) {
         restorePreview();
       } else if (agents[idx]) {
         openPreview(agents[idx], input === "P");
+      }
+      return;
+    }
+    if (input === "f") {
+      const pv = previewRef.current;
+      if (!pv) return;
+      const self = selfPaneId.current;
+      // Clear screen to prevent ghost lines when switching render modes
+      process.stdout.write("\x1b[2J\x1b[H");
+      if (savedWidth.current) {
+        resizePaneWidth(self, savedWidth.current);
+        savedWidth.current = 0;
+        setCompact(false);
+      } else {
+        savedWidth.current = getPaneWidth(self);
+        resizePaneWidth(self, 5);
+        setCompact(true);
+      }
+      // Reapply zone proportions after resize
+      if (pv.zones.length && pv.helperLayout) {
+        destroyZones(pv.zones, self);
+        const defs = helperLayouts.current[pv.helperLayout] || [];
+        const zones = defs.length ? createZones(pv.agentTmuxId, defs) : [];
+        if (zones.length && pv.windowId) {
+          populateZones(zones, pv.windowId, pv.agentTmuxId);
+          labelZones(zones);
+        }
+        setPreview({ ...pv, zones });
       }
       return;
     }
@@ -434,24 +491,38 @@ export function Dashboard({ interval }: Props) {
 
   return (
     <Box flexDirection="column">
-      <Box paddingLeft={2}>
-        <Text bold>Agent Dashboard</Text>
-      </Box>
-      <Text> </Text>
-      <AgentTable agents={agents} selectedIndex={idx} showCursor />
-      <Text> </Text>
-      <Box paddingLeft={2} flexWrap="wrap" columnGap={1}>
-        <Text dimColor>enter jump</Text>
-        <Text dimColor>· tab/click preview</Text>
-        <Text dimColor>· p/P toggle</Text>
-        {helperLayoutNames.current.length > 0 && <Text dimColor>· h helpers</Text>}
-        <Text dimColor>· q quit</Text>
-      </Box>
-      {previewing && previewRef.current && (
+      {compact ? (
         <>
-          <Text> </Text>
+          {agents.map((agent, i) => {
+            const sel = i === idx;
+            const icon = agent.status === "approval" ? "⚠" : agent.status === "working" ? "●" : agent.status === "stalled" ? "◐" : "○";
+            const iconColor = agent.status === "approval" ? "red" : agent.status === "working" ? "green" : agent.status === "stalled" ? "yellow" : undefined;
+            return (
+              <Text key={agent.tmuxPaneId}>
+                <Text color={sel ? "cyan" : "gray"} bold={sel}>{sel ? "›" : " "}{i + 1}</Text>
+                <Text> </Text>
+                <Text color={iconColor} dimColor={!iconColor}>{icon}</Text>
+              </Text>
+            );
+          })}
+        </>
+      ) : (
+        <>
           <Box paddingLeft={2}>
-            <Text dimColor>{previewRef.current.vertical ? "▶" : "▼"} Preview: {previewRef.current.agentName} — {previewRef.current.agentPane}{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
+            <Text bold>Agent Dashboard</Text>
+          </Box>
+          <Text> </Text>
+          <AgentTable agents={agents} selectedIndex={idx} showCursor />
+          <Text> </Text>
+          <Box paddingLeft={2} columnGap={1} overflowX="hidden">
+            <Text dimColor wrap="truncate">enter · tab · p/P · h · f · q</Text>
+          </Box>
+          <Box paddingLeft={2} overflowX="hidden">
+            {previewing && previewRef.current ? (
+              <Text dimColor wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} {previewRef.current.agentName}{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
+            ) : (
+              <Text> </Text>
+            )}
           </Box>
         </>
       )}

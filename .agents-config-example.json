@@ -1,4 +1,5 @@
 {
+  "defaultCommand": "claude --dangerously-skip-permissions",
   "helpers": {
     "default": [
       { "process": "lazygit", "split": "left", "size": "15%" },
@@ -17,8 +18,8 @@
       { "command": "$SHELL", "split": "below", "of": "bv", "size": "18%" }
     ],
     "small": [
-      { "command": "bv", "split": "below", "size": "20%" },
-      { "command": "lazygit", "split": "right", "size": "35%" }
+      { "command": "lazygit", "split": "right", "size": "35%" },
+      { "command": "bv", "split": "below", "of": "lazygit", "size": "40%" }
     ]
   }
 }
