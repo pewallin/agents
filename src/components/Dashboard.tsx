@@ -200,7 +200,7 @@ export function Dashboard({ interval }: Props) {
     }
     if (key.return && agents[idx]) {
       restorePreview();
-      switchToPane(agents[idx].paneId);
+      switchToPane(agents[idx].paneId, agents[idx].tmuxPaneId);
     }
   });
 

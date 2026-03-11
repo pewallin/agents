@@ -28,7 +28,7 @@ export function Select({ agents }: Props) {
       );
     }
     if (key.return && agents[selectedIndex]) {
-      switchToPane(agents[selectedIndex].paneId);
+      switchToPane(agents[selectedIndex].paneId, agents[selectedIndex].tmuxPaneId);
       exit();
     }
   });

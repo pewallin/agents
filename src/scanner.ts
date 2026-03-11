@@ -109,6 +109,11 @@ async function findLeafProcess(pid: string): Promise<string> {
   for (;;) {
     const child = await run(`pgrep -P ${leaf} 2>/dev/null | head -1`);
     if (!child) break;
+    // Check if current child is an agent before walking deeper —
+    // agents like claude spawn sub-processes (e.g. pi) that would
+    // incorrectly win if we always walk to the true leaf.
+    const cmd = (await run(`ps -p ${child} -o comm= 2>/dev/null`)).replace(/.*\//, "");
+    if (AGENT_PROCS.test(cmd)) return cmd;
     leaf = child;
   }
   return (await run(`ps -p ${leaf} -o comm= 2>/dev/null`)).replace(/.*\//, "");
@@ -215,6 +220,8 @@ function findLeafProcessSync(pid: string): string {
   for (;;) {
     const child = execSync_(`pgrep -P ${leaf} 2>/dev/null | head -1`);
     if (!child) break;
+    const cmd = execSync_(`ps -p ${child} -o comm= 2>/dev/null`).replace(/.*\//, "");
+    if (AGENT_PROCS.test(cmd)) return cmd;
     leaf = child;
   }
   return execSync_(`ps -p ${leaf} -o comm= 2>/dev/null`).replace(/.*\//, "");
@@ -289,12 +296,15 @@ export async function scanAsync(): Promise<AgentPane[]> {
 
 const BACK_ENV = "AGENTS_BACK_PANE";
 
-export function switchToPane(paneId: string): void {
+export function switchToPane(paneId: string, tmuxPaneId?: string): void {
   const current = execSync_(`tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`);
   if (current) {
     execSync_(`tmux set-environment -g ${BACK_ENV} ${JSON.stringify(current)}`);
   }
   execSync_(`tmux select-window -t ${JSON.stringify(paneId)}`);
+  if (tmuxPaneId) {
+    execSync_(`tmux select-pane -t ${tmuxPaneId}`);
+  }
   execSync_(`tmux switch-client -t ${JSON.stringify(paneId)}`);
 }
 
