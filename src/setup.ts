@@ -35,6 +35,9 @@ const CLAUDE_HOOKS = {
   ],
 };
 
+// Hook events from older versions that should be cleaned up on setup/uninstall
+const LEGACY_EVENTS = ["PermissionRequest"];
+
 function setupClaude(): SetupResult {
   const settingsPath = join(homedir(), ".claude", "settings.json");
   if (!existsSync(join(homedir(), ".claude"))) {
@@ -50,25 +53,29 @@ function setupClaude(): SetupResult {
     }
   }
 
-  // Check if already installed
-  const existing = settings.hooks;
-  if (existing?.UserPromptSubmit && existing?.Stop && existing?.Notification) {
-    const hasOurs = JSON.stringify(existing.UserPromptSubmit).includes("agents report --agent claude");
-    if (hasOurs) {
-      return { agent: "claude", action: "already-installed" };
+  // Idempotent: strip our hooks, re-add current ones, write only if changed.
+  settings.hooks = settings.hooks || {};
+  const before = JSON.stringify(settings.hooks);
+
+  // Strip our hooks from all events (current + legacy)
+  for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
+    const hooks: any[] = settings.hooks[event] || [];
+    const filtered = hooks.filter((h: any) => !JSON.stringify(h).includes("agents report --agent claude"));
+    if (filtered.length === 0) {
+      delete settings.hooks[event];
+    } else {
+      settings.hooks[event] = filtered;
     }
   }
 
-  // Merge hooks — preserve any existing hooks the user has
-  settings.hooks = settings.hooks || {};
+  // Add current hooks
   for (const [event, hookDefs] of Object.entries(CLAUDE_HOOKS)) {
-    const existingHooks: any[] = settings.hooks[event] || [];
-    const alreadyHas = existingHooks.some((h: any) =>
-      JSON.stringify(h).includes("agents report --agent claude")
-    );
-    if (!alreadyHas) {
-      settings.hooks[event] = [...existingHooks, ...hookDefs];
-    }
+    const existing: any[] = settings.hooks[event] || [];
+    settings.hooks[event] = [...existing, ...hookDefs];
+  }
+
+  if (JSON.stringify(settings.hooks) === before) {
+    return { agent: "claude", action: "already-installed" };
   }
 
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
@@ -93,9 +100,7 @@ function uninstallClaude(): SetupResult {
   }
 
   let removed = false;
-  // Also clean up legacy PermissionRequest hooks from older installs
-  const eventsToClean = [...Object.keys(CLAUDE_HOOKS), "PermissionRequest"];
-  for (const event of eventsToClean) {
+  for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
     const hooks: any[] = settings.hooks[event] || [];
     const filtered = hooks.filter(
       (h: any) => !JSON.stringify(h).includes("agents report --agent claude")
