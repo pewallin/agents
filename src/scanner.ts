@@ -45,7 +45,6 @@ const piDetector = makeHookDetector("pi");
 // Hook-based detector: reads state from ~/.agents/state/ files
 // written by `agents report` command (called from agent hooks).
 // Hooks key by $TMUX_PANE so each pane has independent status.
-// Falls back to screen-scraping for approval/attention detection.
 function makeHookDetector(agentName: string): AgentDetector {
   return {
     isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
@@ -151,22 +150,21 @@ async function detectStatus(
   );
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
-  // 1. Approval — always highest priority
   if (detector.isApproval(content, tmuxPaneId)) {
     return { status: "attention" };
   }
 
-  // 2. Working
+  const now = Math.floor(Date.now() / 1000);
+  const age = now - windowActivity;
+
   if (detector.isWorking(content, title, tmuxPaneId)) {
-    return { status: "working" };
+    if (age <= 30) return { status: "working" };
   }
 
-  // 3. Idle prompt visible
   if (detector.isIdle(content, title, tmuxPaneId)) {
     return { status: "waiting" };
   }
 
-  // 4. Fallback: activity-age based
   const fullPane = await run(
     `tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`
   );
@@ -175,14 +173,8 @@ async function detectStatus(
     return { status: "waiting" };
   }
 
-  const now = Math.floor(Date.now() / 1000);
-  const age = now - windowActivity;
-  if (age < 30) {
-    return { status: "working", detail: `${age}s` };
-  }
-  if (age < 120) {
-    return { status: "stalled", detail: `${age}s` };
-  }
+  if (age < 30) return { status: "working", detail: `${age}s` };
+  if (age < 120) return { status: "stalled", detail: `${age}s` };
   return { status: "idle", detail: `${Math.floor(age / 60)}m` };
 }
 
@@ -252,15 +244,23 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
   if (detector.isApproval(content, tmuxPaneId)) return { status: "attention" };
-  if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working" };
+
+  const now = Math.floor(Date.now() / 1000);
+  const age = now - windowActivity;
+
+  if (detector.isWorking(content, title, tmuxPaneId)) {
+    // Hook says working — but if no tmux activity for >30s, the hook is
+    // likely stale (e.g. user interrupted the agent, no Stop hook fired).
+    // Fall through to activity-age detection instead.
+    if (age <= 30) return { status: "working" };
+  }
+
   if (detector.isIdle(content, title, tmuxPaneId)) return { status: "waiting" };
 
   const fullPane = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`);
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
   if (isEmpty) return { status: "waiting" };
 
-  const now = Math.floor(Date.now() / 1000);
-  const age = now - windowActivity;
   if (age < 30) return { status: "working", detail: `${age}s` };
   if (age < 120) return { status: "stalled", detail: `${age}s` };
   return { status: "idle", detail: `${Math.floor(age / 60)}m` };

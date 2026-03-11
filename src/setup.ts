@@ -28,7 +28,11 @@ interface SetupResult {
 const CLAUDE_HOOKS = {
   UserPromptSubmit: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working --session \"$TMUX_PANE\"" }] }],
   Stop: [{ hooks: [{ type: "command", command: "agents report --agent claude --state idle --session \"$TMUX_PANE\"" }] }],
-  PermissionRequest: [{ hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] }],
+  Notification: [
+    { matcher: "idle_prompt", hooks: [{ type: "command", command: "agents report --agent claude --state idle --session \"$TMUX_PANE\"" }] },
+    { matcher: "permission_prompt", hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] },
+    { matcher: "elicitation_dialog", hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] },
+  ],
 };
 
 function setupClaude(): SetupResult {
@@ -48,7 +52,7 @@ function setupClaude(): SetupResult {
 
   // Check if already installed
   const existing = settings.hooks;
-  if (existing?.UserPromptSubmit && existing?.Stop && existing?.PermissionRequest) {
+  if (existing?.UserPromptSubmit && existing?.Stop && existing?.Notification) {
     const hasOurs = JSON.stringify(existing.UserPromptSubmit).includes("agents report --agent claude");
     if (hasOurs) {
       return { agent: "claude", action: "already-installed" };
@@ -89,7 +93,9 @@ function uninstallClaude(): SetupResult {
   }
 
   let removed = false;
-  for (const event of Object.keys(CLAUDE_HOOKS)) {
+  // Also clean up legacy PermissionRequest hooks from older installs
+  const eventsToClean = [...Object.keys(CLAUDE_HOOKS), "PermissionRequest"];
+  for (const event of eventsToClean) {
     const hooks: any[] = settings.hooks[event] || [];
     const filtered = hooks.filter(
       (h: any) => !JSON.stringify(h).includes("agents report --agent claude")
