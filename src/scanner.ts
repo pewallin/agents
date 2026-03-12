@@ -45,34 +45,27 @@ const piDetector = makeHookDetector("pi");
 // Hook-based detector: reads state from ~/.agents/state/ files
 // written by `agents report` command (called from agent hooks).
 // Hooks key by $TMUX_PANE so each pane has independent status.
-// Falls back to screen-scraping when no state file exists (extension not loaded).
+// When no state file exists (null), agent hasn't started yet → treat as idle.
+// NEVER falls back to generic screen-scraping — hooks are authoritative.
 function makeHookDetector(agentName: string): AgentDetector {
   return {
-    isWorking(content, title, paneId) {
-      const s = getAgentState(agentName, paneId);
-      if (s === null) return genericDetector.isWorking(content, title);
-      return s === "working";
-    },
-    isIdle(content, title, paneId) {
-      const s = getAgentState(agentName, paneId);
-      if (s === null) return genericDetector.isIdle(content, title);
-      return s === "idle";
-    },
-    isApproval(content, paneId) {
-      const s = getAgentState(agentName, paneId);
-      if (s === null) return genericDetector.isApproval(content);
-      return s === "approval";
-    },
+    isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
+    isIdle(_c, _t, paneId) { const s = getAgentState(agentName, paneId); return s === "idle" || s === null; },
+    isApproval(_c, paneId) { return getAgentState(agentName, paneId) === "approval"; },
   };
 }
 
 
 
-// Generic fallback for codex, cursor, etc.
+// Generic screen-scrape detector for codex, cursor, opencode, etc.
+// This is inherently brittle — only used for agents without hook/extension support.
 const genericDetector: AgentDetector = {
   isWorking(content, title) {
-    return /[⠁-⠿⏳🔄]/.test(title) ||
-      /Working\.\.\.|Thinking\.\.\.|Running\.\.\.|Generating|Searching|Compiling|[⠁-⠿]|✢/.test(content);
+    // Spinner chars in title (many TUIs set title to show progress)
+    if (/[⠁-⠿⏳🔄]/.test(title)) return true;
+    // Spinner chars or progress keywords in pane content
+    // NOTE: ✢ intentionally excluded — it's Claude's static prompt marker
+    return /Working\.\.\.|Thinking\.\.\.|Running\.\.\.|Generating|Searching|Compiling|[⠁-⠿]/.test(content);
   },
   isIdle(content) {
     const bottom = content.split("\n").filter(Boolean).slice(-3).join("\n");
@@ -85,15 +78,10 @@ const genericDetector: AgentDetector = {
 
 function getDetector(agent: string): AgentDetector {
   switch (agent.toLowerCase()) {
-    case "copilot":
-    case "opencode":
-      return copilotDetector;
-    case "pi":
-      return piDetector;
-    case "claude":
-      return claudeDetector;
-    default:
-      return genericDetector;
+    case "claude":  return claudeDetector;
+    case "copilot": return copilotDetector;
+    case "pi":      return piDetector;
+    default:        return genericDetector;  // opencode, codex, cursor, etc.
   }
 }
 
@@ -161,30 +149,18 @@ async function detectStatus(
   );
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
-  if (detector.isApproval(content, tmuxPaneId)) {
-    return { status: "attention" };
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const age = now - windowActivity;
-
-  if (detector.isWorking(content, title, tmuxPaneId)) {
-    if (age <= 30) return { status: "working" };
-  }
-
-  if (detector.isIdle(content, title, tmuxPaneId)) {
-    return { status: "waiting" };
-  }
+  if (detector.isApproval(content, tmuxPaneId)) return { status: "attention" };
+  if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working" };
+  if (detector.isIdle(content, title, tmuxPaneId)) return { status: "waiting" };
 
   const fullPane = await run(
     `tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`
   );
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
-  if (isEmpty) {
-    return { status: "waiting" };
-  }
+  if (isEmpty) return { status: "waiting" };
 
-  if (age < 30) return { status: "working", detail: `${age}s` };
+  const now = Math.floor(Date.now() / 1000);
+  const age = now - windowActivity;
   if (age < 120) return { status: "stalled", detail: `${age}s` };
   return { status: "idle", detail: `${Math.floor(age / 60)}m` };
 }
@@ -254,25 +230,22 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
   const rawLines = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`);
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
+  // 1. Detector checks (hooks for claude/copilot/pi, screen-scrape for others)
   if (detector.isApproval(content, tmuxPaneId)) return { status: "attention" };
-
-  const now = Math.floor(Date.now() / 1000);
-  const age = now - windowActivity;
-
-  if (detector.isWorking(content, title, tmuxPaneId)) {
-    // Hook says working — but if no tmux activity for >30s, the hook is
-    // likely stale (e.g. user interrupted the agent, no Stop hook fired).
-    // Fall through to activity-age detection instead.
-    if (age <= 30) return { status: "working" };
-  }
-
+  if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working" };
   if (detector.isIdle(content, title, tmuxPaneId)) return { status: "waiting" };
 
+  // 2. Fallback: only reached for generic (screen-scrape) agents when
+  //    none of the patterns matched. Check if pane has any content at all.
   const fullPane = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`);
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
   if (isEmpty) return { status: "waiting" };
 
-  if (age < 30) return { status: "working", detail: `${age}s` };
+  // No patterns matched but pane has content — use window_activity as
+  // last resort. NOTE: window_activity is per-window (not per-pane),
+  // so this can be inaccurate when helper panes share the window.
+  const now = Math.floor(Date.now() / 1000);
+  const age = now - windowActivity;
   if (age < 120) return { status: "stalled", detail: `${age}s` };
   return { status: "idle", detail: `${Math.floor(age / 60)}m` };
 }

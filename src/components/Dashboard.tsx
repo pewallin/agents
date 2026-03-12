@@ -200,7 +200,7 @@ export function Dashboard({ interval }: Props) {
     if (savedWidth.current) {
       resizePaneWidth(selfPaneId.current, savedWidth.current);
       savedWidth.current = 0;
-      setCompact(false);
+      setTimeout(() => setCompact(false), 50);
     }
     if (pv.zones.length) destroyZones(pv.zones);
     if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
@@ -260,7 +260,7 @@ export function Dashboard({ interval }: Props) {
     const termRows = process.stdout.rows || 24;
     const vertical = forceVertical || termRows < dashboardRows + 10;
     const termCols = process.stdout.columns || 120;
-    const dashboardCols = Math.max(60, Math.min(90, Math.floor(termCols * 0.3)));
+    const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
     const splitId = createPreviewSplit(vertical ? dashboardCols : dashboardRows, vertical);
     if (!splitId) return;
 
@@ -436,7 +436,9 @@ export function Dashboard({ interval }: Props) {
       if (savedWidth.current) {
         resizePaneWidth(self, savedWidth.current);
         savedWidth.current = 0;
-        setCompact(false);
+        // Delay state update until after SIGWINCH so Ink re-renders
+        // with the correct terminal width, not the old 5-column width.
+        setTimeout(() => setCompact(false), 50);
       } else {
         savedWidth.current = getPaneWidth(self);
         resizePaneWidth(self, 5);

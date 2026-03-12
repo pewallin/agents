@@ -16,11 +16,28 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-// Resolve agents binary — may not be on PATH in sandboxed pi processes
-const AGENTS_BIN = [
-  join(homedir(), ".local", "bin", "agents"),
-  "agents", // fallback to PATH
-].find((p) => p === "agents" || existsSync(p)) || "agents";
+// Resolve agents binary — may not be on PATH in sandboxed/pi processes.
+// Check common install locations since PATH may be minimal.
+import { readdirSync } from "node:fs";
+
+function findAgentsBin(): string {
+  // Check nvm versions (any installed version)
+  try {
+    const nvmDir = join(homedir(), ".nvm", "versions", "node");
+    const versions = readdirSync(nvmDir).sort().reverse();
+    for (const v of versions) {
+      const p = join(nvmDir, v, "bin", "agents");
+      if (existsSync(p)) return p;
+    }
+  } catch {}
+  // Other common locations
+  for (const p of [join(homedir(), ".local", "bin", "agents"), "/usr/local/bin/agents"]) {
+    if (existsSync(p)) return p;
+  }
+  return "agents";
+}
+
+const AGENTS_BIN = findAgentsBin();
 
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";

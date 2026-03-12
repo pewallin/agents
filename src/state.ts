@@ -24,8 +24,10 @@ export function reportState(agent: string, session: string, state: ReportedState
   writeFileSync(join(STATE_DIR, `${agent}-${session}.json`), JSON.stringify(entry));
 }
 
-/** Read all fresh state entries (< maxAge seconds old). */
-export function readStates(maxAge: number = 300): StateEntry[] {
+/** Read all fresh state entries (< maxAge seconds old).
+ *  maxAge is only for disk cleanup of orphaned files (dead sessions).
+ *  Active sessions update state via hooks; no hook = no expiry concern. */
+export function readStates(maxAge: number = 86400): StateEntry[] {
   ensureDir();
   const now = Math.floor(Date.now() / 1000);
   const entries: StateEntry[] = [];
