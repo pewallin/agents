@@ -49,10 +49,10 @@ session.on("permission.requested", () => {
   report("approval");
 });
 
-// Tool started — check if it's ask_user (question for user) or a regular tool
+// Tool started — check if it's ask_user (needs user input) or a regular tool
 session.on("tool.execution_start", (event) => {
   if (event.data.toolName === "ask_user") {
-    report("question");
+    report("approval");
   } else {
     report("working");
   }

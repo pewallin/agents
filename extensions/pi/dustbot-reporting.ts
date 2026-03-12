@@ -57,12 +57,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     report("idle");
   });
 
-  pi.on("tool_call", async (event: any) => {
-    if (event.tool === "AskUserQuestion" || event.tool === "ask_user") {
-      report("question");
-    }
-  });
-
   pi.on("session_shutdown", async () => {
     report("idle");
   });

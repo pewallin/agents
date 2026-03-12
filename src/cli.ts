@@ -86,7 +86,7 @@ program
   .command("report")
   .description("Report agent state (called by agent hooks)")
   .requiredOption("--agent <name>", "Agent name (claude, copilot, pi)")
-  .requiredOption("--state <state>", "State: working, idle, approval, question")
+  .requiredOption("--state <state>", "State: working, idle, approval")
   .option("--session <id>", "Session ID (reads from stdin if not provided)")
   .action(async (opts) => {
     let session = opts.session;

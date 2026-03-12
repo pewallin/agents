@@ -7,8 +7,6 @@ function StatusBadge({ status, detail }: { status: AgentStatus; detail?: string 
   switch (status) {
     case "attention":
       return <Text color="red" bold>⚠ attention</Text>;
-    case "question":
-      return <Text color="yellow" bold>❓ question</Text>;
     case "working":
       return <Text color="green">● working{suffix}</Text>;
     case "stalled":

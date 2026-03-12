@@ -3,11 +3,11 @@ import { writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { promisify } from "util";
-import { getAgentState, getAgentStateEntry } from "./state.js";
+import { getAgentState } from "./state.js";
 
 const execAsync = promisify(execCb);
 
-export type AgentStatus = "attention" | "question" | "working" | "stalled" | "waiting" | "idle";
+export type AgentStatus = "attention" | "working" | "stalled" | "waiting" | "idle";
 
 export interface AgentPane {
   pane: string;
@@ -37,7 +37,6 @@ interface AgentDetector {
   isWorking(content: string, title: string, tmuxPaneId?: string): boolean;
   isIdle(content: string, title: string, tmuxPaneId?: string): boolean;
   isApproval(content: string, tmuxPaneId?: string): boolean;
-  isQuestion(content: string, tmuxPaneId?: string): boolean;
 }
 const claudeDetector = makeHookDetector("claude");
 const copilotDetector = makeHookDetector("copilot");
@@ -48,25 +47,11 @@ const piDetector = makeHookDetector("pi");
 // Hooks key by $TMUX_PANE so each pane has independent status.
 // When no state file exists (null), agent hasn't started yet → treat as idle.
 // NEVER falls back to generic screen-scraping — hooks are authoritative.
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  return `${Math.floor(seconds / 3600)}h${Math.floor((seconds % 3600) / 60)}m`;
-}
-
-function stateDuration(agent: string, paneId?: string): string | undefined {
-  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
-  if (!entry) return undefined;
-  const age = Math.floor(Date.now() / 1000) - entry.ts;
-  return age >= 1 ? formatDuration(age) : undefined;
-}
-
 function makeHookDetector(agentName: string): AgentDetector {
   return {
     isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
     isIdle(_c, _t, paneId) { const s = getAgentState(agentName, paneId); return s === "idle" || s === null; },
     isApproval(_c, paneId) { return getAgentState(agentName, paneId) === "approval"; },
-    isQuestion(_content, paneId) { return getAgentState(agentName, paneId) === "question"; },
   };
 }
 
@@ -83,17 +68,11 @@ const genericDetector: AgentDetector = {
     return /Working\.\.\.|Thinking\.\.\.|Running\.\.\.|Generating|Searching|Compiling|[⠁-⠿]/.test(content);
   },
   isIdle(content) {
-    const bottom = content.split("\n").slice(-10).join("\n");
-    return /❯|›|➜|\$\s*$|>\s*$|press enter|waiting|tab agents.*ctrl\+p/i.test(bottom);
+    const bottom = content.split("\n").filter(Boolean).slice(-3).join("\n");
+    return /❯|›|➜|\$\s*$|>\s*$|press enter|waiting/i.test(bottom);
   },
   isApproval(content) {
-    return /needs-approval|Allow .*—|Do you want to run|Allow this action|\(Y\/n\)|\(y\/N\)|↑↓ to select|↑↓ to navigate/.test(content);
-  },
-  isQuestion(content) {
-    // Check if the last visible block of agent output contains a question
-    const lines = content.split("\n").filter(Boolean);
-    const tail = lines.slice(-8).join("\n");
-    return /\?/.test(tail);
+    return /needs-approval|Allow .*—|Do you want to run|Allow this|approve this|\(Y\/n\)|\(y\/N\)|↑↓ to select|↑↓ to navigate/.test(content);
   },
 };
 
@@ -170,18 +149,9 @@ async function detectStatus(
   );
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
-  const dur = stateDuration(agent, tmuxPaneId);
-
-  if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
-
-  // Check idle first — if the screen shows a prompt, the agent stopped
-  // (even if the hook state is stale from a missed Stop event, e.g. Ctrl-C).
-  if (detector.isIdle(content, title, tmuxPaneId)) {
-    if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
-    return { status: "waiting" };
-  }
-
-  if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
+  if (detector.isApproval(content, tmuxPaneId)) return { status: "attention" };
+  if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working" };
+  if (detector.isIdle(content, title, tmuxPaneId)) return { status: "waiting" };
 
   const fullPane = await run(
     `tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`
@@ -189,8 +159,6 @@ async function detectStatus(
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
   if (isEmpty) return { status: "waiting" };
 
-  // No hook data, no screen match — window_activity fallback (per-window, not per-pane).
-  // Never reports "working" — window_activity is polluted by helper panes.
   const now = Math.floor(Date.now() / 1000);
   const age = now - windowActivity;
   if (age < 120) return { status: "stalled", detail: `${age}s` };
@@ -262,19 +230,10 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
   const rawLines = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`);
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
-  const dur = stateDuration(agent, tmuxPaneId);
-
   // 1. Detector checks (hooks for claude/copilot/pi, screen-scrape for others)
-  if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
-
-  // Check idle first — if the screen shows a prompt, the agent stopped
-  // (even if the hook state is stale from a missed Stop event, e.g. Ctrl-C).
-  if (detector.isIdle(content, title, tmuxPaneId)) {
-    if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
-    return { status: "waiting" };
-  }
-
-  if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
+  if (detector.isApproval(content, tmuxPaneId)) return { status: "attention" };
+  if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working" };
+  if (detector.isIdle(content, title, tmuxPaneId)) return { status: "waiting" };
 
   // 2. Fallback: only reached for generic (screen-scrape) agents when
   //    none of the patterns matched. Check if pane has any content at all.
@@ -285,7 +244,6 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
   // No patterns matched but pane has content — use window_activity as
   // last resort. NOTE: window_activity is per-window (not per-pane),
   // so this can be inaccurate when helper panes share the window.
-  // Never reports "working" — window_activity is polluted by helper panes.
   const now = Math.floor(Date.now() / 1000);
   const age = now - windowActivity;
   if (age < 120) return { status: "stalled", detail: `${age}s` };
