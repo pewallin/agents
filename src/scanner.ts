@@ -45,12 +45,23 @@ const piDetector = makeHookDetector("pi");
 // Hook-based detector: reads state from ~/.agents/state/ files
 // written by `agents report` command (called from agent hooks).
 // Hooks key by $TMUX_PANE so each pane has independent status.
+// Falls back to screen-scraping when no state file exists (extension not loaded).
 function makeHookDetector(agentName: string): AgentDetector {
   return {
-    isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
-    isIdle(_c, _t, paneId) { const s = getAgentState(agentName, paneId); return s === "idle" || s === null; },
+    isWorking(content, title, paneId) {
+      const s = getAgentState(agentName, paneId);
+      if (s === null) return genericDetector.isWorking(content, title);
+      return s === "working";
+    },
+    isIdle(content, title, paneId) {
+      const s = getAgentState(agentName, paneId);
+      if (s === null) return genericDetector.isIdle(content, title);
+      return s === "idle";
+    },
     isApproval(content, paneId) {
-      return getAgentState(agentName, paneId) === "approval" || genericDetector.isApproval(content);
+      const s = getAgentState(agentName, paneId);
+      if (s === null) return genericDetector.isApproval(content);
+      return s === "approval";
     },
   };
 }
