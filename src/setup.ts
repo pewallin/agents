@@ -26,13 +26,15 @@ interface SetupResult {
 
 // ── Claude Code ─────────────────────────────────────────────────────
 
+const STOP_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "stop-hook.sh");
+
 const CLAUDE_HOOKS = {
   UserPromptSubmit: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working --session \"$TMUX_PANE\"" }] }],
-  Stop: [{ hooks: [{ type: "command", command: "agents report --agent claude --state idle --session \"$TMUX_PANE\"" }] }],
+  Stop: [{ hooks: [{ type: "command", command: STOP_HOOK_SCRIPT }] }],
   Notification: [
     { matcher: "idle_prompt", hooks: [{ type: "command", command: "agents report --agent claude --state idle --session \"$TMUX_PANE\"" }] },
     { matcher: "permission_prompt", hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] },
-    { matcher: "elicitation_dialog", hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] },
+    { matcher: "elicitation_dialog", hooks: [{ type: "command", command: "agents report --agent claude --state question --session \"$TMUX_PANE\"" }] },
   ],
 };
 

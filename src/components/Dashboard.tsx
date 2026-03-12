@@ -7,6 +7,7 @@ import { useMouse } from "../mouse.js";
 import { loadConfig } from "../config.js";
 import type { HelperDef } from "../config.js";
 import { writeFileSync, readFileSync, unlinkSync } from "fs";
+import { execSync } from "child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -164,13 +165,17 @@ export function Dashboard({ interval }: Props) {
   const [compact, setCompact] = useState(false);
   const previewRef = useRef<PreviewState | null>(_previewStore);
   const selfPaneId = useRef(ownPaneId());
+  const selfWindowId = useRef(
+    (() => { try { return execSync(`tmux display-message -p '#{session_name}:#{window_index}'`, { encoding: "utf-8" }).trim(); } catch { return ""; } })()
+  );
   const savedWidth = useRef(0);
   const { exit } = useApp();
 
   const doScan = useCallback(() => {
     scanAsync().then((scanned) => {
       const self = selfPaneId.current;
-      let list = self ? scanned.filter((a) => a.tmuxPaneId !== self) : scanned;
+      const selfWin = selfWindowId.current;
+      let list = scanned.filter((a) => a.tmuxPaneId !== self && a.windowId !== selfWin);
 
       const pv = previewRef.current;
       if (pv) {

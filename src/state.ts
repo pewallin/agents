@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync, readdirSync, readFileSync, unlinkSync } from 
 import { homedir } from "os";
 import { join } from "path";
 
-export type ReportedState = "working" | "idle" | "approval";
+export type ReportedState = "working" | "idle" | "approval" | "question";
 
 export interface StateEntry {
   state: ReportedState;
@@ -53,6 +53,21 @@ export function readStates(maxAge: number = 86400): StateEntry[] {
  *  If ANY session is in approval → approval.
  *  If ANY session is working → working.
  *  Otherwise → idle (or null if no data). */
+
+/** Get the state entry (with timestamp) for a specific agent session. */
+export function getAgentStateEntry(agent: string, session?: string): StateEntry | null {
+  let entries = readStates().filter((e) => e.agent === agent);
+  if (session) {
+    entries = entries.filter((e) => e.session === session);
+  }
+  if (entries.length === 0) return null;
+  // Priority: approval > working > question > idle
+  return entries.find((e) => e.state === "approval")
+    || entries.find((e) => e.state === "working")
+    || entries.find((e) => e.state === "question")
+    || entries[0];
+}
+
 export function getAgentState(agent: string, session?: string): ReportedState | null {
   let entries = readStates().filter((e) => e.agent === agent);
   if (session) {
@@ -61,5 +76,6 @@ export function getAgentState(agent: string, session?: string): ReportedState | 
   if (entries.length === 0) return null;
   if (entries.some((e) => e.state === "approval")) return "approval";
   if (entries.some((e) => e.state === "working")) return "working";
+  if (entries.some((e) => e.state === "question")) return "question";
   return "idle";
 }
