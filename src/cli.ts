@@ -4,11 +4,14 @@ import React from "react";
 import { render, Text, Box } from "ink";
 import { scan, switchBack } from "./scanner.js";
 import { reportState } from "./state.js";
-import { setup, uninstall } from "./setup.js";
+import { setup, uninstall, autoSetupIfNeeded } from "./setup.js";
 import { createWorkspace } from "./workspace.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
+
+// Auto-setup in background if hook config changed since last run
+autoSetupIfNeeded();
 
 const program = new Command();
 
@@ -120,12 +123,15 @@ program
 program
   .command("setup")
   .description("Install agent hooks for Claude, Copilot, and Pi")
-  .action(() => {
-    const results = setup();
-    for (const r of results) {
-      const icon = r.action === "installed" ? "✓" : r.action === "already-installed" ? "•" : "–";
-      const detail = r.detail ? ` (${r.detail})` : "";
-      console.log(`  ${icon} ${r.agent}: ${r.action}${detail}`);
+  .option("--quiet", "Suppress output (used by auto-setup)")
+  .action((opts) => {
+    const results = setup(opts.quiet);
+    if (!opts.quiet) {
+      for (const r of results) {
+        const icon = r.action === "installed" ? "✓" : r.action === "already-installed" ? "•" : "–";
+        const detail = r.detail ? ` (${r.detail})` : "";
+        console.log(`  ${icon} ${r.agent}: ${r.action}${detail}`);
+      }
     }
   });
 

@@ -7,10 +7,11 @@
  *   - Pi: symlinks extension to ~/.pi/agent/extensions/agents-reporting/
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, unlinkSync, lstatSync, readdirSync, rmdirSync } from "fs";
+import { createHash } from "crypto";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // extensions/ lives next to src/ in the repo root
@@ -260,17 +261,60 @@ function uninstallPi(): SetupResult {
 
 // ── Public API ──────────────────────────────────────────────────────
 
-export function setup(): SetupResult[] {
+export function setup(quiet: boolean = false): SetupResult[] {
   // Verify agents CLI is available
   try {
     execSync("which agents", { encoding: "utf-8", timeout: 3000 });
   } catch {
-    console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
+    if (!quiet) console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
   }
 
-  return [setupClaude(), setupCopilot(), setupPi()];
+  const results = [setupClaude(), setupCopilot(), setupPi()];
+  saveSetupHash();
+  return results;
 }
 
 export function uninstall(): SetupResult[] {
   return [uninstallClaude(), uninstallCopilot(), uninstallPi()];
+}
+
+// ── Auto-setup on CLI start ─────────────────────────────────────────
+
+const HASH_FILE = join(homedir(), ".agents", ".setup-hash");
+
+/** Compute a hash of all setup-relevant config (hook defs + extension files). */
+function computeSetupHash(): string {
+  const h = createHash("sha256");
+  h.update(JSON.stringify(CLAUDE_HOOKS));
+  for (const ext of ["copilot/extension.mjs", "pi/dustbot-reporting.ts"]) {
+    const p = join(EXTENSIONS_DIR, ext);
+    try { h.update(readFileSync(p)); } catch {}
+  }
+  return h.digest("hex").slice(0, 16);
+}
+
+/** Check if setup needs to run and spawn it in the background if so.
+ *  Returns immediately — zero impact on CLI startup time. */
+export function autoSetupIfNeeded(): void {
+  try {
+    const current = computeSetupHash();
+    let stored = "";
+    try { stored = readFileSync(HASH_FILE, "utf-8").trim(); } catch {}
+    if (current === stored) return;
+
+    // Spawn detached so it doesn't block the CLI
+    const child = spawn(process.execPath, [process.argv[1], "setup", "--quiet"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch {}
+}
+
+/** Write the current setup hash to disk (called after successful setup). */
+function saveSetupHash(): void {
+  try {
+    mkdirSync(join(homedir(), ".agents"), { recursive: true });
+    writeFileSync(HASH_FILE, computeSetupHash());
+  } catch {}
 }
