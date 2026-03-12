@@ -60,7 +60,7 @@ function setupClaude(): SetupResult {
   // Strip our hooks from all events (current + legacy)
   for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
     const hooks: any[] = settings.hooks[event] || [];
-    const filtered = hooks.filter((h: any) => !JSON.stringify(h).includes("agents report --agent claude"));
+    const filtered = hooks.filter((h: any) => !JSON.stringify(h).includes("agents report --agent claude") && !JSON.stringify(h).includes("stop-hook.sh"));
     if (filtered.length === 0) {
       delete settings.hooks[event];
     } else {
@@ -103,7 +103,7 @@ function uninstallClaude(): SetupResult {
   for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
     const hooks: any[] = settings.hooks[event] || [];
     const filtered = hooks.filter(
-      (h: any) => !JSON.stringify(h).includes("agents report --agent claude")
+      (h: any) => !JSON.stringify(h).includes("agents report --agent claude") && !JSON.stringify(h).includes("stop-hook.sh")
     );
     if (filtered.length !== hooks.length) {
       removed = true;
