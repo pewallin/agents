@@ -25,13 +25,15 @@ interface SetupResult {
 
 // ── Claude Code ─────────────────────────────────────────────────────
 
+const STOP_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "stop-hook.sh");
+
 const CLAUDE_HOOKS = {
   UserPromptSubmit: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working --session \"$TMUX_PANE\"" }] }],
-  Stop: [{ hooks: [{ type: "command", command: "agents report --agent claude --state idle --session \"$TMUX_PANE\"" }] }],
+  Stop: [{ hooks: [{ type: "command", command: STOP_HOOK_SCRIPT }] }],
   Notification: [
     { matcher: "idle_prompt", hooks: [{ type: "command", command: "agents report --agent claude --state idle --session \"$TMUX_PANE\"" }] },
     { matcher: "permission_prompt", hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] },
-    { matcher: "elicitation_dialog", hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] },
+    { matcher: "elicitation_dialog", hooks: [{ type: "command", command: "agents report --agent claude --state question --session \"$TMUX_PANE\"" }] },
   ],
 };
 
@@ -60,7 +62,7 @@ function setupClaude(): SetupResult {
   // Strip our hooks from all events (current + legacy)
   for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
     const hooks: any[] = settings.hooks[event] || [];
-    const filtered = hooks.filter((h: any) => !JSON.stringify(h).includes("agents report --agent claude"));
+    const filtered = hooks.filter((h: any) => !JSON.stringify(h).includes("agents report --agent claude") && !JSON.stringify(h).includes("stop-hook.sh"));
     if (filtered.length === 0) {
       delete settings.hooks[event];
     } else {
@@ -103,7 +105,7 @@ function uninstallClaude(): SetupResult {
   for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
     const hooks: any[] = settings.hooks[event] || [];
     const filtered = hooks.filter(
-      (h: any) => !JSON.stringify(h).includes("agents report --agent claude")
+      (h: any) => !JSON.stringify(h).includes("agents report --agent claude") && !JSON.stringify(h).includes("stop-hook.sh")
     );
     if (filtered.length !== hooks.length) {
       removed = true;
