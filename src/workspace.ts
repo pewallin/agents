@@ -1,6 +1,6 @@
 import { execSync } from "child_process";
-import { loadConfig } from "./config.js";
-import type { WorkspaceDef } from "./config.js";
+import { loadConfig, resolveProfile } from "./config.js";
+import type { WorkspaceDef, LaunchProfile } from "./config.js";
 
 function exec(cmd: string): string {
   try {
@@ -35,23 +35,50 @@ function resolveLayout(config: ReturnType<typeof loadConfig>, layout?: string): 
   return DEFAULT_LAYOUTS.default;
 }
 
-export function createWorkspace(agentCmd?: string, name?: string, layout?: string): void {
-  const config = loadConfig();
-  const defs = resolveLayout(config, layout);
+export interface CreateWorkspaceOpts {
+  agentCmd?: string;
+  name?: string;
+  layout?: string;
+  profile?: string;
+  cwd?: string;
+  tmuxSession?: string;  // target tmux session for the new window
+}
 
-  const cmd = agentCmd || config.defaultCommand;
+export function createWorkspace(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): void {
+  const config = loadConfig();
+
+  // Resolve command: explicit arg > profile > defaultCommand
+  let cmd = agentCmd;
+  let layoutName = layout;
+  if (!cmd && opts?.profile) {
+    const profile = resolveProfile(opts.profile);
+    cmd = profile.command;
+    layoutName = layoutName || profile.workspace;
+    if (!name) name = profile.name || opts.profile;
+  }
+  cmd = cmd || config.defaultCommand;
+
   if (!cmd) {
     console.error("No command specified and no defaultCommand in config");
     process.exit(1);
   }
 
+  const defs = resolveLayout(config, layoutName);
   const windowName = name || cmd.split(/\s+/)[0];
+
+  // Build new-window command with optional target session and cwd
+  let newWindowCmd = "tmux new-window";
+  if (opts?.tmuxSession) {
+    newWindowCmd += ` -t ${JSON.stringify(opts.tmuxSession + ":")}`;
+  }
+  newWindowCmd += ` -n ${JSON.stringify(windowName)} -P -F '#{pane_id}'`;
+  if (opts?.cwd) {
+    newWindowCmd += ` -c ${JSON.stringify(opts.cwd)}`;
+  }
 
   // Create window with interactive shell, then send the agent command.
   // This ensures .zshrc/.bashrc is loaded so aliases and PATH are available.
-  const agentPaneId = exec(
-    `tmux new-window -n ${JSON.stringify(windowName)} -P -F '#{pane_id}'`
-  );
+  const agentPaneId = exec(newWindowCmd);
   if (!agentPaneId) {
     console.error("Failed to create tmux window");
     process.exit(1);
@@ -68,17 +95,18 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
                   dir === "above" ? "-vb" :
                                     "-v";
     const sizeFlag = def.size ? ` -l ${def.size}` : "";
-    const cmd = def.command;
+    const paneCmd = def.command;
 
     // Start an interactive shell, then send the command
+    const cwdFlag = opts?.cwd ? ` -c ${JSON.stringify(opts.cwd)}` : "";
     const paneId = exec(
-      `tmux split-window ${flags} -d${sizeFlag} -t ${targetId} -P -F '#{pane_id}'`
+      `tmux split-window ${flags} -d${sizeFlag}${cwdFlag} -t ${targetId} -P -F '#{pane_id}'`
     );
     if (paneId) {
-      if (cmd !== "$SHELL") {
-        exec(`tmux send-keys -t ${paneId} ${JSON.stringify(cmd)} Enter`);
+      if (paneCmd !== "$SHELL") {
+        exec(`tmux send-keys -t ${paneId} ${JSON.stringify(paneCmd)} Enter`);
       }
-      const label = cmd.replace(/^\$/, "").split(/\s+/)[0].toLowerCase();
+      const label = paneCmd.replace(/^\$/, "").split(/\s+/)[0].toLowerCase();
       paneMap[label] = paneId;
     }
   }

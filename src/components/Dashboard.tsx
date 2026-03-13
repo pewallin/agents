@@ -4,8 +4,9 @@ import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, showP
 import type { AgentPane } from "../scanner.js";
 import { AgentTable } from "./AgentTable.js";
 import { useMouse } from "../mouse.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, getProfileNames, resolveProfile } from "../config.js";
 import type { HelperDef } from "../config.js";
+import { createWorkspace } from "../workspace.js";
 import { writeFileSync, readFileSync, unlinkSync } from "fs";
 import { execSync } from "child_process";
 import { tmpdir } from "os";
@@ -179,6 +180,7 @@ export function Dashboard({ interval }: Props) {
   const scanSeq = useRef(0);
   const liveIndex = useRef(0);       // tracks selectedIndex synchronously for rapid keypresses
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [profilePicker, setProfilePicker] = useState<{ names: string[]; selected: number; cwd: string; session: string } | null>(null);
   const { exit } = useApp();
 
   /** Sync pane width from tmux into both React state and process.stdout.columns.
@@ -435,6 +437,30 @@ export function Dashboard({ interval }: Props) {
   }, [agents, openPreviewAndFocus]));
 
   useInput((input, key) => {
+    // ── Profile picker mode ──
+    if (profilePicker) {
+      if (key.escape || input === "q") {
+        setProfilePicker(null);
+        return;
+      }
+      if (input === "j" || key.downArrow) {
+        setProfilePicker({ ...profilePicker, selected: Math.min(profilePicker.selected + 1, profilePicker.names.length - 1) });
+        return;
+      }
+      if (input === "k" || key.upArrow) {
+        setProfilePicker({ ...profilePicker, selected: Math.max(profilePicker.selected - 1, 0) });
+        return;
+      }
+      if (key.return) {
+        const name = profilePicker.names[profilePicker.selected];
+        const { cwd, session } = profilePicker;
+        setProfilePicker(null);
+        createWorkspace(undefined, undefined, undefined, { profile: name, cwd: cwd || undefined, tmuxSession: session || undefined });
+        return;
+      }
+      return; // swallow all other keys while picker is open
+    }
+
     if (input === "q" || (key.ctrl && input === "c")) {
       restorePreview();
       exit();
@@ -566,6 +592,25 @@ export function Dashboard({ interval }: Props) {
       }
       return;
     }
+    if (input === "n") {
+      const names = getProfileNames();
+      if (!names.length) return;
+      // Inherit context from selected agent
+      let cwd = "";
+      let session = "";
+      const sel = agents[idx];
+      if (sel) {
+        try { cwd = execSync(`tmux display-message -t ${sel.tmuxPaneId} -p '#{pane_current_path}'`, { encoding: "utf-8" }).trim(); } catch {}
+        try { session = execSync(`tmux display-message -t ${sel.tmuxPaneId} -p '#{session_name}'`, { encoding: "utf-8" }).trim(); } catch {}
+      }
+      if (names.length === 1) {
+        // Skip picker — launch immediately
+        createWorkspace(undefined, undefined, undefined, { profile: names[0], cwd: cwd || undefined, tmuxSession: session || undefined });
+      } else {
+        setProfilePicker({ names, selected: 0, cwd, session });
+      }
+      return;
+    }
     if (key.return && agents[idx]) {
       restorePreview();
       switchToPane(agents[idx].paneId, agents[idx].tmuxPaneId);
@@ -598,7 +643,20 @@ export function Dashboard({ interval }: Props) {
           <AgentTable agents={agents} selectedIndex={idx} showCursor />
           <Text> </Text>
           <Box paddingLeft={2} columnGap={1} overflowX="hidden">
-            <Text dimColor wrap="truncate">enter · tab · p/P · h · f · q</Text>
+            {profilePicker ? (
+              <Box flexDirection="column">
+                <Text dimColor wrap="truncate">New agent: <Text color="gray">{profilePicker.session} {profilePicker.cwd ? profilePicker.cwd.replace(/^\/Users\/[^/]+/, "~") : ""}</Text></Text>
+                {profilePicker.names.map((name, i) => (
+                  <Text key={name}>
+                    <Text color={i === profilePicker.selected ? "cyan" : undefined} bold={i === profilePicker.selected}>{i === profilePicker.selected ? " › " : "   "}{name}</Text>
+                    <Text dimColor> {resolveProfile(name).command}</Text>
+                  </Text>
+                ))}
+                <Text dimColor wrap="truncate">enter · esc</Text>
+              </Box>
+            ) : (
+              <Text dimColor wrap="truncate">enter · tab · n · p/P · h · f · q</Text>
+            )}
           </Box>
           <Box paddingLeft={2} overflowX="hidden">
             {previewing && previewRef.current ? (

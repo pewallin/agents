@@ -6,11 +6,14 @@ A CLI tool that monitors AI agent panes across tmux sessions, providing a live d
 
 ```bash
 npm run build          # compile TypeScript
-agents watch           # live dashboard
+agents                 # live dashboard (default command)
 agents ls              # one-shot agent list
-agents ws              # create workspace window
+agents ws              # create workspace window (uses default profile)
+agents ws -p opencode  # create workspace using named profile
 agents setup           # install hooks for all supported agents
 ```
+
+If launched outside tmux, `agents` auto-creates/attaches a tmux session.
 
 For development with hot reload: `npm run dev:watch`
 

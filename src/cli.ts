@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import React from "react";
 import { render, Text, Box } from "ink";
+import { execSync } from "child_process";
 import { scan, switchBack } from "./scanner.js";
 import { reportState } from "./state.js";
 import { setup, uninstall, autoSetupIfNeeded } from "./setup.js";
@@ -9,6 +10,43 @@ import { createWorkspace } from "./workspace.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
+
+// If launched outside tmux for a command that needs it, re-exec inside a tmux session.
+// Non-interactive commands (report, setup, uninstall, count) work fine without tmux.
+if (!process.env.TMUX) {
+  const args = process.argv.slice(2);
+  const firstArg = args[0] || "";
+  const needsTmux = !firstArg || firstArg === "watch" || firstArg === "w"
+    || firstArg === "list" || firstArg === "ls"
+    || firstArg === "workspace" || firstArg === "ws"
+    || firstArg === "back";
+  if (needsTmux) {
+    try {
+      execSync("which tmux", { stdio: "ignore" });
+    } catch {
+      console.error("tmux is required but not installed.");
+      process.exit(1);
+    }
+    // Attach to existing 'agents' session or create a new one
+    const fullCmd = [process.argv[0], process.argv[1], ...args].map(a => JSON.stringify(a)).join(" ");
+    try {
+      execSync("tmux has-session -t agents 2>/dev/null");
+      // Session exists — run the command in it
+      if (!firstArg || firstArg === "watch" || firstArg === "w") {
+        // Dashboard: attach to existing session
+        execSync(`tmux attach-session -t agents`, { stdio: "inherit" });
+      } else {
+        // Other commands: run in the existing session
+        execSync(`tmux send-keys -t agents ${JSON.stringify(fullCmd)} Enter`, { stdio: "inherit" });
+        execSync(`tmux attach-session -t agents`, { stdio: "inherit" });
+      }
+    } catch {
+      // Create new session running the command
+      execSync(`tmux new-session -s agents ${fullCmd}`, { stdio: "inherit" });
+    }
+    process.exit(0);
+  }
+}
 
 // Auto-setup in background if hook config changed since last run
 autoSetupIfNeeded();
@@ -21,7 +59,7 @@ program
   .version("1.0.0");
 
 program
-  .command("list", { isDefault: true })
+  .command("list")
   .alias("ls")
   .description("Show agent status with interactive selection")
   .option("--no-interactive", "Print status without interactive selection")
@@ -48,7 +86,7 @@ program
   });
 
 program
-  .command("watch")
+  .command("watch", { isDefault: true })
   .alias("w")
   .description("Live dashboard with auto-refresh")
   .argument("[seconds]", "Refresh interval", "2")
@@ -111,13 +149,14 @@ program
   .command("workspace")
   .alias("ws")
   .description("Create a new workspace window with agent + helper panes")
-  .argument("[command...]", "Agent command + args (defaults to config defaultCommand)")
+  .argument("[command...]", "Agent command + args (uses profile or defaultCommand)")
+  .option("-p, --profile <name>", "Launch profile name")
   .option("-n, --name <name>", "Window name (defaults to command basename)")
   .option("-l, --layout <layout>", "Layout name (default, small, or custom)")
   .allowUnknownOption()
   .action((commandParts, opts) => {
     const cmd = commandParts.length ? commandParts.join(" ") : undefined;
-    createWorkspace(cmd, opts.name, opts.layout);
+    createWorkspace(cmd, opts.name, opts.layout, { profile: opts.profile });
   });
 
 program
