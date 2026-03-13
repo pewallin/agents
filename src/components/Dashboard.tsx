@@ -180,7 +180,12 @@ export function Dashboard({ interval }: Props) {
   const scanSeq = useRef(0);
   const liveIndex = useRef(0);       // tracks selectedIndex synchronously for rapid keypresses
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [profilePicker, setProfilePicker] = useState<{ names: string[]; selected: number; cwd: string; session: string } | null>(null);
+  // Multi-step new-agent wizard: profile → session → cwd → create
+  type WizardState =
+    | { step: "profile"; profiles: string[]; selected: number; inheritedCwd: string; inheritedSession: string }
+    | { step: "session"; profile: string; sessions: string[]; selected: number; inheritedCwd: string }
+    | { step: "cwd"; profile: string; session: string; cwdInput: string; cwdValid: boolean };
+  const [wizard, setWizard] = useState<WizardState | null>(null);
   const { exit } = useApp();
 
   /** Sync pane width from tmux into both React state and process.stdout.columns.
@@ -436,29 +441,118 @@ export function Dashboard({ interval }: Props) {
     openPreviewAndFocus(agent, true);
   }, [agents, openPreviewAndFocus]));
 
+  // Advance wizard from profile step → session or cwd step
+  const wizardAfterProfile = useCallback((profile: string, inheritedCwd: string, inheritedSession: string) => {
+    // Check available tmux sessions
+    let sessions: string[] = [];
+    try { sessions = execSync("tmux list-sessions -F '#{session_name}'", { encoding: "utf-8" }).trim().split("\n").filter(Boolean); } catch {}
+    if (sessions.length > 1) {
+      const selIdx = Math.max(0, sessions.indexOf(inheritedSession));
+      setWizard({ step: "session", profile, sessions, selected: selIdx, inheritedCwd });
+    } else {
+      const session = sessions[0] || inheritedSession;
+      wizardAfterSession(profile, session, inheritedCwd);
+    }
+  }, []);
+
+  const wizardAfterSession = useCallback((profile: string, session: string, inheritedCwd: string) => {
+    const { existsSync, statSync } = require("fs");
+    const valid = !!inheritedCwd && existsSync(inheritedCwd) && statSync(inheritedCwd).isDirectory();
+    setWizard({ step: "cwd", profile, session, cwdInput: inheritedCwd, cwdValid: valid });
+  }, []);
+
+  const validateCwd = useCallback((path: string): boolean => {
+    try {
+      const { existsSync, statSync } = require("fs");
+      return !!path && existsSync(path) && statSync(path).isDirectory();
+    } catch { return false; }
+  }, []);
+
   useInput((input, key) => {
-    // ── Profile picker mode ──
-    if (profilePicker) {
-      if (key.escape || input === "q") {
-        setProfilePicker(null);
+    // ── New-agent wizard ──
+    if (wizard) {
+      if (key.escape) { setWizard(null); return; }
+
+      if (wizard.step === "profile") {
+        if (input === "j" || key.downArrow) {
+          setWizard({ ...wizard, selected: Math.min(wizard.selected + 1, wizard.profiles.length - 1) });
+          return;
+        }
+        if (input === "k" || key.upArrow) {
+          setWizard({ ...wizard, selected: Math.max(wizard.selected - 1, 0) });
+          return;
+        }
+        if (key.return) {
+          wizardAfterProfile(wizard.profiles[wizard.selected], wizard.inheritedCwd, wizard.inheritedSession);
+          return;
+        }
         return;
       }
-      if (input === "j" || key.downArrow) {
-        setProfilePicker({ ...profilePicker, selected: Math.min(profilePicker.selected + 1, profilePicker.names.length - 1) });
+
+      if (wizard.step === "session") {
+        if (input === "j" || key.downArrow) {
+          setWizard({ ...wizard, selected: Math.min(wizard.selected + 1, wizard.sessions.length - 1) });
+          return;
+        }
+        if (input === "k" || key.upArrow) {
+          setWizard({ ...wizard, selected: Math.max(wizard.selected - 1, 0) });
+          return;
+        }
+        if (key.return) {
+          wizardAfterSession(wizard.profile, wizard.sessions[wizard.selected], wizard.inheritedCwd);
+          return;
+        }
         return;
       }
-      if (input === "k" || key.upArrow) {
-        setProfilePicker({ ...profilePicker, selected: Math.max(profilePicker.selected - 1, 0) });
+
+      if (wizard.step === "cwd") {
+        if (key.return && wizard.cwdValid) {
+          const { profile, session, cwdInput } = wizard;
+          setWizard(null);
+          createWorkspace(undefined, undefined, undefined, { profile, cwd: cwdInput || undefined, tmuxSession: session || undefined });
+          return;
+        }
+        if (key.backspace || key.delete) {
+          const next = wizard.cwdInput.slice(0, -1);
+          setWizard({ ...wizard, cwdInput: next, cwdValid: validateCwd(next) });
+          return;
+        }
+        // Tab completion: find matching directory
+        if (key.tab) {
+          const { cwdInput } = wizard;
+          try {
+            const { readdirSync, statSync } = require("fs");
+            const { dirname, basename, join } = require("path");
+            const dir = cwdInput.endsWith("/") ? cwdInput : dirname(cwdInput);
+            const prefix = cwdInput.endsWith("/") ? "" : basename(cwdInput);
+            const entries = readdirSync(dir).filter((e: string) => e.startsWith(prefix) && !e.startsWith("."));
+            const dirs = entries.filter((e: string) => { try { return statSync(join(dir, e)).isDirectory(); } catch { return false; } });
+            if (dirs.length === 1) {
+              const completed = join(dir, dirs[0]) + "/";
+              setWizard({ ...wizard, cwdInput: completed, cwdValid: validateCwd(completed) });
+            } else if (dirs.length > 1) {
+              // Find common prefix
+              let common = dirs[0];
+              for (const d of dirs) {
+                while (!d.startsWith(common)) common = common.slice(0, -1);
+              }
+              if (common.length > prefix.length) {
+                const completed = join(dir, common);
+                setWizard({ ...wizard, cwdInput: completed, cwdValid: validateCwd(completed) });
+              }
+            }
+          } catch {}
+          return;
+        }
+        // Regular character input
+        if (input && !key.ctrl && !key.meta && input.length === 1) {
+          const next = wizard.cwdInput + input;
+          setWizard({ ...wizard, cwdInput: next, cwdValid: validateCwd(next) });
+          return;
+        }
         return;
       }
-      if (key.return) {
-        const name = profilePicker.names[profilePicker.selected];
-        const { cwd, session } = profilePicker;
-        setProfilePicker(null);
-        createWorkspace(undefined, undefined, undefined, { profile: name, cwd: cwd || undefined, tmuxSession: session || undefined });
-        return;
-      }
-      return; // swallow all other keys while picker is open
+      return;
     }
 
     if (input === "q" || (key.ctrl && input === "c")) {
@@ -593,21 +687,21 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (input === "n") {
-      const names = getProfileNames();
-      if (!names.length) return;
+      const profiles = getProfileNames();
+      if (!profiles.length) return;
       // Inherit context from selected agent
       let cwd = "";
-      let session = "";
+      let inheritedSession = "";
       const sel = agents[idx];
       if (sel) {
         try { cwd = execSync(`tmux display-message -t ${sel.tmuxPaneId} -p '#{pane_current_path}'`, { encoding: "utf-8" }).trim(); } catch {}
-        try { session = execSync(`tmux display-message -t ${sel.tmuxPaneId} -p '#{session_name}'`, { encoding: "utf-8" }).trim(); } catch {}
+        try { inheritedSession = execSync(`tmux display-message -t ${sel.tmuxPaneId} -p '#{session_name}'`, { encoding: "utf-8" }).trim(); } catch {}
       }
-      if (names.length === 1) {
-        // Skip picker — launch immediately
-        createWorkspace(undefined, undefined, undefined, { profile: names[0], cwd: cwd || undefined, tmuxSession: session || undefined });
+      if (profiles.length === 1) {
+        // Skip profile picker — go straight to session/cwd
+        wizardAfterProfile(profiles[0], cwd, inheritedSession);
       } else {
-        setProfilePicker({ names, selected: 0, cwd, session });
+        setWizard({ step: "profile", profiles, selected: 0, inheritedCwd: cwd, inheritedSession });
       }
       return;
     }
@@ -643,15 +737,31 @@ export function Dashboard({ interval }: Props) {
           <AgentTable agents={agents} selectedIndex={idx} showCursor />
           <Text> </Text>
           <Box paddingLeft={2} columnGap={1} overflowX="hidden">
-            {profilePicker ? (
+            {wizard ? (
               <Box flexDirection="column">
-                <Text dimColor wrap="truncate">New agent: <Text color="gray">{profilePicker.session} {profilePicker.cwd ? profilePicker.cwd.replace(/^\/Users\/[^/]+/, "~") : ""}</Text></Text>
-                {profilePicker.names.map((name, i) => (
-                  <Text key={name}>
-                    <Text color={i === profilePicker.selected ? "cyan" : undefined} bold={i === profilePicker.selected}>{i === profilePicker.selected ? " › " : "   "}{name}</Text>
-                    <Text dimColor> {resolveProfile(name).command}</Text>
-                  </Text>
-                ))}
+                {wizard.step === "profile" && (<>
+                  <Text dimColor wrap="truncate">New agent — select profile:</Text>
+                  {wizard.profiles.map((name, i) => (
+                    <Text key={name}>
+                      <Text color={i === wizard.selected ? "cyan" : undefined} bold={i === wizard.selected}>{i === wizard.selected ? " › " : "   "}{name}</Text>
+                      <Text dimColor> {resolveProfile(name).command}</Text>
+                    </Text>
+                  ))}
+                </>)}
+                {wizard.step === "session" && (<>
+                  <Text dimColor wrap="truncate">New agent — select tmux session:</Text>
+                  {wizard.sessions.map((name, i) => (
+                    <Text key={name}>
+                      <Text color={i === wizard.selected ? "cyan" : undefined} bold={i === wizard.selected}>{i === wizard.selected ? " › " : "   "}{name}</Text>
+                    </Text>
+                  ))}
+                </>)}
+                {wizard.step === "cwd" && (<>
+                  <Text dimColor wrap="truncate">New agent — working directory:</Text>
+                  <Text>   <Text color={wizard.cwdValid ? "green" : "red"}>{wizard.cwdInput || "(empty)"}</Text><Text color="gray">▏</Text></Text>
+                  {!wizard.cwdValid && wizard.cwdInput ? <Text color="red">   path not found</Text> : null}
+                  <Text dimColor>   tab to complete</Text>
+                </>)}
                 <Text dimColor wrap="truncate">enter · esc</Text>
               </Box>
             ) : (
