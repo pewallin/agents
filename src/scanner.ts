@@ -64,7 +64,14 @@ function stateDuration(agent: string, paneId?: string): string | undefined {
 function makeHookDetector(agentName: string): AgentDetector {
   return {
     isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
-    isIdle(_c, _t, paneId) { const s = getAgentState(agentName, paneId); return s === "idle" || s === null; },
+    isIdle(content, title, paneId) {
+      const s = getAgentState(agentName, paneId);
+      if (s === "idle" || s === null) return true;
+      // Screen-scrape override: if hook says working but screen shows a clear
+      // idle prompt, the hook state is stale (missed idle event from plugin).
+      if (s === "working") return genericDetector.isIdle(content, title);
+      return false;
+    },
     isApproval(_c, paneId) { return getAgentState(agentName, paneId) === "approval"; },
     isQuestion(_content, paneId) { return getAgentState(agentName, paneId) === "question"; },
   };

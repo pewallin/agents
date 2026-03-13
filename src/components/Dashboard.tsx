@@ -766,11 +766,16 @@ export function Dashboard({ interval }: Props) {
               </Box>
             ) : (
               <Box flexDirection="column">
-                <Text dimColor wrap="truncate">enter <Text color="gray">jump</Text>  tab <Text color="gray">preview+fullscreen</Text>  n <Text color="gray">new agent</Text>  q <Text color="gray">quit</Text></Text>
-                <Text dimColor wrap="truncate">p/P <Text color="gray">preview</Text>  h <Text color="gray">cycle helpers</Text>  f <Text color="gray">toggle fullscreen</Text></Text>
                 {previewing && previewRef.current ? (
-                  <Text dimColor wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} {previewRef.current.agentName}{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
+                  <Text wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} <Text bold>{previewRef.current.agentName}</Text>{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
                 ) : null}
+                <Text wrap="truncate"><Text color="white" bold>enter</Text> <Text color="gray">jump to agent</Text></Text>
+                <Text wrap="truncate"><Text color="white" bold>tab</Text>   <Text color="gray">preview + fullscreen</Text></Text>
+                <Text wrap="truncate"><Text color="white" bold>p/P</Text>   <Text color="gray">toggle preview</Text></Text>
+                <Text wrap="truncate"><Text color="white" bold>h</Text>     <Text color="gray">cycle helper layouts</Text></Text>
+                <Text wrap="truncate"><Text color="white" bold>f</Text>     <Text color="gray">toggle fullscreen</Text></Text>
+                <Text wrap="truncate"><Text color="white" bold>n</Text>     <Text color="gray">new agent workspace</Text></Text>
+                <Text wrap="truncate"><Text color="white" bold>q</Text>     <Text color="gray">quit</Text></Text>
               </Box>
             )}
           </Box>
