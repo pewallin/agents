@@ -452,7 +452,7 @@ export function Dashboard({ interval }: Props) {
           debounceRef.current = null;
           switchPreview(agent);
           doScan();
-        }, 200);
+        }, 400);
       }
     }
     if (input === "k" || key.upArrow) {
@@ -467,7 +467,7 @@ export function Dashboard({ interval }: Props) {
           debounceRef.current = null;
           switchPreview(agent);
           doScan();
-        }, 200);
+        }, 400);
       }
     }
     if (key.tab) {
