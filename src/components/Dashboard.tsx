@@ -655,14 +655,13 @@ export function Dashboard({ interval }: Props) {
                 <Text dimColor wrap="truncate">enter · esc</Text>
               </Box>
             ) : (
-              <Text dimColor wrap="truncate">enter · tab · n · p/P · h · f · q</Text>
-            )}
-          </Box>
-          <Box paddingLeft={2} overflowX="hidden">
-            {previewing && previewRef.current ? (
-              <Text dimColor wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} {previewRef.current.agentName}{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
-            ) : (
-              <Text> </Text>
+              <Box flexDirection="column">
+                <Text dimColor wrap="truncate">enter <Text color="gray">jump</Text>  tab <Text color="gray">preview+fullscreen</Text>  n <Text color="gray">new agent</Text>  q <Text color="gray">quit</Text></Text>
+                <Text dimColor wrap="truncate">p/P <Text color="gray">preview</Text>  h <Text color="gray">cycle helpers</Text>  f <Text color="gray">toggle fullscreen</Text></Text>
+                {previewing && previewRef.current ? (
+                  <Text dimColor wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} {previewRef.current.agentName}{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
+                ) : null}
+              </Box>
             )}
           </Box>
         </>

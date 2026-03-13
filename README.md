@@ -8,21 +8,24 @@ Monitor and manage AI coding agents across tmux sessions.
 git clone https://github.com/pewallin/agents.git
 cd agents
 npm install && npm run build && npm link
-agents setup   # install reporting hooks for claude, copilot, pi
+agents setup   # install reporting hooks for claude, copilot, pi, opencode
 ```
 
 ## Commands
 
 ```
-agents                  Interactive agent list (j/k, enter to jump)
-agents watch [secs]     Live dashboard with preview and helpers (default: 2s)
-agents workspace [cmd]  Create agent window with helper panes
+agents                  Live dashboard (default)
+agents ls               One-shot agent list (j/k, enter to jump)
+agents ws               Create agent workspace (uses default profile)
+agents ws -p copilot    Create workspace using named profile
 agents count            Number of running agents
 agents back             Jump to previous pane (bind to Ctrl-b b)
 agents report           Report state (called by hooks)
 agents setup            Install hooks
 agents uninstall        Remove hooks
 ```
+
+If launched outside tmux, `agents` auto-creates and attaches a tmux session.
 
 ## Dashboard
 
@@ -35,46 +38,75 @@ agents uninstall        Remove hooks
 | `p` / `P` | Toggle preview (horizontal / vertical) |
 | `f` | Toggle compact sidebar |
 | `h` | Cycle helper layouts (off → default → small → off) |
+| `n` | New agent workspace (profile picker) |
 | `q` | Quit (restores all panes) |
 
 Add `bind b run-shell "agents back"` to `~/.tmux.conf` to jump back.
 
-## Workspace
-
-`agents workspace` opens a tmux window with the agent command and helper panes (lazygit, yazi, bv, shell) arranged by layout. Defaults are built in; override with `~/.agents/config.json`.
-
 ## Config
 
-`~/.agents/config.json` — all fields optional, sensible defaults built in:
+`~/.agents/config.json` — all fields optional, sensible defaults built in.
 
 ```json
 {
-  "defaultCommand": "claude --dangerously-skip-permissions",
+  "profiles": {
+    "claude": {
+      "command": "claude --dangerously-skip-permissions",
+      "workspace": "default"
+    },
+    "copilot": {
+      "command": "copilot --yolo",
+      "workspace": "default"
+    },
+    "pi": {
+      "command": "pi",
+      "workspace": "small"
+    },
+    "opencode": {
+      "command": "opencode",
+      "workspace": "default"
+    }
+  },
+  "defaultProfile": "claude",
   "helpers": {
     "default": [
       { "process": "lazygit", "split": "left", "size": "20%" },
+      { "process": "yazi", "split": "below", "of": "lazygit", "size": "35%" },
       { "process": "bv", "split": "right", "size": "25%" }
+    ],
+    "small": [
+      { "process": "lazygit", "split": "right", "size": "25%" },
+      { "process": "bv", "split": "below", "of": "lazygit", "size": "40%" }
     ]
   },
   "workspace": {
     "default": [
       { "command": "lazygit", "split": "left", "size": "23%" },
-      { "command": "$SHELL", "split": "right", "size": "25%" }
+      { "command": "yazi", "split": "below", "of": "lazygit", "size": "30%" },
+      { "command": "bv", "split": "right", "size": "25%" },
+      { "command": "$SHELL", "split": "below", "of": "bv", "size": "18%" }
+    ],
+    "small": [
+      { "command": "lazygit", "split": "right", "size": "35%" },
+      { "command": "bv", "split": "below", "of": "lazygit", "size": "40%" }
     ]
   }
 }
 ```
 
+Profiles define agent launch commands. Each profile can specify a `workspace` layout, `name` for the tmux window, and `env` vars. The `defaultCommand` field still works as a fallback if no profiles are defined.
+
 ## Status Detection
 
-Hooks report state for claude, copilot, and pi. Screen-scraping detects approval prompts, spinners, and idle state for all others.
+Hooks report state for claude, copilot, pi, and opencode. Screen-scraping detects status for codex, cursor, and others.
 
 | Indicator | Meaning |
 |-----------|---------|
-| `⚠ attention` | Needs user input |
+| `⚠ attention` | Needs user input (permission prompt) |
+| `? question` | Agent asked a question |
 | `● working` | Actively processing |
 | `◐ stalled?` | No output 30s–2m |
-| `○ waiting` | Idle |
+| `○ idle` | Idle |
 
 ## Detected Agents
 
