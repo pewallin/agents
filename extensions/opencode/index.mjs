@@ -7,7 +7,7 @@
  * Install: add "opencode-agents-reporting" to the plugin array in opencode.json,
  * or run `agents setup` to have it configured automatically.
  */
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -25,6 +25,18 @@ function report(state) {
   execFile(AGENTS_BIN, ["report", "--agent", "opencode", "--state", state, "--session", SESSION_ID], () => {});
 }
 
+// Report idle synchronously on exit so the state file is written before the process dies
+function reportSync(state) {
+  try {
+    execFileSync(AGENTS_BIN, ["report", "--agent", "opencode", "--state", state, "--session", SESSION_ID], { timeout: 3000 });
+  } catch {}
+}
+
+// Ensure we report idle on shutdown regardless of how opencode exits
+process.on("exit", () => reportSync("idle"));
+process.on("SIGINT", () => { reportSync("idle"); process.exit(0); });
+process.on("SIGTERM", () => { reportSync("idle"); process.exit(0); });
+
 /** @type {import("@opencode-ai/plugin").Plugin} */
 const plugin = async () => {
   return {
@@ -38,6 +50,15 @@ const plugin = async () => {
         } else if (status?.type === "idle") {
           report("idle");
         }
+      }
+
+      // Redundant idle signal — some sessions fire this without session.status
+      if (type === "session.idle") {
+        report("idle");
+      }
+
+      if (type === "session.error") {
+        report("idle");
       }
 
       // permission.asked / permission.replied may not be in the Event type union yet

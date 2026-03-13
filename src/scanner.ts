@@ -48,17 +48,6 @@ const opencodeDetector = makeHookDetector("opencode");
 // written by `agents report` command (called from agent hooks).
 // Hooks key by $TMUX_PANE so each pane has independent status.
 // When no state file exists (null), agent hasn't started yet → treat as idle.
-// If hook state is "working" but stale (> STALE_THRESHOLD), fall back to
-// generic screen-scraping — the agent likely crashed or missed an idle event.
-const STALE_THRESHOLD = 300; // 5 minutes
-
-function isHookStateStale(agentName: string, paneId?: string): boolean {
-  const entry = paneId ? getAgentStateEntry(agentName, paneId) : null;
-  if (!entry || entry.state !== "working") return false;
-  const age = Math.floor(Date.now() / 1000) - entry.ts;
-  return age > STALE_THRESHOLD;
-}
-
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
@@ -74,19 +63,8 @@ function stateDuration(agent: string, paneId?: string): string | undefined {
 
 function makeHookDetector(agentName: string): AgentDetector {
   return {
-    isWorking(content, title, paneId) {
-      if (getAgentState(agentName, paneId) !== "working") return false;
-      // If hook state is stale, fall back to screen scraping
-      if (isHookStateStale(agentName, paneId)) return genericDetector.isWorking(content, title);
-      return true;
-    },
-    isIdle(content, title, paneId) {
-      const s = getAgentState(agentName, paneId);
-      if (s === "idle" || s === null) return true;
-      // Stale "working" state: check if screen actually looks idle
-      if (s === "working" && isHookStateStale(agentName, paneId)) return genericDetector.isIdle(content, title);
-      return false;
-    },
+    isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
+    isIdle(_c, _t, paneId) { const s = getAgentState(agentName, paneId); return s === "idle" || s === null; },
     isApproval(_c, paneId) { return getAgentState(agentName, paneId) === "approval"; },
     isQuestion(_content, paneId) { return getAgentState(agentName, paneId) === "question"; },
   };
