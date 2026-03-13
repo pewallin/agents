@@ -591,27 +591,6 @@ export function Dashboard({ interval }: Props) {
       if (agents[idx]) {
         const defaultLayout = helperLayoutNames.current[0] || null;
         openPreviewAndFocus(agents[idx], true, defaultLayout);
-        // Enter fullscreen after opening preview
-        if (!savedWidth.current) {
-          const self = selfPaneId.current;
-          process.stdout.write("\x1b[2J\x1b[H");
-          savedWidth.current = getPaneWidth(self);
-          resizePaneWidth(self, 5);
-          process.stdout.columns = 5;
-          setPaneWidth(5);
-          setCompact(true);
-          const pv = previewRef.current;
-          if (pv?.zones.length && pv.helperLayout) {
-            destroyZones(pv.zones, self);
-            const defs = helperLayouts.current[pv.helperLayout] || [];
-            const zones = defs.length ? createZones(pv.agentTmuxId, defs) : [];
-            if (zones.length && pv.windowId) {
-              populateZones(zones, pv.windowId, pv.agentTmuxId);
-              labelZones(zones);
-            }
-            setPreview({ ...pv, zones });
-          }
-        }
       }
       return;
     }
@@ -623,7 +602,7 @@ export function Dashboard({ interval }: Props) {
       }
       return;
     }
-    if (input === "f") {
+    if (input === "s") {
       const pv = previewRef.current;
       if (!pv) return;
       const self = selfPaneId.current;
@@ -765,13 +744,13 @@ export function Dashboard({ interval }: Props) {
                 {previewing && previewRef.current ? (
                   <Text wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} <Text bold>{previewRef.current.agentName}</Text>{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
                 ) : null}
-                <Text wrap="truncate"><Text color="#b0b8c8" bold>enter</Text> <Text color="gray">jump to agent</Text></Text>
-                <Text wrap="truncate"><Text color="#b0b8c8" bold>tab</Text>   <Text color="gray">preview + fullscreen</Text></Text>
-                <Text wrap="truncate"><Text color="#b0b8c8" bold>p/P</Text>   <Text color="gray">toggle preview</Text></Text>
-                <Text wrap="truncate"><Text color="#b0b8c8" bold>h</Text>     <Text color="gray">cycle helper layouts</Text></Text>
-                <Text wrap="truncate"><Text color="#b0b8c8" bold>f</Text>     <Text color="gray">toggle fullscreen</Text></Text>
-                <Text wrap="truncate"><Text color="#b0b8c8" bold>n</Text>     <Text color="gray">new agent workspace</Text></Text>
-                <Text wrap="truncate"><Text color="#b0b8c8" bold>q</Text>     <Text color="gray">quit</Text></Text>
+                <Text wrap="truncate"><Text color="#7a8394">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
+                <Text wrap="truncate"><Text color="#7a8394">tab</Text>   <Text color="#565e6e">preview</Text></Text>
+                <Text wrap="truncate"><Text color="#7a8394">p/P</Text>   <Text color="#565e6e">toggle preview</Text></Text>
+                <Text wrap="truncate"><Text color="#7a8394">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>
+                <Text wrap="truncate"><Text color="#7a8394">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>
+                <Text wrap="truncate"><Text color="#7a8394">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
+                <Text wrap="truncate"><Text color="#7a8394">q</Text>     <Text color="#565e6e">quit</Text></Text>
               </Box>
             )}
           </Box>
