@@ -172,10 +172,12 @@ export function Dashboard({ interval }: Props) {
     return w || process.stdout.columns || 80;
   });
   const previewRef = useRef<PreviewState | null>(_previewStore);
-  const selfPaneId = useRef(ownPaneId());
-  const selfWindowId = useRef(
-    (() => { try { return execSync(`tmux display-message -t ${process.env.TMUX_PANE || ""} -p '#{session_name}:#{window_index}'`, { encoding: "utf-8" }).trim(); } catch { return ""; } })()
-  );
+  const selfPaneId = useRef<string>(null!);
+  if (!selfPaneId.current) selfPaneId.current = ownPaneId();
+  const selfWindowId = useRef<string>(null!);
+  if (!selfWindowId.current) {
+    try { selfWindowId.current = execSync(`tmux display-message -t ${process.env.TMUX_PANE || ""} -p '#{session_name}:#{window_index}'`, { encoding: "utf-8" }).trim(); } catch { selfWindowId.current = ""; }
+  }
   const savedWidth = useRef(0);
   const scanSeq = useRef(0);
   const liveIndex = useRef(0);       // tracks selectedIndex synchronously for rapid keypresses
@@ -313,8 +315,10 @@ export function Dashboard({ interval }: Props) {
   const idx = Math.min(selectedIndex, Math.max(0, agents.length - 1));
   liveIndex.current = idx; // keep in sync after React state settles / list resizes
 
-  const helperLayouts = useRef(loadConfig().helpers);
-  const helperLayoutNames = useRef(Object.keys(helperLayouts.current));
+  const helperLayouts = useRef<Record<string, HelperDef[]>>(null!);
+  if (!helperLayouts.current) helperLayouts.current = loadConfig().helpers;
+  const helperLayoutNames = useRef<string[]>(null!);
+  if (!helperLayoutNames.current) helperLayoutNames.current = Object.keys(helperLayouts.current);
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
     const dashboardRows = 9 + agents.length;
@@ -443,7 +447,6 @@ export function Dashboard({ interval }: Props) {
 
   // Advance wizard from profile step → session or cwd step
   const wizardAfterProfile = useCallback((profile: string, inheritedCwd: string, inheritedSession: string) => {
-    // Check available tmux sessions
     let sessions: string[] = [];
     try { sessions = execSync("tmux list-sessions -F '#{session_name}'", { encoding: "utf-8" }).trim().split("\n").filter(Boolean); } catch {}
     if (sessions.length > 1) {
@@ -515,7 +518,6 @@ export function Dashboard({ interval }: Props) {
           setWizard({ ...wizard, cwdInput: next, cwdValid: validateCwd(next) });
           return;
         }
-        // Tab completion: find matching directory
         if (key.tab) {
           const { cwdInput } = wizard;
           try {
@@ -527,7 +529,6 @@ export function Dashboard({ interval }: Props) {
               const completed = join(dir, dirs[0]) + "/";
               setWizard({ ...wizard, cwdInput: completed, cwdValid: validateCwd(completed) });
             } else if (dirs.length > 1) {
-              // Find common prefix
               let common = dirs[0];
               for (const d of dirs) {
                 while (!d.startsWith(common)) common = common.slice(0, -1);
@@ -540,7 +541,6 @@ export function Dashboard({ interval }: Props) {
           } catch {}
           return;
         }
-        // Regular character input
         if (input && !key.ctrl && !key.meta && input.length === 1) {
           const next = wizard.cwdInput + input;
           setWizard({ ...wizard, cwdInput: next, cwdValid: validateCwd(next) });
@@ -589,8 +589,7 @@ export function Dashboard({ interval }: Props) {
     }
     if (key.tab) {
       if (agents[idx]) {
-        const defaultLayout = helperLayoutNames.current[0] || null;
-        openPreviewAndFocus(agents[idx], true, defaultLayout);
+        openPreviewAndFocus(agents[idx], true);
       }
       return;
     }
@@ -664,7 +663,6 @@ export function Dashboard({ interval }: Props) {
     if (input === "n") {
       const profiles = getProfileNames();
       if (!profiles.length) return;
-      // Inherit context from selected agent
       let cwd = "";
       let inheritedSession = "";
       const sel = agents[idx];
@@ -673,7 +671,6 @@ export function Dashboard({ interval }: Props) {
         try { inheritedSession = execSync(`tmux display-message -t ${sel.tmuxPaneId} -p '#{session_name}'`, { encoding: "utf-8" }).trim(); } catch {}
       }
       if (profiles.length === 1) {
-        // Skip profile picker — go straight to session/cwd
         wizardAfterProfile(profiles[0], cwd, inheritedSession);
       } else {
         setWizard({ step: "profile", profiles, selected: 0, inheritedCwd: cwd, inheritedSession });
@@ -744,13 +741,13 @@ export function Dashboard({ interval }: Props) {
                 {previewing && previewRef.current ? (
                   <Text wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} <Text bold>{previewRef.current.agentName}</Text>{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
                 ) : null}
-                <Text wrap="truncate"><Text color="#7a8394">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
-                <Text wrap="truncate"><Text color="#7a8394">tab</Text>   <Text color="#565e6e">preview</Text></Text>
-                <Text wrap="truncate"><Text color="#7a8394">p/P</Text>   <Text color="#565e6e">toggle preview</Text></Text>
-                <Text wrap="truncate"><Text color="#7a8394">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>
-                <Text wrap="truncate"><Text color="#7a8394">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>
-                <Text wrap="truncate"><Text color="#7a8394">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
-                <Text wrap="truncate"><Text color="#7a8394">q</Text>     <Text color="#565e6e">quit</Text></Text>
+                <Text wrap="truncate"><Text color="#5c6370">enter</Text> <Text color="#444b56">jump to agent</Text></Text>
+                <Text wrap="truncate"><Text color="#5c6370">tab</Text>   <Text color="#444b56">preview</Text></Text>
+                <Text wrap="truncate"><Text color="#5c6370">p/P</Text>   <Text color="#444b56">toggle preview</Text></Text>
+                <Text wrap="truncate"><Text color="#5c6370">s</Text>     <Text color="#444b56">toggle sidebar</Text></Text>
+                <Text wrap="truncate"><Text color="#5c6370">h</Text>     <Text color="#444b56">cycle helper layouts</Text></Text>
+                <Text wrap="truncate"><Text color="#5c6370">n</Text>     <Text color="#444b56">new agent workspace</Text></Text>
+                <Text wrap="truncate"><Text color="#5c6370">q</Text>     <Text color="#444b56">quit</Text></Text>
               </Box>
             )}
           </Box>
