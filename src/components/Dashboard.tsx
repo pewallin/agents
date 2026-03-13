@@ -7,10 +7,10 @@ import { useMouse } from "../mouse.js";
 import { loadConfig, getProfileNames, resolveProfile } from "../config.js";
 import type { HelperDef } from "../config.js";
 import { createWorkspace } from "../workspace.js";
-import { writeFileSync, readFileSync, unlinkSync } from "fs";
+import { writeFileSync, readFileSync, unlinkSync, existsSync, statSync, readdirSync } from "fs";
 import { execSync } from "child_process";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, dirname, basename } from "path";
 
 interface Props {
   interval: number;
@@ -456,14 +456,12 @@ export function Dashboard({ interval }: Props) {
   }, []);
 
   const wizardAfterSession = useCallback((profile: string, session: string, inheritedCwd: string) => {
-    const { existsSync, statSync } = require("fs");
     const valid = !!inheritedCwd && existsSync(inheritedCwd) && statSync(inheritedCwd).isDirectory();
     setWizard({ step: "cwd", profile, session, cwdInput: inheritedCwd, cwdValid: valid });
   }, []);
 
   const validateCwd = useCallback((path: string): boolean => {
     try {
-      const { existsSync, statSync } = require("fs");
       return !!path && existsSync(path) && statSync(path).isDirectory();
     } catch { return false; }
   }, []);
@@ -521,8 +519,6 @@ export function Dashboard({ interval }: Props) {
         if (key.tab) {
           const { cwdInput } = wizard;
           try {
-            const { readdirSync, statSync } = require("fs");
-            const { dirname, basename, join } = require("path");
             const dir = cwdInput.endsWith("/") ? cwdInput : dirname(cwdInput);
             const prefix = cwdInput.endsWith("/") ? "" : basename(cwdInput);
             const entries = readdirSync(dir).filter((e: string) => e.startsWith(prefix) && !e.startsWith("."));
@@ -769,13 +765,13 @@ export function Dashboard({ interval }: Props) {
                 {previewing && previewRef.current ? (
                   <Text wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} <Text bold>{previewRef.current.agentName}</Text>{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
                 ) : null}
-                <Text wrap="truncate"><Text color="white" bold>enter</Text> <Text color="gray">jump to agent</Text></Text>
-                <Text wrap="truncate"><Text color="white" bold>tab</Text>   <Text color="gray">preview + fullscreen</Text></Text>
-                <Text wrap="truncate"><Text color="white" bold>p/P</Text>   <Text color="gray">toggle preview</Text></Text>
-                <Text wrap="truncate"><Text color="white" bold>h</Text>     <Text color="gray">cycle helper layouts</Text></Text>
-                <Text wrap="truncate"><Text color="white" bold>f</Text>     <Text color="gray">toggle fullscreen</Text></Text>
-                <Text wrap="truncate"><Text color="white" bold>n</Text>     <Text color="gray">new agent workspace</Text></Text>
-                <Text wrap="truncate"><Text color="white" bold>q</Text>     <Text color="gray">quit</Text></Text>
+                <Text wrap="truncate"><Text color="#b0b8c8" bold>enter</Text> <Text color="gray">jump to agent</Text></Text>
+                <Text wrap="truncate"><Text color="#b0b8c8" bold>tab</Text>   <Text color="gray">preview + fullscreen</Text></Text>
+                <Text wrap="truncate"><Text color="#b0b8c8" bold>p/P</Text>   <Text color="gray">toggle preview</Text></Text>
+                <Text wrap="truncate"><Text color="#b0b8c8" bold>h</Text>     <Text color="gray">cycle helper layouts</Text></Text>
+                <Text wrap="truncate"><Text color="#b0b8c8" bold>f</Text>     <Text color="gray">toggle fullscreen</Text></Text>
+                <Text wrap="truncate"><Text color="#b0b8c8" bold>n</Text>     <Text color="gray">new agent workspace</Text></Text>
+                <Text wrap="truncate"><Text color="#b0b8c8" bold>q</Text>     <Text color="gray">quit</Text></Text>
               </Box>
             )}
           </Box>
