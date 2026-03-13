@@ -58,7 +58,7 @@ const plugin = async () => {
       }
 
       if (type === "session.error") {
-        report("idle");
+        report("approval");
       }
 
       // permission.asked / permission.replied may not be in the Event type union yet
