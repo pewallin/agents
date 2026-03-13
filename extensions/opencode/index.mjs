@@ -37,23 +37,57 @@ process.on("exit", () => reportSync("idle"));
 process.on("SIGINT", () => { reportSync("idle"); process.exit(0); });
 process.on("SIGTERM", () => { reportSync("idle"); process.exit(0); });
 
+import { appendFileSync } from "node:fs";
+const LOG = join(homedir(), ".agents", "opencode-plugin.log");
+function log(msg) {
+  try { appendFileSync(LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
+}
+
 /** @type {import("@opencode-ai/plugin").Plugin} */
-const plugin = async () => {
+const plugin = async (input) => {
+  log(`plugin loaded, SESSION_ID=${SESSION_ID}, AGENTS_BIN=${AGENTS_BIN}`);
+
+  // Poll session status via SDK client as a fallback for missed events
+  const client = input?.client;
+  let pollTimer = null;
+  let lastPolledStatus = "";
+  if (client) {
+    pollTimer = setInterval(async () => {
+      try {
+        const res = await client.GET("/session/status");
+        if (res?.data) {
+          // res.data is a map of sessionID → SessionStatus
+          const statuses = Object.values(res.data);
+          const hasBusy = statuses.some((s) => s?.type === "busy");
+          const newStatus = hasBusy ? "working" : "idle";
+          if (newStatus !== lastPolledStatus) {
+            log(`poll: ${lastPolledStatus} → ${newStatus}`);
+            lastPolledStatus = newStatus;
+            report(newStatus);
+          }
+        }
+      } catch {}
+    }, 5000);
+  }
+
   return {
     event: async ({ event }) => {
       const type = /** @type {string} */ (event.type);
+      log(`event: ${type} ${JSON.stringify(event.properties || {})}`);
 
       if (type === "session.status") {
         const status = event.properties?.status;
         if (status?.type === "busy") {
+          lastPolledStatus = "working";
           report("working");
         } else if (status?.type === "idle") {
+          lastPolledStatus = "idle";
           report("idle");
         }
       }
 
-      // Redundant idle signal — some sessions fire this without session.status
       if (type === "session.idle") {
+        lastPolledStatus = "idle";
         report("idle");
       }
 
@@ -61,19 +95,18 @@ const plugin = async () => {
         report("approval");
       }
 
-      // permission.asked / permission.replied may not be in the Event type union yet
-      if (type === "permission.asked") {
+      // SDK uses "permission.updated" (not "permission.asked")
+      if (type === "permission.updated") {
         report("approval");
       }
 
       if (type === "permission.replied") {
-        // User responded to permission prompt — agent resumes working
         report("working");
       }
     },
 
     "tool.execute.before": async (input) => {
-      // Detect question tools (agent asking the user something)
+      log(`tool.execute.before: ${input.tool}`);
       if (input.tool === "question" || input.tool === "ask_user" || input.tool === "ask") {
         report("question");
       }
