@@ -415,6 +415,7 @@ export function Dashboard({ interval }: Props) {
     } else {
       openPreview(agent, forceVertical, layout);
     }
+    doScan(); // invalidate any stale in-flight scan and refresh
     setTimeout(() => {
       const pv = previewRef.current;
       if (pv) focusPane(pv.agentTmuxId);
