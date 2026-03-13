@@ -22,7 +22,15 @@ const AGENTS_BIN = [
 const SESSION_ID = process.env.TMUX_PANE || "default";
 
 function report(state) {
-  execFile(AGENTS_BIN, ["report", "--agent", "opencode", "--state", state, "--session", SESSION_ID], () => {});
+  log(`report: ${state}`);
+  // Use execFileSync to prevent race conditions — rapid busy→idle transitions
+  // (16ms apart) can cause the "working" write to land after the "idle" write
+  // when using async execFile, leaving stale state.
+  try {
+    execFileSync(AGENTS_BIN, ["report", "--agent", "opencode", "--state", state, "--session", SESSION_ID], { timeout: 3000 });
+  } catch (err) {
+    log(`report error: ${err.message}`);
+  }
 }
 
 // Report idle synchronously on exit so the state file is written before the process dies
@@ -44,32 +52,8 @@ function log(msg) {
 }
 
 /** @type {import("@opencode-ai/plugin").Plugin} */
-const plugin = async (input) => {
+const plugin = async () => {
   log(`plugin loaded, SESSION_ID=${SESSION_ID}, AGENTS_BIN=${AGENTS_BIN}`);
-
-  // Poll session status via SDK client as a fallback for missed events
-  const client = input?.client;
-  let pollTimer = null;
-  let lastPolledStatus = "";
-  if (client) {
-    pollTimer = setInterval(async () => {
-      try {
-        const res = await client.GET("/session/status");
-        if (res?.data) {
-          // res.data is a map of sessionID → SessionStatus
-          const statuses = Object.values(res.data);
-          const hasBusy = statuses.some((s) => s?.type === "busy");
-          const newStatus = hasBusy ? "working" : "idle";
-          if (newStatus !== lastPolledStatus) {
-            log(`poll: ${lastPolledStatus} → ${newStatus}`);
-            lastPolledStatus = newStatus;
-            report(newStatus);
-          }
-        }
-      } catch {}
-    }, 5000);
-  }
-
   return {
     event: async ({ event }) => {
       const type = /** @type {string} */ (event.type);
@@ -78,16 +62,13 @@ const plugin = async (input) => {
       if (type === "session.status") {
         const status = event.properties?.status;
         if (status?.type === "busy") {
-          lastPolledStatus = "working";
           report("working");
         } else if (status?.type === "idle") {
-          lastPolledStatus = "idle";
           report("idle");
         }
       }
 
       if (type === "session.idle") {
-        lastPolledStatus = "idle";
         report("idle");
       }
 
@@ -95,7 +76,6 @@ const plugin = async (input) => {
         report("approval");
       }
 
-      // SDK uses "permission.updated" (not "permission.asked")
       if (type === "permission.updated") {
         report("approval");
       }
