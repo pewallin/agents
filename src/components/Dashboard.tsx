@@ -177,6 +177,8 @@ export function Dashboard({ interval }: Props) {
   );
   const savedWidth = useRef(0);
   const scanSeq = useRef(0);
+  const liveIndex = useRef(0);       // tracks selectedIndex synchronously for rapid keypresses
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { exit } = useApp();
 
   /** Sync pane width from tmux into both React state and process.stdout.columns.
@@ -243,6 +245,7 @@ export function Dashboard({ interval }: Props) {
   }, []);
 
   const restorePreview = useCallback(() => {
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
     const pv = previewRef.current;
     if (!pv) return;
     if (savedWidth.current) {
@@ -262,6 +265,7 @@ export function Dashboard({ interval }: Props) {
   useEffect(() => {
     _hmrDisposing = false;
     const teardown = () => {
+      if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
       const pv = previewRef.current;
       if (!pv) return;
       if (pv.zones.length) destroyZones(pv.zones);
@@ -300,6 +304,7 @@ export function Dashboard({ interval }: Props) {
   }, [interval, doScan]);
 
   const idx = Math.min(selectedIndex, Math.max(0, agents.length - 1));
+  liveIndex.current = idx; // keep in sync after React state settles / list resizes
 
   const helperLayouts = useRef(loadConfig().helpers);
   const helperLayoutNames = useRef(Object.keys(helperLayouts.current));
@@ -435,20 +440,34 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (input === "j" || key.downArrow) {
-      const i = Math.min(idx, Math.max(0, agents.length - 1));
+      const i = Math.min(liveIndex.current, Math.max(0, agents.length - 1));
       const next = i >= agents.length - 1 ? 0 : i + 1;
+      liveIndex.current = next;
       setSelectedIndex(next);
       if (previewRef.current && agents[next]) {
-        switchPreview(agents[next]);
-        doScan(); // refresh immediately; scanSeq discards any stale in-flight scan
+        // Debounce the tmux swap so rapid scrolling doesn't thrash panes
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        const agent = agents[next];
+        debounceRef.current = setTimeout(() => {
+          debounceRef.current = null;
+          switchPreview(agent);
+          doScan();
+        }, 200);
       }
     }
     if (input === "k" || key.upArrow) {
-      const next = idx <= 0 ? Math.max(0, agents.length - 1) : idx - 1;
+      const i = liveIndex.current;
+      const next = i <= 0 ? Math.max(0, agents.length - 1) : i - 1;
+      liveIndex.current = next;
       setSelectedIndex(next);
       if (previewRef.current && agents[next]) {
-        switchPreview(agents[next]);
-        doScan();
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        const agent = agents[next];
+        debounceRef.current = setTimeout(() => {
+          debounceRef.current = null;
+          switchPreview(agent);
+          doScan();
+        }, 200);
       }
     }
     if (key.tab) {
