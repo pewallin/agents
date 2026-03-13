@@ -42,6 +42,7 @@ interface AgentDetector {
 const claudeDetector = makeHookDetector("claude");
 const copilotDetector = makeHookDetector("copilot");
 const piDetector = makeHookDetector("pi");
+const opencodeDetector = makeHookDetector("opencode");
 
 // Hook-based detector: reads state from ~/.agents/state/ files
 // written by `agents report` command (called from agent hooks).
@@ -99,10 +100,11 @@ const genericDetector: AgentDetector = {
 
 function getDetector(agent: string): AgentDetector {
   switch (agent.toLowerCase()) {
-    case "claude":  return claudeDetector;
-    case "copilot": return copilotDetector;
-    case "pi":      return piDetector;
-    default:        return genericDetector;  // opencode, codex, cursor, etc.
+    case "claude":   return claudeDetector;
+    case "copilot":  return copilotDetector;
+    case "pi":       return piDetector;
+    case "opencode": return opencodeDetector;
+    default:         return genericDetector;  // codex, cursor, etc.
   }
 }
 

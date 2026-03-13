@@ -5,6 +5,7 @@
  *   - Claude Code: patches ~/.claude/settings.json with hooks
  *   - Copilot CLI: symlinks extension to ~/.copilot/extensions/agents-reporting/
  *   - Pi: symlinks extension to ~/.pi/agent/extensions/agents-reporting/
+ *   - OpenCode: symlinks plugin to ~/.config/opencode/node_modules/ and patches config.json
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, unlinkSync, lstatSync, readdirSync, rmdirSync } from "fs";
 import { createHash } from "crypto";
@@ -261,6 +262,112 @@ function uninstallPi(): SetupResult {
   return { agent: "pi", action: "uninstalled", detail: "removed ~/.pi/agent/extensions/agents-reporting.ts" };
 }
 
+// ── OpenCode ─────────────────────────────────────────────────────────
+
+const OPENCODE_PLUGIN_NAME = "opencode-agents-reporting";
+
+function setupOpencode(): SetupResult {
+  const configDir = join(homedir(), ".config", "opencode");
+  if (!existsSync(configDir)) {
+    return { agent: "opencode", action: "skipped", detail: "~/.config/opencode/ not found" };
+  }
+
+  const source = join(EXTENSIONS_DIR, "opencode");
+  if (!existsSync(join(source, "index.mjs"))) {
+    return { agent: "opencode", action: "skipped", detail: "extension source not found in repo" };
+  }
+
+  // 1. Symlink plugin package into opencode's node_modules
+  const nmDir = join(configDir, "node_modules");
+  mkdirSync(nmDir, { recursive: true });
+  const target = join(nmDir, OPENCODE_PLUGIN_NAME);
+
+  if (existsSync(target)) {
+    try {
+      const stat = lstatSync(target);
+      if (stat.isSymbolicLink()) {
+        // Already symlinked — check if it points to the right place
+        const linkTarget = readFileSync(target + "/index.mjs", "utf-8");
+        if (!linkTarget.includes("agents report")) {
+          // Wrong symlink, replace it
+          unlinkSync(target);
+        }
+      }
+    } catch {}
+  }
+
+  if (!existsSync(target)) {
+    try {
+      symlinkSync(source, target);
+    } catch {
+      // Fallback: create directory and copy files
+      mkdirSync(target, { recursive: true });
+      for (const f of ["index.mjs", "package.json"]) {
+        writeFileSync(join(target, f), readFileSync(join(source, f), "utf-8"));
+      }
+    }
+  }
+
+  // 2. Add plugin to global config
+  const configPath = join(configDir, "config.json");
+  let config: any = {};
+  if (existsSync(configPath)) {
+    try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
+  }
+
+  const plugins: string[] = config.plugin || [];
+  if (plugins.includes(OPENCODE_PLUGIN_NAME)) {
+    return { agent: "opencode", action: "already-installed" };
+  }
+
+  config.plugin = [...plugins, OPENCODE_PLUGIN_NAME];
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  return { agent: "opencode", action: "installed", detail: "added plugin to ~/.config/opencode/config.json" };
+}
+
+function uninstallOpencode(): SetupResult {
+  const configDir = join(homedir(), ".config", "opencode");
+  let removed = false;
+
+  // Remove from config
+  const configPath = join(configDir, "config.json");
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      const plugins: string[] = config.plugin || [];
+      const filtered = plugins.filter((p: string) => p !== OPENCODE_PLUGIN_NAME);
+      if (filtered.length !== plugins.length) {
+        removed = true;
+        if (filtered.length === 0) {
+          delete config.plugin;
+        } else {
+          config.plugin = filtered;
+        }
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+      }
+    } catch {}
+  }
+
+  // Remove symlink/directory from node_modules
+  const target = join(configDir, "node_modules", OPENCODE_PLUGIN_NAME);
+  if (existsSync(target)) {
+    removed = true;
+    try {
+      const stat = lstatSync(target);
+      if (stat.isSymbolicLink()) {
+        unlinkSync(target);
+      } else {
+        // Directory copy — remove files then dir
+        for (const f of readdirSync(target)) unlinkSync(join(target, f));
+        rmdirSync(target);
+      }
+    } catch {}
+  }
+
+  return { agent: "opencode", action: removed ? "uninstalled" : "not-installed",
+    detail: removed ? "removed plugin from ~/.config/opencode/" : undefined };
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 export function setup(quiet: boolean = false): SetupResult[] {
@@ -271,13 +378,13 @@ export function setup(quiet: boolean = false): SetupResult[] {
     if (!quiet) console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
   }
 
-  const results = [setupClaude(), setupCopilot(), setupPi()];
+  const results = [setupClaude(), setupCopilot(), setupPi(), setupOpencode()];
   saveSetupHash();
   return results;
 }
 
 export function uninstall(): SetupResult[] {
-  return [uninstallClaude(), uninstallCopilot(), uninstallPi()];
+  return [uninstallClaude(), uninstallCopilot(), uninstallPi(), uninstallOpencode()];
 }
 
 // ── Auto-setup on CLI start ─────────────────────────────────────────
@@ -288,7 +395,7 @@ const HASH_FILE = join(homedir(), ".agents", ".setup-hash");
 function computeSetupHash(): string {
   const h = createHash("sha256");
   h.update(JSON.stringify(CLAUDE_HOOKS));
-  for (const ext of ["copilot/extension.mjs", "pi/dustbot-reporting.ts"]) {
+  for (const ext of ["copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs"]) {
     const p = join(EXTENSIONS_DIR, ext);
     try { h.update(readFileSync(p)); } catch {}
   }

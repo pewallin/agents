@@ -1,0 +1,15 @@
+{
+  "name": "opencode-agents-reporting",
+  "version": "1.0.0",
+  "description": "Reports opencode state to the agents dashboard",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": {
+      "default": "./index.mjs"
+    }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.0.85"
+  }
+}
