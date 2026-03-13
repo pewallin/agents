@@ -29,22 +29,31 @@ if (!process.env.TMUX) {
     }
     // Attach to existing 'agents' session or create a new one
     const fullCmd = [process.argv[0], process.argv[1], ...args].map(a => JSON.stringify(a)).join(" ");
+    // Inline script that applies agents styling — used as a session-level
+    // hook so it runs AFTER any global hooks (like user theme scripts).
+    const styleScript = [
+      `tmux set -t agents status-bg '#a3be8c'`,
+      `tmux set -t agents status-fg '#2e3440'`,
+      `tmux set -t agents pane-active-border-style 'fg=#a3be8c'`,
+      `tmux set -t agents pane-border-style 'fg=#4c566a'`,
+    ].join(" \\; ");
     const applyStyle = () => {
       try {
-        // Name the window so user's tmux theme scripts can match on it
         execSync(`tmux rename-window -t agents: "agents"`, { stdio: "ignore" });
-        // Apply colors — green/teal for the dashboard
-        execSync(`tmux set -t agents status-bg '#a3be8c'`, { stdio: "ignore" });
-        execSync(`tmux set -t agents status-fg '#2e3440'`, { stdio: "ignore" });
-        execSync(`tmux set -t agents pane-active-border-style 'fg=#a3be8c'`, { stdio: "ignore" });
-        execSync(`tmux set -t agents pane-border-style 'fg=#4c566a'`, { stdio: "ignore" });
-        // Also apply user's border format if they have one configured
+        // Apply immediately
+        execSync(styleScript, { stdio: "ignore" });
+        // Inherit user's border format settings
         try {
           const borderStatus = execSync(`tmux show -gv pane-border-status 2>/dev/null`, { encoding: "utf-8" }).trim();
           if (borderStatus) execSync(`tmux set -t agents pane-border-status '${borderStatus}'`, { stdio: "ignore" });
           const borderFormat = execSync(`tmux show -gv pane-border-format 2>/dev/null`, { encoding: "utf-8" }).trim();
           if (borderFormat) execSync(`tmux set -t agents pane-border-format '${borderFormat}'`, { stdio: "ignore" });
         } catch {}
+        // Set session-level hooks so our style wins over global theme hooks.
+        // Global hooks fire first, then session hooks override.
+        for (const hook of ["client-attached", "after-new-session", "session-window-changed", "window-pane-changed"]) {
+          execSync(`tmux set-hook -t agents ${hook} 'run-shell "${styleScript}"'`, { stdio: "ignore" });
+        }
       } catch {}
     };
     try {
