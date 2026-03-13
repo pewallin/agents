@@ -7,7 +7,7 @@ import { getAgentState, getAgentStateEntry } from "./state.js";
 
 const execAsync = promisify(execCb);
 
-export type AgentStatus = "attention" | "question" | "working" | "stalled" | "waiting" | "idle";
+export type AgentStatus = "attention" | "question" | "working" | "stalled" | "idle";
 
 export interface AgentPane {
   pane: string;
@@ -178,7 +178,7 @@ async function detectStatus(
   // (even if the hook state is stale from a missed Stop event, e.g. Ctrl-C).
   if (detector.isIdle(content, title, tmuxPaneId)) {
     if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
-    return { status: "waiting" };
+    return { status: "idle" };
   }
 
   if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
@@ -187,7 +187,7 @@ async function detectStatus(
     `tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`
   );
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
-  if (isEmpty) return { status: "waiting" };
+  if (isEmpty) return { status: "idle" };
 
   // No hook data, no screen match — window_activity fallback (per-window, not per-pane).
   // Never reports "working" — window_activity is polluted by helper panes.
@@ -271,7 +271,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
   // (even if the hook state is stale from a missed Stop event, e.g. Ctrl-C).
   if (detector.isIdle(content, title, tmuxPaneId)) {
     if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
-    return { status: "waiting" };
+    return { status: "idle" };
   }
 
   if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
@@ -280,7 +280,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
   //    none of the patterns matched. Check if pane has any content at all.
   const fullPane = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`);
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
-  if (isEmpty) return { status: "waiting" };
+  if (isEmpty) return { status: "idle" };
 
   // No patterns matched but pane has content — use window_activity as
   // last resort. NOTE: window_activity is per-window (not per-pane),

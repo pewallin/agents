@@ -13,8 +13,6 @@ function StatusBadge({ status, detail }: { status: AgentStatus; detail?: string 
       return <Text color="green">● working{suffix}</Text>;
     case "stalled":
       return <Text color="yellow">◐ stalled?{suffix}</Text>;
-    case "waiting":
-      return <Text dimColor>○ waiting{suffix}</Text>;
     case "idle":
       return <Text dimColor>○ idle{suffix}</Text>;
   }
