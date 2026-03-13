@@ -163,23 +163,66 @@ export function Dashboard({ interval }: Props) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [previewing, setPreviewing] = useState(!!_previewStore);
   const [compact, setCompact] = useState(false);
+  const [paneWidth, setPaneWidth] = useState(() => {
+    const w = getPaneWidth(ownPaneId());
+    // Sync process.stdout.columns with actual tmux pane width — the PTY size
+    // often doesn't match after tmux rearranges panes (no SIGWINCH sent).
+    if (w > 0) process.stdout.columns = w;
+    return w || process.stdout.columns || 80;
+  });
   const previewRef = useRef<PreviewState | null>(_previewStore);
   const selfPaneId = useRef(ownPaneId());
   const selfWindowId = useRef(
-    (() => { try { return execSync(`tmux display-message -p '#{session_name}:#{window_index}'`, { encoding: "utf-8" }).trim(); } catch { return ""; } })()
+    (() => { try { return execSync(`tmux display-message -t ${process.env.TMUX_PANE || ""} -p '#{session_name}:#{window_index}'`, { encoding: "utf-8" }).trim(); } catch { return ""; } })()
   );
   const savedWidth = useRef(0);
+  const scanSeq = useRef(0);
   const { exit } = useApp();
 
+  /** Sync pane width from tmux into both React state and process.stdout.columns.
+   *  process.stdout.columns must be correct so Ink's layout engine clips properly. */
+  const syncPaneWidth = useCallback(() => {
+    const w = getPaneWidth(selfPaneId.current);
+    if (w > 0) {
+      process.stdout.columns = w;
+      setPaneWidth(w);
+    }
+  }, []);
+
+  // Intercept resize events: SIGWINCH updates process.stdout.columns from the PTY,
+  // which is often stale in tmux. Override with the actual tmux pane width so Ink's
+  // layout engine always uses the correct value.
+  useEffect(() => {
+    const onResize = () => {
+      const w = getPaneWidth(selfPaneId.current);
+      if (w > 0) {
+        process.stdout.columns = w;
+        setPaneWidth(w);
+      }
+    };
+    process.stdout.prependListener("resize", onResize);
+    return () => { process.stdout.off("resize", onResize); };
+  }, []);
+
   const doScan = useCallback(() => {
+    syncPaneWidth();
+
+    const seq = ++scanSeq.current;
     scanAsync().then((scanned) => {
+      // Discard stale results — a newer scan was started (e.g. after switchPreview)
+      if (seq !== scanSeq.current) return;
+
       const self = selfPaneId.current;
       const selfWin = selfWindowId.current;
       let list = scanned.filter((a) => a.tmuxPaneId !== self && a.windowId !== selfWin);
 
       const pv = previewRef.current;
       if (pv) {
-        const swapped = list.find((a) => a.tmuxPaneId === pv.agentTmuxId);
+        // After swapPanes, tmux pane IDs follow the process (not the position).
+        // agentTmuxId is still the agent — it's now physically in the dashboard
+        // window, so the self-window filter above removed it. Find it in the
+        // unfiltered scan to re-add with its original pane name.
+        const swapped = scanned.find((a) => a.tmuxPaneId === pv.agentTmuxId);
         list = list.filter(
           (a) => a.tmuxPaneId !== pv.agentTmuxId && a.tmuxPaneId !== pv.splitPaneId
         );
@@ -212,8 +255,9 @@ export function Dashboard({ interval }: Props) {
       swapPanes(pv.agentTmuxId, pv.splitPaneId);
     }
     if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
+    syncPaneWidth();
     setPreview(null);
-  }, [setPreview]);
+  }, [setPreview, syncPaneWidth]);
 
   useEffect(() => {
     _hmrDisposing = false;
@@ -268,6 +312,13 @@ export function Dashboard({ interval }: Props) {
     const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
     const splitId = createPreviewSplit(vertical ? dashboardCols : dashboardRows, vertical);
     if (!splitId) return;
+
+    // Sync process.stdout.columns immediately after split so any SIGWINCH-triggered
+    // re-render by Ink already sees the correct width.
+    syncPaneWidth();
+    // Clear screen so Ink's cursor tracking isn't confused by old output
+    // wrapping at the new (narrower) pane width.
+    process.stdout.write("\x1b[2J\x1b[H");
 
     // Set preview ref BEFORE swapping so async scan filter takes effect immediately
     const pv: PreviewState = {
@@ -389,6 +440,7 @@ export function Dashboard({ interval }: Props) {
       setSelectedIndex(next);
       if (previewRef.current && agents[next]) {
         switchPreview(agents[next]);
+        doScan(); // refresh immediately; scanSeq discards any stale in-flight scan
       }
     }
     if (input === "k" || key.upArrow) {
@@ -396,6 +448,7 @@ export function Dashboard({ interval }: Props) {
       setSelectedIndex(next);
       if (previewRef.current && agents[next]) {
         switchPreview(agents[next]);
+        doScan();
       }
     }
     if (key.tab) {
@@ -408,6 +461,8 @@ export function Dashboard({ interval }: Props) {
           process.stdout.write("\x1b[2J\x1b[H");
           savedWidth.current = getPaneWidth(self);
           resizePaneWidth(self, 5);
+          process.stdout.columns = 5;
+          setPaneWidth(5);
           setCompact(true);
           const pv = previewRef.current;
           if (pv?.zones.length && pv.helperLayout) {
@@ -441,12 +496,13 @@ export function Dashboard({ interval }: Props) {
       if (savedWidth.current) {
         resizePaneWidth(self, savedWidth.current);
         savedWidth.current = 0;
-        // Delay state update until after SIGWINCH so Ink re-renders
-        // with the correct terminal width, not the old 5-column width.
+        syncPaneWidth();
         setTimeout(() => setCompact(false), 50);
       } else {
         savedWidth.current = getPaneWidth(self);
         resizePaneWidth(self, 5);
+        process.stdout.columns = 5;
+        setPaneWidth(5);
         setCompact(true);
       }
       // Reapply zone proportions after resize

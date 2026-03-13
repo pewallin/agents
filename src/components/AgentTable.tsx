@@ -35,6 +35,8 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
     );
   }
 
+  // process.stdout.columns is kept in sync with the actual tmux pane width
+  // by Dashboard's resize interceptor (prependListener on 'resize').
   const termCols = process.stdout.columns || 80;
 
   // Measure ideal data widths (capped)
@@ -67,8 +69,8 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
   }
 
   return (
-    <Box flexDirection="column">
-      <Box paddingLeft={2} gap={2}>
+    <Box flexDirection="column" overflowX="hidden">
+      <Box paddingLeft={2} gap={2} overflowX="hidden">
         {showCursor && <Text>  </Text>}
         <Text bold>{pad("PANE", maxPane)}</Text>
         {showTitle && <Text bold>{pad("TITLE", maxTitle)}</Text>}
@@ -78,7 +80,7 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
       {agents.map((agent, i) => {
         const selected = showCursor && i === selectedIndex;
         return (
-          <Box key={agent.tmuxPaneId} paddingLeft={2} gap={2}>
+          <Box key={agent.tmuxPaneId} paddingLeft={2} gap={2} overflowX="hidden">
             {showCursor && (
               <Text color="cyan" bold={selected}>
                 {selected ? "›" : " "}
