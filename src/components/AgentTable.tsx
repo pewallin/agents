@@ -2,6 +2,11 @@ import React from "react";
 import { Text, Box } from "ink";
 import type { AgentPane, AgentStatus } from "../scanner.js";
 
+const AGENT_COLORS: Record<string, string> = {
+  claude: "#d08770", copilot: "#81a1c1", opencode: "#6882a8", pi: "#b48ead",
+};
+function agentColor(name: string): string { return AGENT_COLORS[name] || "#88c0d0"; }
+
 function StatusBadge({ status, detail }: { status: AgentStatus; detail?: string }) {
   const suffix = detail ? ` (${detail})` : "";
   switch (status) {
@@ -70,10 +75,10 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
     <Box flexDirection="column" overflowX="hidden">
       <Box paddingLeft={2} gap={2} overflowX="hidden">
         {showCursor && <Text>  </Text>}
-        <Text bold>{pad("PANE", maxPane)}</Text>
-        {showTitle && <Text bold>{pad("TITLE", maxTitle)}</Text>}
-        <Text bold>{pad("AGENT", agentData)}</Text>
-        <Text bold>STATUS</Text>
+        <Text color="#6b7385">{pad("PANE", maxPane)}</Text>
+        {showTitle && <Text color="#6b7385">{pad("TITLE", maxTitle)}</Text>}
+        <Text color="#6b7385">{pad("AGENT", agentData)}</Text>
+        <Text color="#6b7385">STATUS</Text>
       </Box>
       {agents.map((agent, i) => {
         const selected = showCursor && i === selectedIndex;
@@ -84,15 +89,15 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
                 {selected ? "›" : " "}
               </Text>
             )}
-            <Text color={selected ? "cyan" : undefined} bold={selected}>
+            <Text bold={selected}>
               {pad(agent.pane, maxPane)}
             </Text>
             {showTitle && (
-              <Text color={selected ? "cyan" : undefined} bold={selected}>
+              <Text bold={selected}>
                 {pad(agent.title, maxTitle)}
               </Text>
             )}
-            <Text color="cyan" bold={selected}>
+            <Text color={agentColor(agent.agent)} bold={selected}>
               {pad(agent.agent, agentData)}
             </Text>
             <StatusBadge status={agent.status} detail={agent.detail} />

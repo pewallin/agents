@@ -16,6 +16,11 @@ interface Props {
   interval: number;
 }
 
+const AGENT_COLORS: Record<string, string> = {
+  claude: "#d08770", copilot: "#81a1c1", opencode: "#6882a8", pi: "#b48ead",
+};
+function agentColor(name: string): string { return AGENT_COLORS[name] || "#88c0d0"; }
+
 // ── Persistent helper zones ──────────────────────────────────────────
 // Zones are tmux panes created once in the preview layout. Helpers are
 // swapped in/out of zones on agent switch — zones themselves are never
@@ -188,6 +193,7 @@ export function Dashboard({ interval }: Props) {
     | { step: "session"; profile: string; sessions: string[]; selected: number; inheritedCwd: string }
     | { step: "cwd"; profile: string; session: string; cwdInput: string; cwdValid: boolean };
   const [wizard, setWizard] = useState<WizardState | null>(null);
+  const [showKeys, setShowKeys] = useState(true);
   const { exit } = useApp();
 
   /** Sync pane width from tmux into both React state and process.stdout.columns.
@@ -450,6 +456,20 @@ export function Dashboard({ interval }: Props) {
       const agentRow = event.y - 2;
       if (agentRow < 0 || agentRow >= agents.length) return;
       setSelectedIndex(agentRow);
+      liveIndex.current = agentRow;
+      const agent = agents[agentRow];
+      if (agent) openPreviewAndFocus(agent, true);
+      return;
+    }
+    // Row 1 = "Agent Dashboard" header — click to collapse sidebar
+    if (event.y <= 1 && previewRef.current && !savedWidth.current) {
+      const self = selfPaneId.current;
+      process.stdout.write("\x1b[2J\x1b[H");
+      savedWidth.current = getPaneWidth(self);
+      resizePaneWidth(self, 5);
+      process.stdout.columns = 5;
+      setPaneWidth(5);
+      setCompact(true);
       return;
     }
     const agentRow = event.y - 4;
@@ -694,6 +714,10 @@ export function Dashboard({ interval }: Props) {
       }
       return;
     }
+    if (input === "?") {
+      setShowKeys((v) => !v);
+      return;
+    }
     if (key.return && agents[idx]) {
       restorePreview();
       switchToPane(agents[idx].paneId, agents[idx].tmuxPaneId);
@@ -709,10 +733,10 @@ export function Dashboard({ interval }: Props) {
             const sel = i === idx;
             const icon = agent.status === "attention" ? "⚠" : agent.status === "question" ? "?" : agent.status === "working" ? "●" : agent.status === "stalled" ? "◐" : "○";
             const iconColor = agent.status === "attention" ? "red" : agent.status === "question" ? "yellow" : agent.status === "working" ? "green" : agent.status === "stalled" ? "yellow" : undefined;
-            const agentColor = agent.agent === "claude" ? "#d08770" : agent.agent === "copilot" ? "#81a1c1" : agent.agent === "opencode" ? "#6882a8" : agent.agent === "pi" ? "#b48ead" : "#88c0d0";
+            const ac = agentColor(agent.agent);
             return (
               <Text key={agent.tmuxPaneId}>
-                <Text color={sel ? "cyan" : agentColor} bold={sel}>{sel ? "›" : " "}{i + 1}</Text>
+                <Text color={ac} bold={sel}>{sel ? "›" : " "}{i + 1}</Text>
                 <Text> </Text>
                 <Text color={iconColor} dimColor={!iconColor}>{icon}</Text>
               </Text>
@@ -757,26 +781,40 @@ export function Dashboard({ interval }: Props) {
               </Box>
             ) : (
               <Box flexDirection="column">
-                {agents[idx] ? (
-                  <Box flexDirection="column">
-                    <Text wrap="truncate">
-                      {previewing && previewRef.current ? (previewRef.current.vertical ? "▶ " : "▼ ") : ""}
-                      <Text bold>{agents[idx].agent}</Text>
-                      {previewRef.current?.helperLayout ? <Text color="#6b7385"> [{previewRef.current.helperLayout}]</Text> : null}
-                    </Text>
-                    <Text wrap="truncate" color="#6b7385">{agents[idx].pane}</Text>
-                    {agents[idx].title ? <Text wrap="truncate" color="#6b7385">{agents[idx].title}</Text> : null}
-                    {agents[idx].cwd ? <Text wrap="truncate" color="#6b7385">{agents[idx].cwd}</Text> : null}
-                  </Box>
-                ) : null}
+                {agents[idx] ? (() => {
+                  const a = agents[idx];
+                  const ac = agentColor(a.agent);
+                  const statusIcon = a.status === "attention" ? "⚠" : a.status === "question" ? "❓" : a.status === "working" ? "●" : a.status === "stalled" ? "◐" : "○";
+                  const statusColor = a.status === "attention" ? "red" : a.status === "question" ? "yellow" : a.status === "working" ? "green" : a.status === "stalled" ? "yellow" : undefined;
+                  return (
+                    <Box flexDirection="column">
+                      <Text wrap="truncate">
+                        {previewing && previewRef.current ? (previewRef.current.vertical ? "▶ " : "▼ ") : ""}
+                        <Text bold color={ac}>{a.agent}</Text>
+                        <Text color={statusColor} dimColor={!statusColor}> {statusIcon} {a.status}</Text>
+                        {a.detail ? <Text color="#7b8494"> ({a.detail})</Text> : null}
+                        {previewRef.current?.helperLayout ? <Text color="#7b8494"> [{previewRef.current.helperLayout}]</Text> : null}
+                      </Text>
+                      <Text wrap="truncate" color="#7b8494">⌘ {a.pane}</Text>
+                      {a.title ? <Text wrap="truncate" color="#7b8494">◇ {a.title}</Text> : null}
+                      {a.cwd ? <Text wrap="truncate" color="#7b8494">⌂ {a.cwd}</Text> : null}
+                    </Box>
+                  );
+                })() : null}
                 <Text> </Text>
-                <Text wrap="truncate"><Text color="#6b7385">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
-                <Text wrap="truncate"><Text color="#6b7385">tab</Text>   <Text color="#565e6e">preview</Text></Text>
-                <Text wrap="truncate"><Text color="#6b7385">p/P</Text>   <Text color="#565e6e">toggle preview</Text></Text>
-                <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>
-                <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>
-                <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
-                <Text wrap="truncate"><Text color="#6b7385">q</Text>     <Text color="#565e6e">quit</Text></Text>
+                {showKeys ? (
+                  <Box flexDirection="column" borderStyle="round" borderColor="#3b4252" paddingLeft={1} paddingRight={1}>
+                    <Text wrap="truncate"><Text color="#6b7385">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
+                    <Text wrap="truncate"><Text color="#6b7385">tab</Text>   <Text color="#565e6e">preview</Text></Text>
+                    <Text wrap="truncate"><Text color="#6b7385">p/P</Text>   <Text color="#565e6e">toggle preview</Text></Text>
+                    <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>
+                    <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>
+                    <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
+                    <Text wrap="truncate"><Text color="#6b7385">q</Text>     <Text color="#565e6e">quit</Text>  <Text color="#565e6e">· ? hide</Text></Text>
+                  </Box>
+                ) : (
+                  <Text wrap="truncate" color="#565e6e">? keys</Text>
+                )}
               </Box>
             )}
           </Box>
