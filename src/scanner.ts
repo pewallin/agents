@@ -18,6 +18,7 @@ export interface AgentPane {
   status: AgentStatus;
   detail?: string;
   windowId?: string;   // session:window_index for sibling lookup
+  cwd?: string;
 }
 
 export interface SiblingPane {
@@ -205,14 +206,14 @@ export function scan(): AgentPane[] {
 
 function scanSync(): AgentPane[] {
   const raw = execSync_(
-    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}' 2>/dev/null`
+    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
   );
   if (!raw) return [];
 
   const results: AgentPane[] = [];
   for (const line of raw.split("\n")) {
     if (!line) continue;
-    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId] = line.split("§");
+    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
 
     const leafCmd = findLeafProcessSync(pid);
     let agentName: string | null = null;
@@ -227,8 +228,9 @@ function scanSync(): AgentPane[] {
     const { status, detail } = detectStatusSync(pane, title, wact, agentName, tmuxPaneId);
     const paneShort = pane.replace(/\.0$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
+    const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
 
-    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId });
+    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd });
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane));
@@ -296,7 +298,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
 // Async version for watch mode — doesn't block the Ink render loop
 export async function scanAsync(): Promise<AgentPane[]> {
   const raw = await run(
-    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}' 2>/dev/null`
+    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
   );
   if (!raw) return [];
 
@@ -304,7 +306,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
 
   // Process all panes concurrently
   const promises = lines.map(async (line) => {
-    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId] = line.split("§");
+    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
 
     const leafCmd = await findLeafProcess(pid);
     let agentName: string | null = null;
@@ -319,8 +321,9 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const { status, detail } = await detectStatus(pane, title, wact, agentName, tmuxPaneId);
     const paneShort = pane.replace(/\.0$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
+    const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
 
-    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId } as AgentPane;
+    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);

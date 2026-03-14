@@ -435,7 +435,24 @@ export function Dashboard({ interval }: Props) {
 
   useMouse(useCallback((event) => {
     if (event.button !== 0) return;
-    const agentRow = compact ? event.y - 1 : event.y - 4;
+    if (compact) {
+      // Row 1 = ◀ expand icon (event.y is 1-based)
+      if (event.y <= 1) {
+        const self = selfPaneId.current;
+        if (savedWidth.current) {
+          resizePaneWidth(self, savedWidth.current);
+          savedWidth.current = 0;
+          syncPaneWidth();
+          setTimeout(() => setCompact(false), 50);
+        }
+        return;
+      }
+      const agentRow = event.y - 2;
+      if (agentRow < 0 || agentRow >= agents.length) return;
+      setSelectedIndex(agentRow);
+      return;
+    }
+    const agentRow = event.y - 4;
     if (agentRow < 0 || agentRow >= agents.length) return;
 
     setSelectedIndex(agentRow);
@@ -443,7 +460,7 @@ export function Dashboard({ interval }: Props) {
     if (!agent) return;
 
     openPreviewAndFocus(agent, true);
-  }, [agents, openPreviewAndFocus]));
+  }, [agents, compact, openPreviewAndFocus]));
 
   // Advance wizard from profile step → session or cwd step
   const wizardAfterProfile = useCallback((profile: string, inheritedCwd: string, inheritedSession: string) => {
@@ -597,11 +614,11 @@ export function Dashboard({ interval }: Props) {
       if (previewRef.current) {
         restorePreview();
       } else if (agents[idx]) {
-        openPreview(agents[idx], input === "P");
+        openPreview(agents[idx], input === "p");
       }
       return;
     }
-    if (input === "s") {
+    if (input === "s" || input === "f") {
       const pv = previewRef.current;
       if (!pv) return;
       const self = selfPaneId.current;
@@ -687,13 +704,15 @@ export function Dashboard({ interval }: Props) {
     <Box flexDirection="column">
       {compact ? (
         <>
+          <Text color="#6b7385"> «»</Text>
           {agents.map((agent, i) => {
             const sel = i === idx;
             const icon = agent.status === "attention" ? "⚠" : agent.status === "question" ? "?" : agent.status === "working" ? "●" : agent.status === "stalled" ? "◐" : "○";
             const iconColor = agent.status === "attention" ? "red" : agent.status === "question" ? "yellow" : agent.status === "working" ? "green" : agent.status === "stalled" ? "yellow" : undefined;
+            const agentColor = agent.agent === "claude" ? "#d08770" : agent.agent === "copilot" ? "#81a1c1" : agent.agent === "opencode" ? "#6882a8" : agent.agent === "pi" ? "#b48ead" : "#88c0d0";
             return (
               <Text key={agent.tmuxPaneId}>
-                <Text color={sel ? "cyan" : "gray"} bold={sel}>{sel ? "›" : " "}{i + 1}</Text>
+                <Text color={sel ? "cyan" : agentColor} bold={sel}>{sel ? "›" : " "}{i + 1}</Text>
                 <Text> </Text>
                 <Text color={iconColor} dimColor={!iconColor}>{icon}</Text>
               </Text>
@@ -738,16 +757,26 @@ export function Dashboard({ interval }: Props) {
               </Box>
             ) : (
               <Box flexDirection="column">
-                {previewing && previewRef.current ? (
-                  <Text wrap="truncate">{previewRef.current.vertical ? "▶" : "▼"} <Text bold>{previewRef.current.agentName}</Text>{previewRef.current.helperLayout ? ` [${previewRef.current.helperLayout}]` : ""}</Text>
+                {agents[idx] ? (
+                  <Box flexDirection="column">
+                    <Text wrap="truncate">
+                      {previewing && previewRef.current ? (previewRef.current.vertical ? "▶ " : "▼ ") : ""}
+                      <Text bold>{agents[idx].agent}</Text>
+                      {previewRef.current?.helperLayout ? <Text color="#6b7385"> [{previewRef.current.helperLayout}]</Text> : null}
+                    </Text>
+                    <Text wrap="truncate" color="#6b7385">{agents[idx].pane}</Text>
+                    {agents[idx].title ? <Text wrap="truncate" color="#6b7385">{agents[idx].title}</Text> : null}
+                    {agents[idx].cwd ? <Text wrap="truncate" color="#6b7385">{agents[idx].cwd}</Text> : null}
+                  </Box>
                 ) : null}
-                <Text wrap="truncate"><Text color="#5c6370">enter</Text> <Text color="#444b56">jump to agent</Text></Text>
-                <Text wrap="truncate"><Text color="#5c6370">tab</Text>   <Text color="#444b56">preview</Text></Text>
-                <Text wrap="truncate"><Text color="#5c6370">p/P</Text>   <Text color="#444b56">toggle preview</Text></Text>
-                <Text wrap="truncate"><Text color="#5c6370">s</Text>     <Text color="#444b56">toggle sidebar</Text></Text>
-                <Text wrap="truncate"><Text color="#5c6370">h</Text>     <Text color="#444b56">cycle helper layouts</Text></Text>
-                <Text wrap="truncate"><Text color="#5c6370">n</Text>     <Text color="#444b56">new agent workspace</Text></Text>
-                <Text wrap="truncate"><Text color="#5c6370">q</Text>     <Text color="#444b56">quit</Text></Text>
+                <Text> </Text>
+                <Text wrap="truncate"><Text color="#6b7385">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
+                <Text wrap="truncate"><Text color="#6b7385">tab</Text>   <Text color="#565e6e">preview</Text></Text>
+                <Text wrap="truncate"><Text color="#6b7385">p/P</Text>   <Text color="#565e6e">toggle preview</Text></Text>
+                <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>
+                <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>
+                <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
+                <Text wrap="truncate"><Text color="#6b7385">q</Text>     <Text color="#565e6e">quit</Text></Text>
               </Box>
             )}
           </Box>
