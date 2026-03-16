@@ -131,34 +131,76 @@ function parsePluginPanes(json: string): MuxPaneInfo[] {
 export class ZellijMux implements Multiplexer {
   readonly kind = "zellij" as const;
 
+  private pluginReady = false;
+
+  /** Ensure the bridge plugin is loaded and permissions granted.
+   *  On first call, prints a hint if the plugin needs permission. */
+  private ensurePlugin(): boolean {
+    if (this.pluginReady) return true;
+    // Quick test: ping the plugin
+    const result = pluginCmd("ping");
+    if (result === "pong") {
+      this.pluginReady = true;
+      return true;
+    }
+    // Plugin not responding — likely needs permission grant
+    console.error(
+      "agents-bridge plugin needs permission. In your zellij session:\n" +
+      "  1. Grant the permission prompt (press 'y')\n" +
+      "  2. Close the floating plugin pane\n" +
+      "  3. Re-run agents"
+    );
+    return false;
+  }
+
   listPanes(): MuxPaneInfo[] {
-    // CLI list-panes is faster and has richer data (pane_command, pane_cwd)
+    // Try CLI list-panes first (0.44+ only)
     const cliJson = exec("zellij action list-panes --all --json 2>/dev/null");
-    if (cliJson) {
-      const panes = parseCliPanes(cliJson);
-      // Enrich with PIDs from plugin
+    const panes = cliJson ? parseCliPanes(cliJson) : [];
+
+    // If CLI didn't work, try plugin
+    if (!panes.length && this.ensurePlugin()) {
+      const pluginJson = pluginCmd("list-panes");
+      const pluginPanes = parsePluginPanes(pluginJson);
+      // Enrich with PIDs
+      for (const p of pluginPanes) {
+        const pidJson = pluginCmd("get-pane-pid", p.id);
+        try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
+      }
+      return pluginPanes;
+    }
+
+    // Enrich CLI panes with PIDs from plugin
+    if (panes.length && this.ensurePlugin()) {
       for (const p of panes) {
         const pidJson = pluginCmd("get-pane-pid", p.id);
         try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
       }
-      return panes;
     }
-    // Fallback to plugin
-    return parsePluginPanes(pluginCmd("list-panes"));
+    return panes;
   }
 
   async listPanesAsync(): Promise<MuxPaneInfo[]> {
     const cliJson = await execAsync("zellij action list-panes --all --json 2>/dev/null");
-    if (cliJson) {
-      const panes = parseCliPanes(cliJson);
-      // Enrich with PIDs from plugin (parallelized)
+    const panes = cliJson ? parseCliPanes(cliJson) : [];
+
+    if (!panes.length && this.ensurePlugin()) {
+      const pluginJson = await pluginCmdAsync("list-panes");
+      const pluginPanes = parsePluginPanes(pluginJson);
+      await Promise.all(pluginPanes.map(async (p) => {
+        const pidJson = await pluginCmdAsync("get-pane-pid", p.id);
+        try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
+      }));
+      return pluginPanes;
+    }
+
+    if (panes.length && this.ensurePlugin()) {
       await Promise.all(panes.map(async (p) => {
         const pidJson = await pluginCmdAsync("get-pane-pid", p.id);
         try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
       }));
-      return panes;
     }
-    return parsePluginPanes(await pluginCmdAsync("list-panes"));
+    return panes;
   }
 
   getPaneContent(paneId: string, _lines?: number): string {
