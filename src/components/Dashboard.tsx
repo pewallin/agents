@@ -575,7 +575,10 @@ export function Dashboard({ interval }: Props) {
       setSelectedIndex(agentRow);
       liveIndex.current = agentRow;
       const agent = agents[agentRow];
-      if (agent) openPreviewAndFocus(agent, true);
+      if (agent) {
+        if (gridRef.current) switchGridSession(agent);
+        else openPreviewAndFocus(agent, true);
+      }
       return;
     }
     // Row 1 = "Agent Dashboard" header — click to collapse sidebar
@@ -596,8 +599,9 @@ export function Dashboard({ interval }: Props) {
     const agent = agents[agentRow];
     if (!agent) return;
 
-    openPreviewAndFocus(agent, true);
-  }, [agents, compact, openPreviewAndFocus]));
+    if (gridRef.current) switchGridSession(agent);
+    else openPreviewAndFocus(agent, true);
+  }, [agents, compact, openPreviewAndFocus, switchGridSession]));
 
   // Advance wizard from profile step → session or cwd step
   const wizardAfterProfile = useCallback((profile: string, inheritedCwd: string, inheritedSession: string) => {
@@ -794,7 +798,11 @@ export function Dashboard({ interval }: Props) {
     }
     if (key.tab) {
       if (agents[idx]) {
-        openPreviewAndFocus(agents[idx], true);
+        if (gridRef.current) {
+          switchGridSession(agents[idx]);
+        } else {
+          openPreviewAndFocus(agents[idx], true);
+        }
       }
       return;
     }
@@ -909,11 +917,14 @@ export function Dashboard({ interval }: Props) {
       if (agent) setConfirmKill(agent);
       return;
     }
-    // Space bar: same as tab (preview + focus)
+    // Space bar: same as tab
     if (input === " ") {
       if (agents[idx]) {
-        if (gridRef.current) { closeGrid(); }
-        openPreviewAndFocus(agents[idx], true);
+        if (gridRef.current) {
+          switchGridSession(agents[idx]);
+        } else {
+          openPreviewAndFocus(agents[idx], true);
+        }
       }
       return;
     }
