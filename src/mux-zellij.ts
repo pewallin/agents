@@ -10,10 +10,13 @@ import { exec, execAsync } from "./shell.js";
 import type { Multiplexer, MuxPaneInfo } from "./multiplexer.js";
 import { writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Path to the bridge plugin WASM — shipped alongside the npm package
-const PLUGIN_WASM = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release", "agents_bridge.wasm");
+const PLUGIN_WASM = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release", "agents-bridge.wasm");
 
 /** Send a command to the bridge plugin via pipe and get JSON response. */
 function pluginCmd(name: string, payload: string = "", args?: Record<string, string>): string {

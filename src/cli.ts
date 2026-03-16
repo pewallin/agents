@@ -11,7 +11,7 @@ import { getProfileNames, resolveProfile } from "./config.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
-import { setMultiplexer, detectMultiplexer } from "./multiplexer.js";
+import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
 
 // Handle --tmux flag early (before commander parses, since it's global)
 if (process.argv.includes("--tmux")) {
@@ -86,6 +86,9 @@ if (!insideMux) {
     process.exit(0);
   }
 }
+
+// Initialize multiplexer (async import of the correct backend)
+await initMux();
 
 // Auto-setup in background if hook config changed since last run
 autoSetupIfNeeded();

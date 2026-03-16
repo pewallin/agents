@@ -64,15 +64,25 @@ export function setMultiplexer(kind: "tmux" | "zellij"): void {
 }
 
 /** Get the singleton multiplexer instance, auto-detecting the backend. */
-export function getMux(): Multiplexer {
+export async function initMux(): Promise<Multiplexer> {
   if (_mux) return _mux;
   const kind = _forceKind || detectMultiplexer();
   if (kind === "zellij") {
-    const { ZellijMux } = require("./mux-zellij.js") as typeof import("./mux-zellij.js");
+    const { ZellijMux } = await import("./mux-zellij.js");
     _mux = new ZellijMux();
   } else {
+    const { TmuxMux } = await import("./mux-tmux.js");
+    _mux = new TmuxMux();
+  }
+  return _mux;
+}
+
+/** Get the multiplexer instance (must call initMux() first). */
+export function getMux(): Multiplexer {
+  if (!_mux) {
+    // Sync fallback — import tmux directly (always available)
     const { TmuxMux } = require("./mux-tmux.js") as typeof import("./mux-tmux.js");
     _mux = new TmuxMux();
   }
-  return _mux!;
+  return _mux;
 }
