@@ -26,3 +26,8 @@ export const GRID_MIN_SIZE = 20;
 
 /** State file max age in seconds before cleanup. */
 export const STATE_MAX_AGE = 300;
+
+/** File where the tmux focus hook writes the currently focused pane ID. */
+import { join } from "path";
+import { homedir } from "os";
+export const GRID_FOCUS_FILE = join(homedir(), ".agents", "state", "grid-focus");

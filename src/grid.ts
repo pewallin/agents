@@ -5,7 +5,9 @@ import {
   killPane,
   ownPaneId,
 } from "./scanner.js";
-import { GRID_MAX_AGENTS, GRID_MIN_SIZE } from "./constants.js";
+import { GRID_MAX_AGENTS, GRID_MIN_SIZE, GRID_FOCUS_FILE } from "./constants.js";
+import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from "fs";
+import { dirname } from "path";
 
 /**
  * Grid view layout calculations and pane management.
@@ -184,49 +186,30 @@ export interface GridState {
 }
 
 /**
- * Build the grid in tmux by creating placeholder panes and swapping agents in.
+ * Build the grid in tmux. The dashboard pane is embedded as cell[0] (top-left)
+ * and agent panes are swapped into the remaining cells.
  *
- * Strategy: create a single placeholder via split, then subdivide it into
- * the grid layout using tmux splits. Finally swap each agent pane into
- * a grid cell.
+ * Strategy: treat the dashboard pane as the first cell, split it to create
+ * the rest of the grid, then swap agents into those placeholder cells.
  *
- * @param agents - Agents to show in the grid (2–12)
- * @param dashboardPaneId - The dashboard's own pane ID (used as split target)
- * @param vertical - If true, grid goes to the right of dashboard; otherwise below
- * @param dashboardSize - Cols (vertical) or rows (horizontal) reserved for dashboard
- * @returns GridState for tracking, or null if < 2 agents
+ * @param agents - Agents to show in the grid (1–11, capped by GRID_MAX_AGENTS-1)
+ * @param dashboardPaneId - The dashboard's own pane ID (becomes cell[0])
+ * @returns GridState for tracking, or null if no agents
  */
 export function createGrid(
   agents: GridAgent[],
   dashboardPaneId: string,
-  vertical: boolean,
-  dashboardSize: number
 ): GridState | null {
-  const count = Math.min(agents.length, 12);
-  if (count < 1) return null;
+  if (agents.length < 1) return null;
 
-  const layout = computeLayout(count)!;
+  // Layout includes the dashboard as cell 0
+  const totalCells = Math.min(agents.length + 1, GRID_MAX_AGENTS);
+  const layout = computeLayout(totalCells)!;
   const self = dashboardPaneId || ownPaneId();
 
-  // Create the first grid pane as a split of the dashboard
-  const splitDir = vertical ? "-h" : "-v";
-  const curSize = parseInt(
-    exec(`tmux display-message -t ${self} -p '${vertical ? "#{pane_width}" : "#{pane_height}"}'`) || "80",
-    10
-  );
-  const gridSize = Math.max(GRID_MIN_SIZE, curSize - dashboardSize - 1);
-  const sizeFlag = `-l ${gridSize}`;
-
-  const firstPane = exec(
-    `tmux split-window ${splitDir} -d ${sizeFlag} -t ${self} -P -F '#{pane_id}' 'tail -f /dev/null'`
-  );
-  if (!firstPane) return null;
-
-  const placeholderIds: string[] = [firstPane];
-
-  // Now subdivide the first pane into the grid.
-  // Strategy: split into rows first, then split each row into columns.
-  const rowPanes: string[] = [firstPane];
+  // Dashboard pane IS row 0's first cell. Split from it to build the grid.
+  const rowPanes: string[] = [self];
+  const placeholderIds: string[] = [];
 
   // Create additional rows by splitting the LAST row pane vertically.
   // Each split takes a fraction of the remaining space so all rows end up even.
@@ -265,18 +248,22 @@ export function createGrid(
     }
   }
 
-  // Swap agent panes into grid cells
+  // Cell 0 = dashboard (self); swap agents into cells 1..N
   const swappedAgents = new Map<string, string>();
-  const usedAgents = agents.slice(0, cellPanes.length);
+  const agentSlots = cellPanes.length - 1; // available cells for agents
+  const usedAgents = agents.slice(0, agentSlots);
 
-  for (let i = 0; i < usedAgents.length && i < cellPanes.length; i++) {
+  for (let i = 0; i < usedAgents.length; i++) {
     const agent = usedAgents[i];
-    const placeholder = cellPanes[i];
+    const placeholder = cellPanes[i + 1]; // +1 to skip dashboard cell
+    if (!placeholder) break;
     swapPanes(agent.tmuxPaneId, placeholder);
     swappedAgents.set(agent.tmuxPaneId, placeholder);
     // Show placeholder message in the agent's original location
     showPlaceholder(placeholder, agent.agent, agent.pane);
   }
+
+  installFocusHook();
 
   return {
     placeholderIds,
@@ -291,6 +278,8 @@ export function createGrid(
  * then kill all placeholder panes.
  */
 export function destroyGrid(state: GridState): void {
+  removeFocusHook();
+
   // Swap agents back — each agent is currently in a grid cell,
   // and its placeholder is sitting in the agent's original window.
   for (const [agentPaneId, placeholderId] of state.swappedAgents) {
@@ -311,28 +300,58 @@ export function addToGrid(
   state: GridState,
   agent: GridAgent,
   dashboardPaneId: string,
-  vertical: boolean,
-  dashboardSize: number
 ): GridState | null {
   // Easiest approach: destroy and recreate with the new agent included
   const newAgents = [...state.agents, agent];
   destroyGrid(state);
-  return createGrid(newAgents, dashboardPaneId, vertical, dashboardSize);
+  return createGrid(newAgents, dashboardPaneId);
 }
 
 /**
  * Remove an agent from the grid. Re-layouts remaining agents.
- * Returns updated GridState, or null if < 2 agents remain (grid should close).
+ * Returns updated GridState, or null if no agents remain (grid should close).
  */
 export function removeFromGrid(
   state: GridState,
   agentPaneId: string,
   dashboardPaneId: string,
-  vertical: boolean,
-  dashboardSize: number
 ): GridState | null {
   const remaining = state.agents.filter((a) => a.tmuxPaneId !== agentPaneId);
   destroyGrid(state);
   if (remaining.length < 1) return null;
-  return createGrid(remaining, dashboardPaneId, vertical, dashboardSize);
+  return createGrid(remaining, dashboardPaneId);
+}
+
+// ── Grid focus tracking ─────────────────────────────────────────────
+// A tmux pane-focus-in hook writes the focused pane ID to a state file.
+// The dashboard watches this file and syncs its selected agent index.
+
+const HOOK_INDEX = 99;
+
+/** Install a tmux hook that writes the focused pane ID to the grid-focus file. */
+export function installFocusHook(): void {
+  mkdirSync(dirname(GRID_FOCUS_FILE), { recursive: true });
+  // Create the file so fs.watch can attach immediately
+  writeFileSync(GRID_FOCUS_FILE, "");
+  // after-select-pane fires when any pane gets focus (click or keyboard).
+  // tmux expands #{pane_id} when the hook fires, giving us the pane ID (e.g. %42).
+  exec(
+    `tmux set-hook -g "after-select-pane[${HOOK_INDEX}]" "run-shell 'printf %s #{pane_id} > ${GRID_FOCUS_FILE}'"`,
+  );
+}
+
+/** Remove the focus tracking hook and clean up the state file. */
+export function removeFocusHook(): void {
+  exec(`tmux set-hook -gu "after-select-pane[${HOOK_INDEX}]"`);
+  try { unlinkSync(GRID_FOCUS_FILE); } catch {}
+}
+
+/** Read the currently focused pane ID from the state file. */
+export function readGridFocus(): string | null {
+  try {
+    const content = readFileSync(GRID_FOCUS_FILE, "utf-8").trim();
+    return content || null;
+  } catch {
+    return null;
+  }
 }

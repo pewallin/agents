@@ -380,6 +380,11 @@ export function getPaneWidth(paneId: string): number {
   return parseInt(exec(`tmux display-message -t ${paneId} -p '#{pane_width}' 2>/dev/null`) || "0", 10);
 }
 
+/** Get the current height (rows) of a tmux pane. */
+export function getPaneHeight(paneId: string): number {
+  return parseInt(exec(`tmux display-message -t ${paneId} -p '#{pane_height}' 2>/dev/null`) || "0", 10);
+}
+
 /** Resize a pane to a specific width. */
 export function resizePaneWidth(paneId: string, width: number): void {
   exec(`tmux resize-pane -t ${paneId} -x ${width} 2>/dev/null`);

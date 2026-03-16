@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Text, Box, useApp, useInput } from "ink";
-import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, killWindow, showPlaceholder, focusPane, ownPaneId, paneExists, getPaneWidth, resizePaneWidth, filterAgents } from "../scanner.js";
+import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, killWindow, showPlaceholder, focusPane, ownPaneId, paneExists, getPaneWidth, getPaneHeight, resizePaneWidth, filterAgents } from "../scanner.js";
 import type { AgentPane } from "../scanner.js";
 import { createZones, populateZones, depopulateZones, labelZones, destroyZones } from "../zones.js";
 import { savePreviewState, loadPreviewState } from "../persistence.js";
@@ -11,8 +11,9 @@ import { useMouse } from "../mouse.js";
 import { loadConfig, getProfileNames, resolveProfile } from "../config.js";
 import type { HelperDef } from "../config.js";
 import { createWorkspace } from "../workspace.js";
-import { createGrid, destroyGrid, type GridState, type GridAgent } from "../grid.js";
-import { existsSync, statSync, readdirSync } from "fs";
+import { createGrid, destroyGrid, readGridFocus, type GridState, type GridAgent } from "../grid.js";
+import { GRID_FOCUS_FILE } from "../constants.js";
+import { existsSync, statSync, readdirSync, watch as fsWatch } from "fs";
 import { execSync } from "child_process";
 import { join, dirname, basename } from "path";
 
@@ -61,6 +62,9 @@ export function Dashboard({ interval }: Props) {
     if (w > 0) process.stdout.columns = w;
     return w || process.stdout.columns || 80;
   });
+  const [paneHeight, setPaneHeight] = useState(() => {
+    return getPaneHeight(ownPaneId()) || process.stdout.rows || 24;
+  });
   const previewRef = useRef<PreviewState | null>(_previewStore);
   const gridRef = useRef<GridState | null>(_gridStore);
   const [gridActive, setGridActive] = useState(!!_gridStore);
@@ -84,14 +88,16 @@ export function Dashboard({ interval }: Props) {
   const [confirmKill, setConfirmKill] = useState<AgentPane | null>(null);
   const { exit } = useApp();
 
-  /** Sync pane width from tmux into both React state and process.stdout.columns.
+  /** Sync pane width and height from tmux into React state.
    *  process.stdout.columns must be correct so Ink's layout engine clips properly. */
-  const syncPaneWidth = useCallback(() => {
+  const syncPaneSize = useCallback(() => {
     const w = getPaneWidth(selfPaneId.current);
     if (w > 0) {
       process.stdout.columns = w;
       setPaneWidth(w);
     }
+    const h = getPaneHeight(selfPaneId.current);
+    if (h > 0) setPaneHeight(h);
   }, []);
 
   // Intercept resize events: SIGWINCH updates process.stdout.columns from the PTY,
@@ -104,13 +110,15 @@ export function Dashboard({ interval }: Props) {
         process.stdout.columns = w;
         setPaneWidth(w);
       }
+      const h = getPaneHeight(selfPaneId.current);
+      if (h > 0) setPaneHeight(h);
     };
     process.stdout.prependListener("resize", onResize);
     return () => { process.stdout.off("resize", onResize); };
   }, []);
 
   const doScan = useCallback(() => {
-    syncPaneWidth();
+    syncPaneSize();
 
     const seq = ++scanSeq.current;
     scanAsync().then((scanned) => {
@@ -142,15 +150,13 @@ export function Dashboard({ interval }: Props) {
           const hasGone = curGrid.agents.some((a) => !currentSet.has(a.tmuxPaneId));
           if (hasNew || hasGone) {
             const self = selfPaneId.current;
-            const termCols = paneWidth || 120;
-            const dashboardCols = calcDashboardCols(termCols);
             const newGridAgents = list
               .filter((a) => !scope || a.pane.startsWith(scope + ":"))
               .slice(0, 12)
               .map((a) => ({ tmuxPaneId: a.tmuxPaneId, agent: a.agent, pane: a.pane }));
             destroyGrid(curGrid);
             if (newGridAgents.length >= 1) {
-              const newGs = createGrid(newGridAgents, self, true, dashboardCols);
+              const newGs = createGrid(newGridAgents, self);
               if (newGs) (newGs as any)._scope = scope;
               gridRef.current = newGs;
               _gridStore = newGs;
@@ -187,9 +193,9 @@ export function Dashboard({ interval }: Props) {
       swapPanes(pv.agentTmuxId, pv.splitPaneId);
     }
     if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
-    syncPaneWidth();
+    syncPaneSize();
     setPreview(null);
-  }, [setPreview, syncPaneWidth]);
+  }, [setPreview, syncPaneSize]);
 
   useEffect(() => {
     _hmrDisposing = false;
@@ -240,6 +246,35 @@ export function Dashboard({ interval }: Props) {
     return () => clearInterval(timer);
   }, [interval, doScan]);
 
+  // ── Grid focus tracking ──────────────────────────────────────────
+  // When grid is active, a tmux pane-focus-in hook writes the focused
+  // pane ID to a state file. Watch that file and sync selectedIndex so
+  // clicking a grid pane selects the corresponding agent in the sidebar.
+  useEffect(() => {
+    if (!gridActive) return;
+
+    let watcher: ReturnType<typeof fsWatch> | null = null;
+    try {
+      watcher = fsWatch(GRID_FOCUS_FILE, { persistent: false }, () => {
+        const focusedPane = readGridFocus();
+        if (!focusedPane) return;
+        const gs = gridRef.current;
+        if (!gs) return;
+        // Only react if the focused pane belongs to a grid agent
+        const agentIdx = agents.findIndex((a) => a.tmuxPaneId === focusedPane);
+        if (agentIdx >= 0 && agentIdx !== liveIndex.current) {
+          liveIndex.current = agentIdx;
+          setSelectedIndex(agentIdx);
+        }
+      });
+      watcher.on("error", () => { watcher?.close(); });
+    } catch {
+      // File may not exist yet — hook will create it on first focus event
+    }
+
+    return () => { watcher?.close(); };
+  }, [gridActive, agents]);
+
   const idx = Math.min(selectedIndex, Math.max(0, agents.length - 1));
   liveIndex.current = idx; // keep in sync after React state settles / list resizes
 
@@ -259,7 +294,7 @@ export function Dashboard({ interval }: Props) {
 
     // Sync process.stdout.columns immediately after split so any SIGWINCH-triggered
     // re-render by Ink already sees the correct width.
-    syncPaneWidth();
+    syncPaneSize();
     // Clear screen so Ink's cursor tracking isn't confused by old output
     // wrapping at the new (narrower) pane width.
     process.stdout.write("\x1b[2J\x1b[H");
@@ -355,9 +390,9 @@ export function Dashboard({ interval }: Props) {
     gridRef.current = null;
     _gridStore = null;
     setGridActive(false);
-    syncPaneWidth();
+    syncPaneSize();
     doScan();
-  }, [syncPaneWidth, doScan]);
+  }, [syncPaneSize, doScan]);
 
   const openGrid = useCallback((scope?: string) => {
     // Close existing preview/helpers first
@@ -372,10 +407,7 @@ export function Dashboard({ interval }: Props) {
     if (gridAgents.length > 12) gridAgents = gridAgents.slice(0, 12);
 
     const self = selfPaneId.current;
-    const termCols = process.stdout.columns || 120;
-    const dashboardCols = calcDashboardCols(termCols);
-
-    const gs = createGrid(gridAgents, self, true, dashboardCols);
+    const gs = createGrid(gridAgents, self);
     if (!gs) return;
 
     // Stash scope for g↔G toggle detection
@@ -383,9 +415,9 @@ export function Dashboard({ interval }: Props) {
     gridRef.current = gs;
     _gridStore = gs;
     setGridActive(true);
-    syncPaneWidth();
+    syncPaneSize();
     doScan();
-  }, [agents, restorePreview, syncPaneWidth, doScan]);
+  }, [agents, restorePreview, syncPaneSize, doScan]);
 
   /** Focus an agent in grid mode. If scoped and agent is in a different session, rebuild grid. */
   const gridSelectAgent = useCallback((agent: AgentPane) => {
@@ -428,7 +460,7 @@ export function Dashboard({ interval }: Props) {
         if (savedWidth.current) {
           resizePaneWidth(self, savedWidth.current);
           savedWidth.current = 0;
-          syncPaneWidth();
+          syncPaneSize();
           setTimeout(() => setCompact(false), 50);
         }
         return;
@@ -500,14 +532,12 @@ export function Dashboard({ interval }: Props) {
         const gs = gridRef.current;
         if (gs && gs.agents.some((a) => a.tmuxPaneId === agent.tmuxPaneId)) {
           const self = selfPaneId.current;
-          const termCols = process.stdout.columns || 120;
-          const dashboardCols = calcDashboardCols(termCols);
           const remaining = gs.agents.filter((a) => a.tmuxPaneId !== agent.tmuxPaneId);
           const scope = (gs as any)._scope;
           destroyGrid(gs);
           killWindow(agent.windowId || agent.paneId);
           if (remaining.length >= 1) {
-            const newGs = createGrid(remaining, self, true, dashboardCols);
+            const newGs = createGrid(remaining, self);
             if (newGs) (newGs as any)._scope = scope;
             gridRef.current = newGs;
             _gridStore = newGs;
@@ -517,7 +547,7 @@ export function Dashboard({ interval }: Props) {
             _gridStore = null;
             setGridActive(false);
           }
-          syncPaneWidth();
+          syncPaneSize();
           doScan();
           return;
         }
@@ -637,8 +667,9 @@ export function Dashboard({ interval }: Props) {
         const agent = agents[next];
         debounceRef.current = setTimeout(() => {
           debounceRef.current = null;
-          if (gridRef.current) gridSelectAgent(agent);
-          else if (previewRef.current) switchPreview(agent);
+          // In grid mode, j/k only updates sidebar selection — don't focus the pane.
+          // Tab/space/click handle actual pane focus.
+          if (!gridRef.current && previewRef.current) switchPreview(agent);
           doScan();
         }, NAV_DEBOUNCE_MS);
       }
@@ -653,8 +684,7 @@ export function Dashboard({ interval }: Props) {
         const agent = agents[next];
         debounceRef.current = setTimeout(() => {
           debounceRef.current = null;
-          if (gridRef.current) gridSelectAgent(agent);
-          else if (previewRef.current) switchPreview(agent);
+          if (!gridRef.current && previewRef.current) switchPreview(agent);
           doScan();
         }, NAV_DEBOUNCE_MS);
       }
@@ -687,7 +717,7 @@ export function Dashboard({ interval }: Props) {
       if (savedWidth.current) {
         resizePaneWidth(self, savedWidth.current);
         savedWidth.current = 0;
-        syncPaneWidth();
+        syncPaneSize();
         setTimeout(() => setCompact(false), 50);
       } else {
         savedWidth.current = getPaneWidth(self);
@@ -885,7 +915,8 @@ export function Dashboard({ interval }: Props) {
                   );
                 })() : null}
                 <Text> </Text>
-                {showKeys ? (
+                {/* Auto-hide cheatsheet when pane height is tight (e.g. grid cell) */}
+                {showKeys && paneHeight >= agents.length + 20 ? (
                   <Box flexDirection="column" borderStyle="round" borderColor="#3b4252" paddingLeft={1} paddingRight={1}>
                     <Text wrap="truncate"><Text color="#6b7385">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">tab</Text>   <Text color="#565e6e">preview</Text></Text>
