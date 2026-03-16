@@ -7,6 +7,7 @@ import { useMouse } from "../mouse.js";
 import { loadConfig, getProfileNames, resolveProfile } from "../config.js";
 import type { HelperDef } from "../config.js";
 import { createWorkspace } from "../workspace.js";
+import { createGrid, destroyGrid, type GridState, type GridAgent } from "../grid.js";
 import { writeFileSync, readFileSync, unlinkSync, existsSync, statSync, readdirSync } from "fs";
 import { execSync } from "child_process";
 import { tmpdir } from "os";
@@ -164,6 +165,9 @@ if (_hot) {
   });
 }
 
+// ── Grid state (not persisted across HMR — too complex) ─────────────
+let _gridStore: GridState | null = null;
+
 export function Dashboard({ interval }: Props) {
   const [agents, setAgents] = useState<AgentPane[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -177,6 +181,8 @@ export function Dashboard({ interval }: Props) {
     return w || process.stdout.columns || 80;
   });
   const previewRef = useRef<PreviewState | null>(_previewStore);
+  const gridRef = useRef<GridState | null>(_gridStore);
+  const [gridActive, setGridActive] = useState(!!_gridStore);
   const selfPaneId = useRef<string>(null!);
   if (!selfPaneId.current) selfPaneId.current = ownPaneId();
   const selfWindowId = useRef<string>(null!);
@@ -248,6 +254,21 @@ export function Dashboard({ interval }: Props) {
           list.push({ ...swapped, pane: pv.agentPane, paneId: pv.agentPaneId });
         }
       }
+      // Grid: re-add swapped agents with their original pane names
+      const gs = gridRef.current;
+      if (gs) {
+        const gridPaneIds = new Set(gs.agents.map((a) => a.tmuxPaneId));
+        const placeholderIds = new Set(gs.placeholderIds);
+        // Remove grid agents (now in dashboard window) and placeholders
+        list = list.filter((a) => !gridPaneIds.has(a.tmuxPaneId) && !placeholderIds.has(a.tmuxPaneId));
+        // Re-add from unfiltered scan with original names
+        for (const ga of gs.agents) {
+          const found = scanned.find((a) => a.tmuxPaneId === ga.tmuxPaneId);
+          if (found) {
+            list.push({ ...found, pane: ga.pane });
+          }
+        }
+      }
       list.sort((a, b) => a.pane.localeCompare(b.pane));
       setAgents(list);
     });
@@ -282,6 +303,14 @@ export function Dashboard({ interval }: Props) {
     _hmrDisposing = false;
     const teardown = () => {
       if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
+      // Grid teardown
+      const gs = gridRef.current;
+      if (gs) {
+        destroyGrid(gs);
+        gridRef.current = null;
+        _gridStore = null;
+      }
+      // Preview teardown
       const pv = previewRef.current;
       if (!pv) return;
       if (pv.zones.length) destroyZones(pv.zones);
@@ -427,6 +456,46 @@ export function Dashboard({ interval }: Props) {
     }
   }, []);
 
+  const closeGrid = useCallback(() => {
+    const gs = gridRef.current;
+    if (!gs) return;
+    destroyGrid(gs);
+    gridRef.current = null;
+    _gridStore = null;
+    setGridActive(false);
+    syncPaneWidth();
+    doScan();
+  }, [syncPaneWidth, doScan]);
+
+  const openGrid = useCallback((scope?: string) => {
+    // Close existing preview/helpers first
+    restorePreview();
+
+    // Filter agents by tmux session scope (if provided)
+    let gridAgents: GridAgent[] = agents
+      .filter((a) => !scope || a.pane.startsWith(scope + ":"))
+      .map((a) => ({ tmuxPaneId: a.tmuxPaneId, agent: a.agent, pane: a.pane }));
+
+    if (gridAgents.length < 2) {
+      // Not enough agents for a grid
+      return;
+    }
+    if (gridAgents.length > 12) gridAgents = gridAgents.slice(0, 12);
+
+    const self = selfPaneId.current;
+    const termCols = process.stdout.columns || 120;
+    const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
+
+    const gs = createGrid(gridAgents, self, true, dashboardCols);
+    if (!gs) return;
+
+    gridRef.current = gs;
+    _gridStore = gs;
+    setGridActive(true);
+    syncPaneWidth();
+    doScan();
+  }, [agents, restorePreview, syncPaneWidth, doScan]);
+
   const openPreviewAndFocus = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
     if (previewRef.current) {
       switchPreview(agent);
@@ -513,6 +582,30 @@ export function Dashboard({ interval }: Props) {
       if (input === "y" || input === "Y") {
         const agent = confirmKill;
         setConfirmKill(null);
+        // If in grid view, remove from grid
+        const gs = gridRef.current;
+        if (gs && gs.agents.some((a) => a.tmuxPaneId === agent.tmuxPaneId)) {
+          const self = selfPaneId.current;
+          const termCols = process.stdout.columns || 120;
+          const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
+          const remaining = gs.agents.filter((a) => a.tmuxPaneId !== agent.tmuxPaneId);
+          destroyGrid(gs);
+          killWindow(agent.windowId || agent.paneId);
+          if (remaining.length >= 2) {
+            const newGs = createGrid(remaining, self, true, dashboardCols);
+            gridRef.current = newGs;
+            _gridStore = newGs;
+            setGridActive(!!newGs);
+          } else {
+            gridRef.current = null;
+            _gridStore = null;
+            setGridActive(false);
+          }
+          syncPaneWidth();
+          doScan();
+          return;
+        }
+        // If in preview
         const pv = previewRef.current;
         if (pv && pv.agentTmuxId === agent.tmuxPaneId) {
           if (pv.zones.length) destroyZones(pv.zones);
@@ -608,7 +701,12 @@ export function Dashboard({ interval }: Props) {
       return;
     }
 
+    if (key.escape) {
+      if (gridRef.current) { closeGrid(); return; }
+      return;
+    }
     if (input === "q" || (key.ctrl && input === "c")) {
+      if (gridRef.current) closeGrid();
       restorePreview();
       exit();
       return;
@@ -651,6 +749,7 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (input === "p" || input === "P") {
+      if (gridRef.current) { closeGrid(); return; }
       if (previewRef.current) {
         restorePreview();
       } else if (agents[idx]) {
@@ -717,6 +816,19 @@ export function Dashboard({ interval }: Props) {
       }
       return;
     }
+    if (input === "g" || input === "G") {
+      if (gridRef.current) {
+        closeGrid();
+      } else {
+        // g = scoped to selected agent's tmux session, G = all agents
+        let scope: string | undefined;
+        if (input === "g" && agents[idx]) {
+          scope = agents[idx].pane.split(":")[0]; // tmux session name
+        }
+        openGrid(scope);
+      }
+      return;
+    }
     if (input === "n") {
       const profiles = getProfileNames();
       if (!profiles.length) return;
@@ -737,6 +849,14 @@ export function Dashboard({ interval }: Props) {
     if (input === "x") {
       const agent = agents[idx];
       if (agent) setConfirmKill(agent);
+      return;
+    }
+    // Space bar: same as tab (preview + focus)
+    if (input === " ") {
+      if (agents[idx]) {
+        if (gridRef.current) { closeGrid(); }
+        openPreviewAndFocus(agents[idx], true);
+      }
       return;
     }
     if (input === "?") {
@@ -823,6 +943,7 @@ export function Dashboard({ interval }: Props) {
                         <Text bold color={ac}>{a.agent}</Text>
                         <Text color={statusColor} dimColor={!statusColor}> {statusIcon} {a.status}</Text>
                         {a.detail ? <Text color="#7b8494"> ({a.detail})</Text> : null}
+                        {gridActive ? <Text color="#7b8494"> [grid]</Text> : null}
                         {previewRef.current?.helperLayout ? <Text color="#7b8494"> [{previewRef.current.helperLayout}]</Text> : null}
                       </Text>
                       <Text wrap="truncate" color="#7b8494">⌘ {a.pane}</Text>
@@ -837,6 +958,7 @@ export function Dashboard({ interval }: Props) {
                     <Text wrap="truncate"><Text color="#6b7385">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">tab</Text>   <Text color="#565e6e">preview</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">p/P</Text>   <Text color="#565e6e">toggle preview</Text></Text>
+                    <Text wrap="truncate"><Text color="#6b7385">g/G</Text>   <Text color="#565e6e">grid view</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
