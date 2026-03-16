@@ -31,7 +31,7 @@ const AGENT_PROCS = /^(claude|copilot|opencode|codex|cursor|pi)$/i;
 
 // ── Per-agent detection ──────────────────────────────────────────────
 
-interface AgentDetector {
+export interface AgentDetector {
   isWorking(content: string, title: string, tmuxPaneId?: string): boolean;
   isIdle(content: string, title: string, tmuxPaneId?: string): boolean;
   isApproval(content: string, tmuxPaneId?: string): boolean;
@@ -95,7 +95,7 @@ const genericDetector: AgentDetector = {
   },
 };
 
-function getDetector(agent: string): AgentDetector {
+export function getDetector(agent: string): AgentDetector {
   switch (agent.toLowerCase()) {
     case "claude":   return claudeDetector;
     case "copilot":  return copilotDetector;
