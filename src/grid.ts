@@ -81,9 +81,9 @@ function layoutRows(n: number): number[] {
     case 2: return [2];             // side by side
     case 3: return [1, 2];          // 1 top + 2 bottom
     case 4: return [2, 2];          // 2×2
-    case 5: return [3, 2];          // 3 top + 2 bottom
+    case 5: return [2, 3];          // 2 top + 3 bottom
     case 6: return [3, 3];          // 3×2
-    case 7: return [4, 3];          // 4 top + 3 bottom
+    case 7: return [3, 4];          // 3 top + 4 bottom
     case 8: return [4, 4];          // 4×2
     case 9: return [3, 3, 3];       // 3×3
     case 10: return [4, 3, 3];      // 4+3+3

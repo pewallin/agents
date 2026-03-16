@@ -58,10 +58,10 @@ describe("computeLayout", () => {
     expect(layout.cells).toHaveLength(4);
   });
 
-  it("5 agents: 3 top + 2 bottom", () => {
+  it("5 agents: 2 top + 3 bottom", () => {
     const layout = computeLayout(5)!;
     expect(layout.rows).toBe(2);
-    expect(layout.colsPerRow).toEqual([3, 2]);
+    expect(layout.colsPerRow).toEqual([2, 3]);
     expect(layout.cells).toHaveLength(5);
   });
 
@@ -138,19 +138,19 @@ describe("computeGeometry", () => {
     expect(geo[2]).toEqual({ x: 101, y: 26, width: 99, height: 24 });
   });
 
-  it("5 agents (3+2) in 210×40", () => {
+  it("5 agents (2+3) in 210×40", () => {
     const layout = computeLayout(5)!;
     const geo = computeGeometry(layout, 210, 40);
 
     expect(geo).toHaveLength(5);
     // Heights: 40 - 1 = 39, 39/2 = 20+19
-    // Row 0: 3 cols, 210 - 2 borders = 208, 208/3 = 70+69+69
-    // Row 1: 2 cols, 210 - 1 border = 209, 209/2 = 105+104
-    expect(geo[0]).toEqual({ x: 0, y: 0, width: 70, height: 20 });
-    expect(geo[1]).toEqual({ x: 71, y: 0, width: 69, height: 20 });
-    expect(geo[2]).toEqual({ x: 141, y: 0, width: 69, height: 20 });
-    expect(geo[3]).toEqual({ x: 0, y: 21, width: 105, height: 19 });
-    expect(geo[4]).toEqual({ x: 106, y: 21, width: 104, height: 19 });
+    // Row 0: 2 cols, 210 - 1 border = 209, 209/2 = 105+104
+    // Row 1: 3 cols, 210 - 2 borders = 208, 208/3 = 70+69+69
+    expect(geo[0]).toEqual({ x: 0, y: 0, width: 105, height: 20 });
+    expect(geo[1]).toEqual({ x: 106, y: 0, width: 104, height: 20 });
+    expect(geo[2]).toEqual({ x: 0, y: 21, width: 70, height: 19 });
+    expect(geo[3]).toEqual({ x: 71, y: 21, width: 69, height: 19 });
+    expect(geo[4]).toEqual({ x: 141, y: 21, width: 69, height: 19 });
   });
 
   it("all cells tile without overlap or gaps", () => {
