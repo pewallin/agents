@@ -531,16 +531,23 @@ export function Dashboard({ interval }: Props) {
     doScan();
   }, [agents, restorePreview, syncPaneWidth, doScan]);
 
-  /** If grid is scoped and the agent is in a different session, rebuild for that session. */
-  const switchGridSession = useCallback((agent: AgentPane) => {
+  /** Focus an agent in grid mode. If scoped and agent is in a different session, rebuild grid. */
+  const gridSelectAgent = useCallback((agent: AgentPane) => {
     const gs = gridRef.current;
     if (!gs) return;
     const scope = (gs as any)._scope as string | undefined;
-    if (!scope) return; // G mode — don't switch
-    const agentSession = agent.pane.split(":")[0];
-    if (agentSession === scope) return; // same session
-    closeGrid();
-    openGrid(agentSession);
+    if (scope) {
+      const agentSession = agent.pane.split(":")[0];
+      if (agentSession !== scope) {
+        closeGrid();
+        openGrid(agentSession);
+        // Focus after rebuild — the agent pane is now in the new grid
+        setTimeout(() => focusPane(agent.tmuxPaneId), 50);
+        return;
+      }
+    }
+    // Same session (or unscoped) — just focus the pane in the grid
+    focusPane(agent.tmuxPaneId);
   }, [closeGrid, openGrid]);
 
   const openPreviewAndFocus = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
@@ -576,7 +583,7 @@ export function Dashboard({ interval }: Props) {
       liveIndex.current = agentRow;
       const agent = agents[agentRow];
       if (agent) {
-        if (gridRef.current) switchGridSession(agent);
+        if (gridRef.current) gridSelectAgent(agent);
         else openPreviewAndFocus(agent, true);
       }
       return;
@@ -599,9 +606,9 @@ export function Dashboard({ interval }: Props) {
     const agent = agents[agentRow];
     if (!agent) return;
 
-    if (gridRef.current) switchGridSession(agent);
+    if (gridRef.current) gridSelectAgent(agent);
     else openPreviewAndFocus(agent, true);
-  }, [agents, compact, openPreviewAndFocus, switchGridSession]));
+  }, [agents, compact, openPreviewAndFocus, gridSelectAgent]));
 
   // Advance wizard from profile step → session or cwd step
   const wizardAfterProfile = useCallback((profile: string, inheritedCwd: string, inheritedSession: string) => {
@@ -774,7 +781,7 @@ export function Dashboard({ interval }: Props) {
         const agent = agents[next];
         debounceRef.current = setTimeout(() => {
           debounceRef.current = null;
-          if (gridRef.current) switchGridSession(agent);
+          if (gridRef.current) gridSelectAgent(agent);
           else if (previewRef.current) switchPreview(agent);
           doScan();
         }, 400);
@@ -790,7 +797,7 @@ export function Dashboard({ interval }: Props) {
         const agent = agents[next];
         debounceRef.current = setTimeout(() => {
           debounceRef.current = null;
-          if (gridRef.current) switchGridSession(agent);
+          if (gridRef.current) gridSelectAgent(agent);
           else if (previewRef.current) switchPreview(agent);
           doScan();
         }, 400);
@@ -799,7 +806,7 @@ export function Dashboard({ interval }: Props) {
     if (key.tab) {
       if (agents[idx]) {
         if (gridRef.current) {
-          switchGridSession(agents[idx]);
+          gridSelectAgent(agents[idx]);
         } else {
           openPreviewAndFocus(agents[idx], true);
         }
@@ -921,7 +928,7 @@ export function Dashboard({ interval }: Props) {
     if (input === " ") {
       if (agents[idx]) {
         if (gridRef.current) {
-          switchGridSession(agents[idx]);
+          gridSelectAgent(agents[idx]);
         } else {
           openPreviewAndFocus(agents[idx], true);
         }
