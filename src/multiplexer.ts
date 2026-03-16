@@ -51,3 +51,20 @@ export function detectMultiplexer(): "tmux" | "zellij" | null {
   if (process.env.TMUX) return "tmux";
   return null;
 }
+
+let _mux: Multiplexer | null = null;
+
+/** Get the singleton multiplexer instance, auto-detecting the backend. */
+export function getMux(): Multiplexer {
+  if (_mux) return _mux;
+  const kind = detectMultiplexer();
+  if (kind === "zellij") {
+    // Dynamic import to avoid loading zellij code in tmux
+    const { ZellijMux } = require("./mux-zellij.js") as typeof import("./mux-zellij.js");
+    _mux = new ZellijMux();
+  } else {
+    const { TmuxMux } = require("./mux-tmux.js") as typeof import("./mux-tmux.js");
+    _mux = new TmuxMux();
+  }
+  return _mux!;
+}
