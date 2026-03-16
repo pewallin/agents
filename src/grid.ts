@@ -235,9 +235,9 @@ export function createGrid(
   // Strategy: split into rows first, then split each row into columns.
   const rowPanes: string[] = [firstPane];
 
-  // Create additional rows by splitting the first pane vertically
+  // Create additional rows by splitting the LAST row pane vertically.
+  // Each split takes a fraction of the remaining space so all rows end up even.
   for (let r = 1; r < layout.rows; r++) {
-    // Split the last row pane to create a new row below
     const remainingRows = layout.rows - r;
     const pct = Math.floor(100 * remainingRows / (remainingRows + 1));
     const newRow = exec(
@@ -249,21 +249,25 @@ export function createGrid(
     }
   }
 
-  // Split each row into columns
+  // Split each row into columns.
+  // Key: always split the LAST created pane so each split subdivides the
+  // remaining space evenly, rather than halving the first pane repeatedly.
   const cellPanes: string[] = [];
   for (let r = 0; r < layout.rows; r++) {
     const cols = layout.colsPerRow[r];
-    cellPanes.push(rowPanes[r]); // first column is the row pane itself
+    let lastPane = rowPanes[r];
+    cellPanes.push(lastPane); // first column is the row pane itself
 
     for (let c = 1; c < cols; c++) {
       const remainingCols = cols - c;
       const pct = Math.floor(100 * remainingCols / (remainingCols + 1));
       const newCol = exec(
-        `tmux split-window -h -d -l ${pct}% -t ${rowPanes[r]} -P -F '#{pane_id}' 'tail -f /dev/null'`
+        `tmux split-window -h -d -l ${pct}% -t ${lastPane} -P -F '#{pane_id}' 'tail -f /dev/null'`
       );
       if (newCol) {
         cellPanes.push(newCol);
         placeholderIds.push(newCol);
+        lastPane = newCol;
       }
     }
   }
