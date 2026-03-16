@@ -86,7 +86,7 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
     process.exit(1);
   }
   exec(`tmux set-option -t ${agentPaneId} -w automatic-rename off`);
-  exec(`tmux set-option -t ${agentPaneId} -w allow-rename off`);
+  exec(`tmux rename-window -t ${agentPaneId} ${JSON.stringify(windowName)}`);
   exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);
 
   const paneMap: Record<string, string> = { agent: agentPaneId };
