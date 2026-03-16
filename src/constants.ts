@@ -13,6 +13,11 @@ export const DASHBOARD_MIN_COLS = 48;
 /** Max dashboard columns in vertical layout. */
 export const DASHBOARD_MAX_COLS = 65;
 
+/** Compute dashboard column width for vertical preview/grid splits. */
+export function calcDashboardCols(termCols: number): number {
+  return Math.max(DASHBOARD_MIN_COLS, Math.min(DASHBOARD_MAX_COLS, Math.floor(termCols * DASHBOARD_WIDTH_RATIO)));
+}
+
 /** Max agents in a grid. */
 export const GRID_MAX_AGENTS = 12;
 

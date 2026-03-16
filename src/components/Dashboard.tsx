@@ -3,16 +3,17 @@ import { Text, Box, useApp, useInput } from "ink";
 import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, killWindow, showPlaceholder, focusPane, ownPaneId, paneExists, getPaneWidth, resizePaneWidth, filterAgents } from "../scanner.js";
 import type { AgentPane } from "../scanner.js";
 import { createZones, populateZones, depopulateZones, labelZones, destroyZones } from "../zones.js";
-import type { HelperZone } from "../zones.js";
+import { savePreviewState, loadPreviewState } from "../persistence.js";
+import type { PreviewState } from "../persistence.js";
+import { SIDEBAR_MIN_WIDTH, NAV_DEBOUNCE_MS, calcDashboardCols } from "../constants.js";
 import { AgentTable } from "./AgentTable.js";
 import { useMouse } from "../mouse.js";
 import { loadConfig, getProfileNames, resolveProfile } from "../config.js";
 import type { HelperDef } from "../config.js";
 import { createWorkspace } from "../workspace.js";
 import { createGrid, destroyGrid, type GridState, type GridAgent } from "../grid.js";
-import { writeFileSync, readFileSync, unlinkSync, existsSync, statSync, readdirSync } from "fs";
+import { existsSync, statSync, readdirSync } from "fs";
 import { execSync } from "child_process";
-import { tmpdir } from "os";
 import { join, dirname, basename } from "path";
 
 interface Props {
@@ -29,56 +30,19 @@ function agentColor(name: string): string { return AGENT_COLORS[name] || "#88c0d
 // swapped in/out of zones on agent switch — zones themselves are never
 // killed until the preview is closed.
 
-interface PreviewState {
-  splitPaneId: string;        // agent zone placeholder (sits in agent's original position)
-  agentTmuxId: string;        // agent pane (swapped into preview)
-  agentName: string;
-  agentPane: string;
-  agentPaneId: string;
-  vertical: boolean;
-  windowId: string;
-  zones: HelperZone[];        // persistent helper zones (created once)
-  helperLayout: string | null; // active layout name, or null for off
-}
 
-// ── Preview state persistence (survives HMR / vite-node restart) ────
-const _selfPane = ownPaneId();
-const _stateFile = join(tmpdir(), `agents-preview-${_selfPane.replace("%", "")}.json`);
-
-function saveStateToDisk(pv: PreviewState | null): void {
-  try {
-    if (pv) writeFileSync(_stateFile, JSON.stringify(pv));
-    else unlinkSync(_stateFile);
-  } catch {}
-}
-
-function loadStateFromDisk(): PreviewState | null {
-  try {
-    const pv: PreviewState = JSON.parse(readFileSync(_stateFile, "utf-8"));
-    // Validate that the key panes are still alive
-    if (!paneExists(pv.splitPaneId) || !paneExists(pv.agentTmuxId)) {
-      unlinkSync(_stateFile);
-      return null;
-    }
-    // Validate zone panes — drop dead ones
-    pv.zones = (pv.zones || []).filter((z) => paneExists(z.zonePaneId));
-    return pv;
-  } catch {
-    return null;
-  }
-}
 
 // In-memory store for current session + HMR (Vite import.meta.hot)
 type HotAPI = { data: Record<string, any>; dispose(cb: (data: Record<string, any>) => void): void };
 const _hot = (import.meta as any).hot as HotAPI | undefined;
 let _hmrDisposing = false;
-let _previewStore: PreviewState | null = _hot?.data?.preview ?? loadStateFromDisk();
+let _previewStore: PreviewState | null = _hot?.data?.preview ?? loadPreviewState();
 
 if (_hot) {
   _hot.dispose((data) => {
     _hmrDisposing = true;
     data.preview = _previewStore;
-    saveStateToDisk(_previewStore);
+    savePreviewState(_previewStore);
   });
 }
 
@@ -179,7 +143,7 @@ export function Dashboard({ interval }: Props) {
           if (hasNew || hasGone) {
             const self = selfPaneId.current;
             const termCols = paneWidth || 120;
-            const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
+            const dashboardCols = calcDashboardCols(termCols);
             const newGridAgents = list
               .filter((a) => !scope || a.pane.startsWith(scope + ":"))
               .slice(0, 12)
@@ -205,7 +169,7 @@ export function Dashboard({ interval }: Props) {
   const setPreview = useCallback((pv: PreviewState | null) => {
     previewRef.current = pv;
     _previewStore = pv;
-    saveStateToDisk(pv);
+    savePreviewState(pv);
     setPreviewing(!!pv);
   }, []);
 
@@ -248,13 +212,13 @@ export function Dashboard({ interval }: Props) {
       if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
       previewRef.current = null;
       _previewStore = null;
-      saveStateToDisk(null);
+      savePreviewState(null);
     };
     const onExit = () => { if (!_hmrDisposing) teardown(); };
     const onQuitSignal = () => { teardown(); process.exit(0); };
     // SIGTERM: vite-node restart — preserve panes, save state, exit quietly
     const onRestart = () => {
-      saveStateToDisk(previewRef.current);
+      savePreviewState(previewRef.current);
       process.exit(0);
     };
     process.on("exit", onExit);
@@ -289,7 +253,7 @@ export function Dashboard({ interval }: Props) {
     const termRows = process.stdout.rows || 24;
     const vertical = forceVertical || termRows < dashboardRows + 10;
     const termCols = process.stdout.columns || 120;
-    const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
+    const dashboardCols = calcDashboardCols(termCols);
     const splitId = createPreviewSplit(vertical ? dashboardCols : dashboardRows, vertical);
     if (!splitId) return;
 
@@ -409,7 +373,7 @@ export function Dashboard({ interval }: Props) {
 
     const self = selfPaneId.current;
     const termCols = process.stdout.columns || 120;
-    const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
+    const dashboardCols = calcDashboardCols(termCols);
 
     const gs = createGrid(gridAgents, self, true, dashboardCols);
     if (!gs) return;
@@ -485,8 +449,8 @@ export function Dashboard({ interval }: Props) {
       const self = selfPaneId.current;
       process.stdout.write("\x1b[2J\x1b[H");
       savedWidth.current = getPaneWidth(self);
-      resizePaneWidth(self, 5);
-      process.stdout.columns = 5;
+      resizePaneWidth(self, SIDEBAR_MIN_WIDTH);
+      process.stdout.columns = SIDEBAR_MIN_WIDTH;
       setPaneWidth(5);
       setCompact(true);
       return;
@@ -537,7 +501,7 @@ export function Dashboard({ interval }: Props) {
         if (gs && gs.agents.some((a) => a.tmuxPaneId === agent.tmuxPaneId)) {
           const self = selfPaneId.current;
           const termCols = process.stdout.columns || 120;
-          const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
+          const dashboardCols = calcDashboardCols(termCols);
           const remaining = gs.agents.filter((a) => a.tmuxPaneId !== agent.tmuxPaneId);
           const scope = (gs as any)._scope;
           destroyGrid(gs);
@@ -676,7 +640,7 @@ export function Dashboard({ interval }: Props) {
           if (gridRef.current) gridSelectAgent(agent);
           else if (previewRef.current) switchPreview(agent);
           doScan();
-        }, 400);
+        }, NAV_DEBOUNCE_MS);
       }
     }
     if (input === "k" || key.upArrow) {
@@ -692,7 +656,7 @@ export function Dashboard({ interval }: Props) {
           if (gridRef.current) gridSelectAgent(agent);
           else if (previewRef.current) switchPreview(agent);
           doScan();
-        }, 400);
+        }, NAV_DEBOUNCE_MS);
       }
     }
     if (key.tab) {
@@ -727,8 +691,8 @@ export function Dashboard({ interval }: Props) {
         setTimeout(() => setCompact(false), 50);
       } else {
         savedWidth.current = getPaneWidth(self);
-        resizePaneWidth(self, 5);
-        process.stdout.columns = 5;
+        resizePaneWidth(self, SIDEBAR_MIN_WIDTH);
+        process.stdout.columns = SIDEBAR_MIN_WIDTH;
         setPaneWidth(5);
         setCompact(true);
       }
