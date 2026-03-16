@@ -1,14 +1,6 @@
-import { execSync } from "child_process";
+import { exec } from "./shell.js";
 import { loadConfig, resolveProfile } from "./config.js";
 import type { WorkspaceDef, LaunchProfile } from "./config.js";
-
-function exec(cmd: string): string {
-  try {
-    return execSync(cmd, { encoding: "utf-8", timeout: 5000 }).trim();
-  } catch {
-    return "";
-  }
-}
 
 const DEFAULT_LAYOUTS: Record<string, WorkspaceDef[]> = {
   default: [

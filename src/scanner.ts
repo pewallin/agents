@@ -1,11 +1,8 @@
-import { execSync, exec as execCb } from "child_process";
 import { writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { promisify } from "util";
+import { exec, execAsync } from "./shell.js";
 import { getAgentState, getAgentStateEntry } from "./state.js";
-
-const execAsync = promisify(execCb);
 
 export type AgentStatus = "attention" | "question" | "working" | "stalled" | "idle";
 
@@ -111,23 +108,7 @@ function getDetector(agent: string): AgentDetector {
 // Map binary names to display names (e.g. if your agent binary differs)
 const FRIENDLY_NAMES: Record<string, string> = {};
 
-// Sync exec for non-async contexts (switchToPane, switchBack)
-function execSync_(cmd: string): string {
-  try {
-    return execSync(cmd, { encoding: "utf-8", timeout: 5000 }).trim();
-  } catch {
-    return "";
-  }
-}
 
-async function run(cmd: string): Promise<string> {
-  try {
-    const { stdout } = await execAsync(cmd, { encoding: "utf-8", timeout: 5000 });
-    return stdout.trim();
-  } catch {
-    return "";
-  }
-}
 
 function friendlyName(name: string): string {
   return FRIENDLY_NAMES[name] ?? name;
@@ -136,21 +117,21 @@ function friendlyName(name: string): string {
 async function findLeafProcess(pid: string): Promise<string> {
   let leaf = pid;
   for (;;) {
-    const child = await run(`pgrep -P ${leaf} 2>/dev/null | head -1`);
+    const child = await execAsync(`pgrep -P ${leaf} 2>/dev/null | head -1`);
     if (!child) break;
     // Check if current child is an agent before walking deeper —
     // agents like claude spawn sub-processes (e.g. pi) that would
     // incorrectly win if we always walk to the true leaf.
-    const cmd = (await run(`ps -p ${child} -o comm= 2>/dev/null`)).replace(/.*\//, "");
+    const cmd = (await execAsync(`ps -p ${child} -o comm= 2>/dev/null`)).replace(/.*\//, "");
     if (AGENT_PROCS.test(cmd)) return cmd;
     leaf = child;
   }
-  return (await run(`ps -p ${leaf} -o comm= 2>/dev/null`)).replace(/.*\//, "");
+  return (await execAsync(`ps -p ${leaf} -o comm= 2>/dev/null`)).replace(/.*\//, "");
 }
 
 async function findAgentOnTty(tty: string): Promise<string | null> {
   const ttyShort = tty.replace(/^\/dev\//, "");
-  const procs = await run(`ps -o comm= -t ${ttyShort} 2>/dev/null`);
+  const procs = await execAsync(`ps -o comm= -t ${ttyShort} 2>/dev/null`);
   for (const line of procs.split("\n")) {
     const cmd = line.replace(/.*\//, "").replace(/^-/, "");
     if (AGENT_PROCS.test(cmd)) return cmd;
@@ -167,7 +148,7 @@ async function detectStatus(
 ): Promise<{ status: AgentStatus; detail?: string }> {
   const detector = getDetector(agent);
 
-  const rawLines = await run(
+  const rawLines = await execAsync(
     `tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`
   );
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
@@ -185,7 +166,7 @@ async function detectStatus(
 
   if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
 
-  const fullPane = await run(
+  const fullPane = await execAsync(
     `tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`
   );
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
@@ -205,7 +186,7 @@ export function scan(): AgentPane[] {
 }
 
 function scanSync(): AgentPane[] {
-  const raw = execSync_(
+  const raw = exec(
     `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
   );
   if (!raw) return [];
@@ -240,18 +221,18 @@ function scanSync(): AgentPane[] {
 function findLeafProcessSync(pid: string): string {
   let leaf = pid;
   for (;;) {
-    const child = execSync_(`pgrep -P ${leaf} 2>/dev/null | head -1`);
+    const child = exec(`pgrep -P ${leaf} 2>/dev/null | head -1`);
     if (!child) break;
-    const cmd = execSync_(`ps -p ${child} -o comm= 2>/dev/null`).replace(/.*\//, "");
+    const cmd = exec(`ps -p ${child} -o comm= 2>/dev/null`).replace(/.*\//, "");
     if (AGENT_PROCS.test(cmd)) return cmd;
     leaf = child;
   }
-  return execSync_(`ps -p ${leaf} -o comm= 2>/dev/null`).replace(/.*\//, "");
+  return exec(`ps -p ${leaf} -o comm= 2>/dev/null`).replace(/.*\//, "");
 }
 
 function findAgentOnTtySync(tty: string): string | null {
   const ttyShort = tty.replace(/^\/dev\//, "");
-  const procs = execSync_(`ps -o comm= -t ${ttyShort} 2>/dev/null`);
+  const procs = exec(`ps -o comm= -t ${ttyShort} 2>/dev/null`);
   for (const line of procs.split("\n")) {
     const cmd = line.replace(/.*\//, "").replace(/^-/, "");
     if (AGENT_PROCS.test(cmd)) return cmd;
@@ -262,7 +243,7 @@ function findAgentOnTtySync(tty: string): string | null {
 function detectStatusSync(paneRef: string, title: string, windowActivity: number, agent: string, tmuxPaneId?: string): { status: AgentStatus; detail?: string } {
   const detector = getDetector(agent);
 
-  const rawLines = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`);
+  const rawLines = exec(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`);
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
   const dur = stateDuration(agent, tmuxPaneId);
@@ -281,7 +262,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
 
   // 2. Fallback: only reached for generic (screen-scrape) agents when
   //    none of the patterns matched. Check if pane has any content at all.
-  const fullPane = execSync_(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`);
+  const fullPane = exec(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`);
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
   if (isEmpty) return { status: "idle" };
 
@@ -297,7 +278,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
 
 // Async version for watch mode — doesn't block the Ink render loop
 export async function scanAsync(): Promise<AgentPane[]> {
-  const raw = await run(
+  const raw = await execAsync(
     `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
   );
   if (!raw) return [];
@@ -335,32 +316,32 @@ export async function scanAsync(): Promise<AgentPane[]> {
 const BACK_ENV = "AGENTS_BACK_PANE";
 
 export function switchToPane(paneId: string, tmuxPaneId?: string): void {
-  const current = execSync_(`tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`);
+  const current = exec(`tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`);
   if (current) {
-    execSync_(`tmux set-environment -g ${BACK_ENV} ${JSON.stringify(current)}`);
+    exec(`tmux set-environment -g ${BACK_ENV} ${JSON.stringify(current)}`);
   }
-  execSync_(`tmux select-window -t ${JSON.stringify(paneId)}`);
+  exec(`tmux select-window -t ${JSON.stringify(paneId)}`);
   if (tmuxPaneId) {
-    execSync_(`tmux select-pane -t ${tmuxPaneId}`);
+    exec(`tmux select-pane -t ${tmuxPaneId}`);
   }
-  execSync_(`tmux switch-client -t ${JSON.stringify(paneId)}`);
+  exec(`tmux switch-client -t ${JSON.stringify(paneId)}`);
 }
 
 export function switchBack(): boolean {
-  const back = execSync_(`tmux show-environment -g ${BACK_ENV} 2>/dev/null`).replace(`${BACK_ENV}=`, "");
+  const back = exec(`tmux show-environment -g ${BACK_ENV} 2>/dev/null`).replace(`${BACK_ENV}=`, "");
   if (!back) return false;
-  execSync_(`tmux select-window -t ${JSON.stringify(back)}`);
-  execSync_(`tmux switch-client -t ${JSON.stringify(back)}`);
+  exec(`tmux select-window -t ${JSON.stringify(back)}`);
+  exec(`tmux switch-client -t ${JSON.stringify(back)}`);
   // Signal the dashboard to exit fullscreen by sending 'f'
   // Find the node pane in the back window (the dashboard)
   const winRef = back.replace(/\.\d+$/, ""); // strip pane index
-  const panes = execSync_(`tmux list-panes -t ${JSON.stringify(winRef)} -F '#{pane_id}§#{pane_width}' 2>/dev/null`);
+  const panes = exec(`tmux list-panes -t ${JSON.stringify(winRef)} -F '#{pane_id}§#{pane_width}' 2>/dev/null`);
   if (panes) {
     for (const line of panes.split("\n")) {
       const [paneId, width] = line.split("§");
       if (paneId && parseInt(width, 10) <= 5) {
         // Narrow pane = likely fullscreen dashboard, send 'f' to restore
-        execSync_(`tmux send-keys -t ${paneId} s`);
+        exec(`tmux send-keys -t ${paneId} s`);
         break;
       }
     }
@@ -380,38 +361,38 @@ export function createPreviewSplit(dashboardSize: number, vertical: boolean = fa
     // Query current pane width so we can compute the preview size directly.
     // Using -l at split time avoids resize-pane which can steal space from
     // neighboring panes outside the split.
-    const curWidth = parseInt(execSync_(`tmux display-message -t ${self || ""} -p '#{pane_width}'`) || "120", 10);
+    const curWidth = parseInt(exec(`tmux display-message -t ${self || ""} -p '#{pane_width}'`) || "120", 10);
     const previewCols = Math.max(20, curWidth - dashboardSize - 1);
-    return execSync_(`tmux split-window -h -d${target} -l ${previewCols} -P -F '#{pane_id}' 'tail -f /dev/null'`);
+    return exec(`tmux split-window -h -d${target} -l ${previewCols} -P -F '#{pane_id}' 'tail -f /dev/null'`);
   }
-  const curHeight = parseInt(execSync_(`tmux display-message -t ${self || ""} -p '#{pane_height}'`) || "24", 10);
+  const curHeight = parseInt(exec(`tmux display-message -t ${self || ""} -p '#{pane_height}'`) || "24", 10);
   const previewRows = Math.max(5, curHeight - dashboardSize - 1);
-  return execSync_(`tmux split-window -v -d${target} -l ${previewRows} -P -F '#{pane_id}' 'tail -f /dev/null'`);
+  return exec(`tmux split-window -v -d${target} -l ${previewRows} -P -F '#{pane_id}' 'tail -f /dev/null'`);
 }
 
 /** Check if a pane exists. */
 export function paneExists(paneId: string): boolean {
-  return execSync_(`tmux display-message -t ${paneId} -p '#{pane_id}' 2>/dev/null`) === paneId;
+  return exec(`tmux display-message -t ${paneId} -p '#{pane_id}' 2>/dev/null`) === paneId;
 }
 
 /** Get the current width of a pane. */
 export function getPaneWidth(paneId: string): number {
-  return parseInt(execSync_(`tmux display-message -t ${paneId} -p '#{pane_width}' 2>/dev/null`) || "0", 10);
+  return parseInt(exec(`tmux display-message -t ${paneId} -p '#{pane_width}' 2>/dev/null`) || "0", 10);
 }
 
 /** Resize a pane to a specific width. */
 export function resizePaneWidth(paneId: string, width: number): void {
-  execSync_(`tmux resize-pane -t ${paneId} -x ${width} 2>/dev/null`);
+  exec(`tmux resize-pane -t ${paneId} -x ${width} 2>/dev/null`);
 }
 
 /** Swap two panes by their %N ids. */
 export function swapPanes(src: string, dst: string): void {
-  execSync_(`tmux swap-pane -d -s ${src} -t ${dst}`);
+  exec(`tmux swap-pane -d -s ${src} -t ${dst}`);
 }
 
 /** Focus a pane by its %N id (select it without switching the dashboard away). */
 export function focusPane(tmuxPaneId: string): void {
-  execSync_(`tmux select-pane -t ${tmuxPaneId}`);
+  exec(`tmux select-pane -t ${tmuxPaneId}`);
 }
 
 /** Get the current pane's %N id. */
@@ -419,22 +400,22 @@ export function ownPaneId(): string {
   // TMUX_PANE is set per-pane by tmux and stays correct regardless of focus.
   // display-message without -t returns the *focused* pane, which is wrong if
   // another pane has focus (e.g. during HMR remount).
-  return process.env.TMUX_PANE || execSync_(`tmux display-message -p '#{pane_id}'`);
+  return process.env.TMUX_PANE || exec(`tmux display-message -p '#{pane_id}'`);
 }
 
 /** Kill a pane by its %N id. */
 export function killPane(id: string): void {
-  execSync_(`tmux kill-pane -t ${id} 2>/dev/null`);
+  exec(`tmux kill-pane -t ${id} 2>/dev/null`);
 }
 
 /** Kill an entire tmux window by session:window_index. */
 export function killWindow(windowId: string): void {
-  execSync_(`tmux kill-window -t ${JSON.stringify(windowId)} 2>/dev/null`);
+  exec(`tmux kill-window -t ${JSON.stringify(windowId)} 2>/dev/null`);
 }
 
 /** Find sibling panes in the same tmux window, excluding the given pane. */
 export function findSiblingPanes(windowId: string, excludePaneId: string): SiblingPane[] {
-  const raw = execSync_(
+  const raw = exec(
     `tmux list-panes -t ${JSON.stringify(windowId)} -F '#{pane_id}§#{pane_current_command}§#{session_name}:#{window_name}.#{pane_index}§#{pane_width}§#{pane_height}' 2>/dev/null`
   );
   if (!raw) return [];
@@ -453,7 +434,7 @@ export interface WindowSnapshot {
 
 /** Capture a window's layout so it can be restored later. */
 export function snapshotWindow(windowId: string): WindowSnapshot {
-  const layout = execSync_(
+  const layout = exec(
     `tmux display-message -t ${JSON.stringify(windowId)} -p '#{window_layout}'`
   );
   return { windowId, layout };
@@ -485,12 +466,12 @@ export function patchSnapshotId(snapshot: WindowSnapshot, oldId: string, newId: 
 /** Restore a window's layout and pane ordering from a snapshot. */
 export function restoreWindowLayout(snapshot: WindowSnapshot): void {
   // Apply geometry
-  execSync_(
+  exec(
     `tmux select-layout -t ${JSON.stringify(snapshot.windowId)} '${snapshot.layout}' 2>/dev/null`
   );
   // Fix pane ordering — select-layout sets geometry but doesn't reorder panes
   const targetOrder = parsePaneIds(snapshot.layout);
-  const currentOrder = execSync_(
+  const currentOrder = exec(
     `tmux list-panes -t ${JSON.stringify(snapshot.windowId)} -F '#{pane_id}' 2>/dev/null`
   ).split("\n").filter(Boolean);
 
@@ -498,7 +479,7 @@ export function restoreWindowLayout(snapshot: WindowSnapshot): void {
     if (currentOrder[i] !== targetOrder[i]) {
       const j = currentOrder.indexOf(targetOrder[i]);
       if (j >= 0) {
-        execSync_(`tmux swap-pane -d -s ${targetOrder[i]} -t ${currentOrder[i]}`);
+        exec(`tmux swap-pane -d -s ${targetOrder[i]} -t ${currentOrder[i]}`);
         [currentOrder[i], currentOrder[j]] = [currentOrder[j], currentOrder[i]];
       }
     }
@@ -513,7 +494,7 @@ export function createSplitPane(targetPaneId: string, direction: string, size?: 
                 direction === "above" ? "-vb" :
                                         "-v";
   const sizeFlag = size ? ` -l ${size}` : "";
-  return execSync_(`tmux split-window ${flags} -d${sizeFlag} -t ${targetPaneId} -P -F '#{pane_id}' 'tail -f /dev/null'`);
+  return exec(`tmux split-window ${flags} -d${sizeFlag} -t ${targetPaneId} -P -F '#{pane_id}' 'tail -f /dev/null'`);
 }
 
 /** Move a pane into another pane's window, splitting in the given direction. */
@@ -522,23 +503,23 @@ export function joinPane(srcPaneId: string, targetPaneId: string, direction: str
                 direction === "right" ? "-h" :
                 direction === "above" ? "-vb" :
                                         "-v";
-  execSync_(`tmux join-pane -d ${flags} -s ${srcPaneId} -t ${targetPaneId}`);
+  exec(`tmux join-pane -d ${flags} -s ${srcPaneId} -t ${targetPaneId}`);
 }
 
 /** Move a pane back into a window (joins to the first pane found there). */
 export function returnPaneToWindow(paneId: string, windowId: string): void {
-  const target = execSync_(
+  const target = exec(
     `tmux list-panes -t ${JSON.stringify(windowId)} -F '#{pane_id}' 2>/dev/null`
   ).split("\n").filter(Boolean)[0];
   if (target) {
-    execSync_(`tmux join-pane -d -s ${paneId} -t ${target}`);
+    exec(`tmux join-pane -d -s ${paneId} -t ${target}`);
   }
 }
 
 /** Kill multiple panes by their %N ids. */
 export function killPanes(ids: string[]): void {
   for (const id of ids) {
-    execSync_(`tmux kill-pane -t ${id} 2>/dev/null`);
+    exec(`tmux kill-pane -t ${id} 2>/dev/null`);
   }
 }
 
@@ -566,5 +547,5 @@ while true; do sleep 86400; done
 `;
   const path = join(tmpdir(), `agents-ph-${paneId.replace("%", "")}.sh`);
   writeFileSync(path, script, { mode: 0o755 });
-  execSync_(`tmux respawn-pane -k -t ${paneId} 'bash ${path}'`);
+  exec(`tmux respawn-pane -k -t ${paneId} 'bash ${path}'`);
 }

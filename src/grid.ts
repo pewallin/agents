@@ -1,18 +1,11 @@
-import { execSync } from "child_process";
+import { exec } from "./shell.js";
 import {
   swapPanes,
   showPlaceholder,
   killPane,
   ownPaneId,
 } from "./scanner.js";
-
-function exec(cmd: string): string {
-  try {
-    return execSync(cmd, { encoding: "utf-8", timeout: 5000 }).trim();
-  } catch {
-    return "";
-  }
-}
+import { GRID_MAX_AGENTS, GRID_MIN_SIZE } from "./constants.js";
 
 /**
  * Grid view layout calculations and pane management.
@@ -56,7 +49,7 @@ export interface GridLayout {
  */
 export function computeLayout(count: number): GridLayout | null {
   if (count <= 0) return null;
-  if (count > 12) count = 12; // cap
+  if (count > GRID_MAX_AGENTS) count = GRID_MAX_AGENTS;
 
   const colsPerRow = layoutRows(count);
   const rows = colsPerRow.length;
@@ -221,7 +214,7 @@ export function createGrid(
     exec(`tmux display-message -t ${self} -p '${vertical ? "#{pane_width}" : "#{pane_height}"}'`) || "80",
     10
   );
-  const gridSize = Math.max(20, curSize - dashboardSize - 1);
+  const gridSize = Math.max(GRID_MIN_SIZE, curSize - dashboardSize - 1);
   const sizeFlag = `-l ${gridSize}`;
 
   const firstPane = exec(
