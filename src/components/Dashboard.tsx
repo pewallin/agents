@@ -271,6 +271,42 @@ export function Dashboard({ interval }: Props) {
       }
       list.sort((a, b) => a.pane.localeCompare(b.pane));
       setAgents(list);
+
+      // Auto-rebuild grid if agents changed (new agent added, agent exited)
+      {
+        const curGrid = gridRef.current;
+        if (curGrid) {
+          const scope = (curGrid as any)._scope as string | undefined;
+          const gridAgentIds = new Set(curGrid.agents.map((a) => a.tmuxPaneId));
+          const currentAgents = list
+            .filter((a) => !scope || a.pane.startsWith(scope + ":"))
+            .map((a) => a.tmuxPaneId);
+          const currentSet = new Set(currentAgents);
+          const hasNew = currentAgents.some((id) => !gridAgentIds.has(id));
+          const hasGone = curGrid.agents.some((a) => !currentSet.has(a.tmuxPaneId));
+          if (hasNew || hasGone) {
+            const self = selfPaneId.current;
+            const termCols = paneWidth || 120;
+            const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
+            const newGridAgents = list
+              .filter((a) => !scope || a.pane.startsWith(scope + ":"))
+              .slice(0, 12)
+              .map((a) => ({ tmuxPaneId: a.tmuxPaneId, agent: a.agent, pane: a.pane }));
+            destroyGrid(curGrid);
+            if (newGridAgents.length >= 1) {
+              const newGs = createGrid(newGridAgents, self, true, dashboardCols);
+              if (newGs) (newGs as any)._scope = scope;
+              gridRef.current = newGs;
+              _gridStore = newGs;
+              setGridActive(!!newGs);
+            } else {
+              gridRef.current = null;
+              _gridStore = null;
+              setGridActive(false);
+            }
+          }
+        }
+      }
     });
   }, []);
 
@@ -476,10 +512,7 @@ export function Dashboard({ interval }: Props) {
       .filter((a) => !scope || a.pane.startsWith(scope + ":"))
       .map((a) => ({ tmuxPaneId: a.tmuxPaneId, agent: a.agent, pane: a.pane }));
 
-    if (gridAgents.length < 2) {
-      // Not enough agents for a grid
-      return;
-    }
+    if (gridAgents.length < 1) return;
     if (gridAgents.length > 12) gridAgents = gridAgents.slice(0, 12);
 
     const self = selfPaneId.current;
@@ -489,6 +522,8 @@ export function Dashboard({ interval }: Props) {
     const gs = createGrid(gridAgents, self, true, dashboardCols);
     if (!gs) return;
 
+    // Stash scope for g↔G toggle detection
+    (gs as any)._scope = scope;
     gridRef.current = gs;
     _gridStore = gs;
     setGridActive(true);
@@ -589,10 +624,12 @@ export function Dashboard({ interval }: Props) {
           const termCols = process.stdout.columns || 120;
           const dashboardCols = Math.max(48, Math.min(65, Math.floor(termCols * 0.28)));
           const remaining = gs.agents.filter((a) => a.tmuxPaneId !== agent.tmuxPaneId);
+          const scope = (gs as any)._scope;
           destroyGrid(gs);
           killWindow(agent.windowId || agent.paneId);
-          if (remaining.length >= 2) {
+          if (remaining.length >= 1) {
             const newGs = createGrid(remaining, self, true, dashboardCols);
+            if (newGs) (newGs as any)._scope = scope;
             gridRef.current = newGs;
             _gridStore = newGs;
             setGridActive(!!newGs);
@@ -749,7 +786,7 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (input === "p" || input === "P") {
-      if (gridRef.current) { closeGrid(); return; }
+      if (gridRef.current) closeGrid();
       if (previewRef.current) {
         restorePreview();
       } else if (agents[idx]) {
@@ -817,14 +854,22 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (input === "g" || input === "G") {
-      if (gridRef.current) {
-        closeGrid();
-      } else {
-        // g = scoped to selected agent's tmux session, G = all agents
-        let scope: string | undefined;
-        if (input === "g" && agents[idx]) {
-          scope = agents[idx].pane.split(":")[0]; // tmux session name
+      const scoped = input === "g";
+      const scope = scoped && agents[idx] ? agents[idx].pane.split(":")[0] : undefined;
+
+      const gs = gridRef.current;
+      if (gs) {
+        // Already in grid — check if we're switching scope
+        const currentScope = (gs as any)._scope as string | undefined;
+        if ((scoped && currentScope === scope) || (!scoped && !currentScope)) {
+          // Same scope — toggle off
+          closeGrid();
+        } else {
+          // Different scope — rebuild with new scope
+          closeGrid();
+          openGrid(scope);
         }
+      } else {
         openGrid(scope);
       }
       return;

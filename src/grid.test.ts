@@ -24,8 +24,11 @@ describe("computeLayout", () => {
     expect(computeLayout(0)).toBeNull();
   });
 
-  it("returns null for 1 agent", () => {
-    expect(computeLayout(1)).toBeNull();
+  it("1 agent: single pane", () => {
+    const layout = computeLayout(1)!;
+    expect(layout.rows).toBe(1);
+    expect(layout.colsPerRow).toEqual([1]);
+    expect(layout.cells).toHaveLength(1);
   });
 
   it("2 agents: side by side", () => {
@@ -88,8 +91,8 @@ describe("computeLayout", () => {
     expect(layout.cells).toHaveLength(12);
   });
 
-  it("cell count always matches input (2-12)", () => {
-    for (let n = 2; n <= 12; n++) {
+  it("cell count always matches input (1-12)", () => {
+    for (let n = 1; n <= 12; n++) {
       const layout = computeLayout(n)!;
       expect(layout.cells).toHaveLength(n);
       // colsPerRow sums to n

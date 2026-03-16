@@ -52,10 +52,10 @@ export interface GridLayout {
 
 /**
  * Compute grid layout for N agents (1–12).
- * Returns null for 0 or 1 (no grid needed).
+ * Returns null for 0 agents only. 1 agent = single full pane.
  */
 export function computeLayout(count: number): GridLayout | null {
-  if (count <= 1) return null;
+  if (count <= 0) return null;
   if (count > 12) count = 12; // cap
 
   const colsPerRow = layoutRows(count);
@@ -77,6 +77,7 @@ export function computeLayout(count: number): GridLayout | null {
  */
 function layoutRows(n: number): number[] {
   switch (n) {
+    case 1: return [1];             // single pane (like preview)
     case 2: return [2];             // side by side
     case 3: return [1, 2];          // 1 top + 2 bottom
     case 4: return [2, 2];          // 2×2
@@ -209,7 +210,7 @@ export function createGrid(
   dashboardSize: number
 ): GridState | null {
   const count = Math.min(agents.length, 12);
-  if (count < 2) return null;
+  if (count < 1) return null;
 
   const layout = computeLayout(count)!;
   const self = dashboardPaneId || ownPaneId();
@@ -335,6 +336,6 @@ export function removeFromGrid(
 ): GridState | null {
   const remaining = state.agents.filter((a) => a.tmuxPaneId !== agentPaneId);
   destroyGrid(state);
-  if (remaining.length < 2) return null;
+  if (remaining.length < 1) return null;
   return createGrid(remaining, dashboardPaneId, vertical, dashboardSize);
 }
