@@ -531,6 +531,18 @@ export function Dashboard({ interval }: Props) {
     doScan();
   }, [agents, restorePreview, syncPaneWidth, doScan]);
 
+  /** If grid is scoped and the agent is in a different session, rebuild for that session. */
+  const switchGridSession = useCallback((agent: AgentPane) => {
+    const gs = gridRef.current;
+    if (!gs) return;
+    const scope = (gs as any)._scope as string | undefined;
+    if (!scope) return; // G mode — don't switch
+    const agentSession = agent.pane.split(":")[0];
+    if (agentSession === scope) return; // same session
+    closeGrid();
+    openGrid(agentSession);
+  }, [closeGrid, openGrid]);
+
   const openPreviewAndFocus = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
     if (previewRef.current) {
       switchPreview(agent);
@@ -753,13 +765,13 @@ export function Dashboard({ interval }: Props) {
       const next = i >= agents.length - 1 ? 0 : i + 1;
       liveIndex.current = next;
       setSelectedIndex(next);
-      if (previewRef.current && agents[next]) {
-        // Debounce the tmux swap so rapid scrolling doesn't thrash panes
+      if (agents[next]) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         const agent = agents[next];
         debounceRef.current = setTimeout(() => {
           debounceRef.current = null;
-          switchPreview(agent);
+          if (gridRef.current) switchGridSession(agent);
+          else if (previewRef.current) switchPreview(agent);
           doScan();
         }, 400);
       }
@@ -769,12 +781,13 @@ export function Dashboard({ interval }: Props) {
       const next = i <= 0 ? Math.max(0, agents.length - 1) : i - 1;
       liveIndex.current = next;
       setSelectedIndex(next);
-      if (previewRef.current && agents[next]) {
+      if (agents[next]) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         const agent = agents[next];
         debounceRef.current = setTimeout(() => {
           debounceRef.current = null;
-          switchPreview(agent);
+          if (gridRef.current) switchGridSession(agent);
+          else if (previewRef.current) switchPreview(agent);
           doScan();
         }, 400);
       }
