@@ -516,6 +516,65 @@ export function returnPaneToWindow(paneId: string, windowId: string): void {
   }
 }
 
+// ── Scan result filtering ────────────────────────────────────────────
+
+export interface PreviewFilter {
+  agentTmuxId: string;
+  splitPaneId: string;
+  agentPane: string;
+  agentPaneId: string;
+}
+
+export interface GridFilter {
+  agents: { tmuxPaneId: string; pane: string }[];
+  placeholderIds: string[];
+}
+
+/**
+ * Filter scan results for the dashboard:
+ * 1. Remove the dashboard's own pane and window
+ * 2. Re-add previewed/gridded agents with their original pane names
+ *
+ * Pure function — no side effects, easy to test.
+ */
+export function filterAgents(
+  scanned: AgentPane[],
+  selfPaneId: string,
+  selfWindowId: string,
+  preview?: PreviewFilter | null,
+  grid?: GridFilter | null,
+): AgentPane[] {
+  // 1. Remove self
+  let list = scanned.filter((a) => a.tmuxPaneId !== selfPaneId && a.windowId !== selfWindowId);
+
+  // 2. Preview: agent pane is swapped into dashboard window, re-add with original name
+  if (preview) {
+    const swapped = scanned.find((a) => a.tmuxPaneId === preview.agentTmuxId);
+    list = list.filter(
+      (a) => a.tmuxPaneId !== preview.agentTmuxId && a.tmuxPaneId !== preview.splitPaneId
+    );
+    if (swapped) {
+      list.push({ ...swapped, pane: preview.agentPane, paneId: preview.agentPaneId });
+    }
+  }
+
+  // 3. Grid: agents are swapped into dashboard window, re-add with original names
+  if (grid) {
+    const gridPaneIds = new Set(grid.agents.map((a) => a.tmuxPaneId));
+    const placeholderIds = new Set(grid.placeholderIds);
+    list = list.filter((a) => !gridPaneIds.has(a.tmuxPaneId) && !placeholderIds.has(a.tmuxPaneId));
+    for (const ga of grid.agents) {
+      const found = scanned.find((a) => a.tmuxPaneId === ga.tmuxPaneId);
+      if (found) {
+        list.push({ ...found, pane: ga.pane });
+      }
+    }
+  }
+
+  list.sort((a, b) => a.pane.localeCompare(b.pane));
+  return list;
+}
+
 /** Kill multiple panes by their %N ids. */
 export function killPanes(ids: string[]): void {
   for (const id of ids) {

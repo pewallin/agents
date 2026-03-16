@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Text, Box, useApp, useInput } from "ink";
-import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, killWindow, showPlaceholder, focusPane, ownPaneId, findSiblingPanes, createSplitPane, paneExists, getPaneWidth, resizePaneWidth } from "../scanner.js";
+import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, killWindow, showPlaceholder, focusPane, ownPaneId, findSiblingPanes, createSplitPane, paneExists, getPaneWidth, resizePaneWidth, filterAgents } from "../scanner.js";
 import type { AgentPane } from "../scanner.js";
 import { AgentTable } from "./AgentTable.js";
 import { useMouse } from "../mouse.js";
@@ -236,40 +236,15 @@ export function Dashboard({ interval }: Props) {
       // Discard stale results — a newer scan was started (e.g. after switchPreview)
       if (seq !== scanSeq.current) return;
 
-      const self = selfPaneId.current;
-      const selfWin = selfWindowId.current;
-      let list = scanned.filter((a) => a.tmuxPaneId !== self && a.windowId !== selfWin);
-
       const pv = previewRef.current;
-      if (pv) {
-        // After swapPanes, tmux pane IDs follow the process (not the position).
-        // agentTmuxId is still the agent — it's now physically in the dashboard
-        // window, so the self-window filter above removed it. Find it in the
-        // unfiltered scan to re-add with its original pane name.
-        const swapped = scanned.find((a) => a.tmuxPaneId === pv.agentTmuxId);
-        list = list.filter(
-          (a) => a.tmuxPaneId !== pv.agentTmuxId && a.tmuxPaneId !== pv.splitPaneId
-        );
-        if (swapped) {
-          list.push({ ...swapped, pane: pv.agentPane, paneId: pv.agentPaneId });
-        }
-      }
-      // Grid: re-add swapped agents with their original pane names
       const gs = gridRef.current;
-      if (gs) {
-        const gridPaneIds = new Set(gs.agents.map((a) => a.tmuxPaneId));
-        const placeholderIds = new Set(gs.placeholderIds);
-        // Remove grid agents (now in dashboard window) and placeholders
-        list = list.filter((a) => !gridPaneIds.has(a.tmuxPaneId) && !placeholderIds.has(a.tmuxPaneId));
-        // Re-add from unfiltered scan with original names
-        for (const ga of gs.agents) {
-          const found = scanned.find((a) => a.tmuxPaneId === ga.tmuxPaneId);
-          if (found) {
-            list.push({ ...found, pane: ga.pane });
-          }
-        }
-      }
-      list.sort((a, b) => a.pane.localeCompare(b.pane));
+      const list = filterAgents(
+        scanned,
+        selfPaneId.current,
+        selfWindowId.current,
+        pv ? { agentTmuxId: pv.agentTmuxId, splitPaneId: pv.splitPaneId, agentPane: pv.agentPane, agentPaneId: pv.agentPaneId } : null,
+        gs ? { agents: gs.agents, placeholderIds: gs.placeholderIds } : null,
+      );
       setAgents(list);
 
       // Auto-rebuild grid if agents changed (new agent added, agent exited)

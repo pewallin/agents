@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { getDetector } from "./scanner.js";
+import { getDetector, filterAgents } from "./scanner.js";
+import type { AgentPane } from "./scanner.js";
 
 describe("getDetector", () => {
   it("returns hook detector for claude", () => {
@@ -21,6 +22,86 @@ describe("getDetector", () => {
     const a = getDetector("Claude");
     const b = getDetector("claude");
     expect(a).toBe(b);
+  });
+});
+
+// ── filterAgents tests ────────────────────────────────────────────
+
+function makeAgent(overrides: Partial<AgentPane> & { pane: string; tmuxPaneId: string }): AgentPane {
+  return {
+    paneId: "dustbot:0",
+    title: "",
+    agent: "pi",
+    status: "idle",
+    windowId: "dustbot:0",
+    ...overrides,
+  };
+}
+
+describe("filterAgents", () => {
+  const selfPane = "%10";
+  const selfWindow = "dustbot:0";
+
+  const agents: AgentPane[] = [
+    makeAgent({ pane: "dustbot:pi.0", tmuxPaneId: "%10", windowId: "dustbot:0" }), // self
+    makeAgent({ pane: "dustbot:claude.0", tmuxPaneId: "%11", windowId: "dustbot:1" }),
+    makeAgent({ pane: "belgium:pi.0", tmuxPaneId: "%20", windowId: "belgium:0" }),
+    makeAgent({ pane: "belgium:copilot.1", tmuxPaneId: "%21", windowId: "belgium:1" }),
+  ];
+
+  it("removes self pane and agents in own window", () => {
+    const result = filterAgents(agents, selfPane, selfWindow);
+    // %10 is self, removed. %11 is in dustbot:1 (different window), kept.
+    // Sorted by pane name: belgium:copilot, belgium:pi, dustbot:claude
+    expect(result.map((a) => a.tmuxPaneId)).toEqual(["%21", "%20", "%11"]);
+  });
+
+  it("re-adds previewed agent with original name", () => {
+    // %20 is previewed — it's been swapped into the dashboard window
+    const agentsWithSwap = agents.map((a) =>
+      a.tmuxPaneId === "%20" ? { ...a, windowId: "dustbot:0" } : a
+    );
+    const result = filterAgents(agentsWithSwap, selfPane, selfWindow, {
+      agentTmuxId: "%20",
+      splitPaneId: "%50",
+      agentPane: "belgium:pi.0",
+      agentPaneId: "belgium:0",
+    });
+    const found = result.find((a) => a.tmuxPaneId === "%20");
+    expect(found).toBeDefined();
+    expect(found!.pane).toBe("belgium:pi.0");
+  });
+
+  it("filters out placeholder panes from preview", () => {
+    const withPlaceholder = [
+      ...agents,
+      makeAgent({ pane: "placeholder", tmuxPaneId: "%50", windowId: "belgium:0" }),
+    ];
+    const result = filterAgents(withPlaceholder, selfPane, selfWindow, {
+      agentTmuxId: "%20",
+      splitPaneId: "%50",
+      agentPane: "belgium:pi.0",
+      agentPaneId: "belgium:0",
+    });
+    expect(result.find((a) => a.tmuxPaneId === "%50")).toBeUndefined();
+  });
+
+  it("re-adds grid agents with original names", () => {
+    const result = filterAgents(agents, selfPane, selfWindow, null, {
+      agents: [
+        { tmuxPaneId: "%20", pane: "belgium:pi.0" },
+        { tmuxPaneId: "%21", pane: "belgium:copilot.1" },
+      ],
+      placeholderIds: ["%60", "%61"],
+    });
+    expect(result.find((a) => a.tmuxPaneId === "%20")?.pane).toBe("belgium:pi.0");
+    expect(result.find((a) => a.tmuxPaneId === "%21")?.pane).toBe("belgium:copilot.1");
+  });
+
+  it("results are sorted by pane name", () => {
+    const result = filterAgents(agents, selfPane, selfWindow);
+    const panes = result.map((a) => a.pane);
+    expect(panes).toEqual([...panes].sort());
   });
 });
 
