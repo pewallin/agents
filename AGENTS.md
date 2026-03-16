@@ -1,6 +1,6 @@
-# Agents — tmux AI agent monitor
+# Agents — terminal multiplexer AI agent monitor
 
-A CLI tool that monitors AI agent panes across tmux sessions, providing a live dashboard with status tracking, preview, and workspace management.
+A CLI tool that monitors AI agent panes across tmux (and soon zellij) sessions, providing a live dashboard with status tracking, preview, grid view, and workspace management.
 
 ## Quick start
 
@@ -21,43 +21,61 @@ For development with hot reload: `npm run dev:watch`
 
 ```
 src/
-  cli.ts          — entry point, commander subcommands
-  scanner.ts      — tmux pane discovery, process detection, status detection
-  state.ts        — read/write ~/.agents/state/ files (hook-reported state)
-  setup.ts        — install/uninstall hooks and extensions for each agent
-  config.ts       — ~/.agents/config.json (helpers, workspace layouts)
-  mouse.ts        — SGR mouse tracking via Ink's internal event emitter
-  workspace.ts    — tmux workspace creation
+  cli.ts            — entry point, commander subcommands
+  shell.ts          — shared exec/execAsync wrapper (single source of truth)
+  constants.ts      — magic numbers, dashboard sizing helpers
+  scanner.ts        — pane discovery, process detection, status detection, filterAgents()
+  state.ts          — read/write ~/.agents/state/ files (hook-reported state)
+  setup.ts          — install/uninstall hooks and extensions for each agent
+  config.ts         — ~/.agents/config.json (helpers, workspace layouts, profiles)
+  mouse.ts          — SGR mouse tracking via Ink's internal event emitter
+  workspace.ts      — tmux workspace creation (new-window + helper splits)
+  grid.ts           — grid view layout computation + tmux pane management
+  zones.ts          — helper zone lifecycle (create/populate/depopulate/destroy)
+  persistence.ts    — preview state save/load (survives HMR + restarts)
+  multiplexer.ts    — Multiplexer interface + auto-detection (tmux vs zellij)
+  mux-tmux.ts       — tmux Multiplexer backend
+  mux-zellij.ts     — zellij Multiplexer backend (talks to bridge plugin via pipe)
   components/
-    Dashboard.tsx  — main watch-mode UI (Ink/React), preview, helper zones
-    AgentTable.tsx — responsive table with adaptive column widths
-    Select.tsx     — interactive one-shot agent picker
+    Dashboard.tsx    — main watch-mode UI (Ink/React), preview, grid, sidebar
+    AgentTable.tsx   — responsive table with adaptive column widths
+    Select.tsx       — interactive one-shot agent picker
 
 extensions/
-  claude/         — Claude Code hooks (shell scripts for settings.json)
-  copilot/        — Copilot CLI extension (extension.mjs)
-  pi/             — Pi extension (TypeScript)
-  opencode/       — OpenCode plugin (index.mjs, installed as npm package)
+  copilot/           — Copilot CLI extension (extension.mjs, uses SDK events)
+  pi/                — Pi extension (TypeScript, lives in dustbot repo)
+  opencode/          — OpenCode plugin (index.mjs, installed as npm package)
+
+bridge-plugin/       — Rust WASM plugin for zellij (see bridge-plugin/README.md)
+docs/                — feature plans (zellij-support.md)
 ```
 
 ## Key concepts
 
-**Agent detection**: The scanner walks tmux pane process trees looking for known agent binaries (`claude`, `copilot`, `opencode`, `codex`, `cursor`, `pi`). It also checks TTY sessions for agents that spawn under shells.
+**Agent detection**: The scanner walks pane process trees looking for known agent binaries (`claude`, `copilot`, `opencode`, `codex`, `cursor`, `pi`). It also checks TTY sessions for agents that spawn under shells.
 
 **Status detection** has two modes:
-- **Hook-based** (claude, copilot, pi, opencode): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`. Never falls back to scraping.
-- **Screen-scraping** (codex, cursor, others): Pattern-matches pane content for spinners, prompts, permission dialogs. Brittle but works without extensions.
+- **Hook-based** (claude, copilot, pi, opencode): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`. Falls back to screen-scraping for approval detection only.
+- **Screen-scraping** (codex, cursor, others): Pattern-matches pane content for spinners, prompts, permission dialogs. The generic detector regexes are tested in `scanner.test.ts`.
 
-**Preview**: The dashboard can swap an agent pane into a split beside itself using `tmux swap-pane`. Pane IDs follow the process (not the position) after a swap. The scan loop re-adds the previewed agent to the list by searching for `agentTmuxId` in unfiltered scan results.
+**Preview**: The dashboard swaps an agent pane into a split beside itself using `tmux swap-pane`. Pane IDs follow the process (not the position) after a swap. `filterAgents()` in scanner.ts handles re-adding swapped agents to the scan results.
 
-**Helper zones**: Persistent tmux panes in the preview layout that show companion tools (lazygit, yazi, etc.) from the agent's original window. Zones are created once and helpers are swapped in/out on agent switch.
+**Grid view**: Shows multiple agent panes simultaneously in a dynamic grid layout. Layouts computed by `computeLayout()` (1-12 agents, tested). Grid panes are created via tmux splits with even distribution. The dashboard pane is part of the grid. Supports scoped (g = current session) and unscoped (G = all agents) modes. Session switching on j/k navigation.
+
+**Helper zones**: Persistent tmux panes in the preview layout that show companion tools (lazygit, yazi, etc.) from the agent's original window. Managed by `zones.ts` — zones are created once and helpers are swapped in/out on agent switch.
+
+**Multiplexer abstraction**: `multiplexer.ts` defines a shared interface. Auto-detects tmux (`$TMUX`) vs zellij (`$ZELLIJ_SESSION_NAME`). Zellij backend uses a WASM bridge plugin for operations the CLI can't do (focus by ID, cross-tab pane movement, PID lookup).
 
 ## Important patterns
 
-- `process.stdout.columns` is synced from actual tmux pane width via `getPaneWidth()` because the PTY size often doesn't match after tmux rearranges panes. A `prependListener("resize")` interceptor prevents SIGWINCH from restoring stale values.
-- Async scans use a sequence counter (`scanSeq`) to discard stale results after preview switches. Any code that changes preview state must call `doScan()` after to invalidate in-flight scans.
-- Mouse input uses Ink's `internal_eventEmitter` (not `stdin.on("data")`) to avoid conflicts with Ink's paused-mode stdin handling.
-- `selfWindowId` must use `-t ${TMUX_PANE}` when querying tmux to avoid focus-dependent results.
+- **Shell execution**: All `execSync`/`execAsync` calls go through `shell.ts`. Never import `child_process` directly in other modules.
+- **Constants**: Magic numbers live in `constants.ts` (sidebar width, debounce ms, dashboard sizing). Use `calcDashboardCols()` instead of inline math.
+- **Pane width sync**: `process.stdout.columns` is synced from actual tmux pane width via `getPaneWidth()` because the PTY size often doesn't match after tmux rearranges panes. A `prependListener("resize")` interceptor prevents SIGWINCH from restoring stale values.
+- **Scan sequence**: Async scans use `scanSeq` to discard stale results. Any code that changes preview/grid state must call `doScan()` to invalidate in-flight scans.
+- **Scan filtering**: `filterAgents()` is a pure function that handles self-exclusion, preview pane re-adding, and grid pane re-adding. It's tested independently in `scanner.test.ts`.
+- **Mouse input**: Uses Ink's `internal_eventEmitter` (not `stdin.on("data")`) to avoid conflicts with Ink's paused-mode stdin handling.
+- **tmux window naming**: Must set both `automatic-rename off` AND `allow-rename off` to prevent helper programs (yazi) from overwriting window names via escape sequences. Then explicitly `rename-window`.
+- **tmux hooks**: The correct hook for pane focus changes is `after-select-pane` (NOT `pane-focus-in` which doesn't exist). Used for grid focus tracking.
 
 ## Adding a new agent
 
@@ -67,6 +85,28 @@ extensions/
 4. Add `setup<Name>()` / `uninstall<Name>()` in `setup.ts`, wire into `setup()` / `uninstall()` / `computeSetupHash()`
 
 States: `working`, `idle`, `approval`, `question`
+
+## Copilot extension
+
+The copilot extension (`extensions/copilot/extension.mjs`) uses the `@github/copilot-sdk`:
+- `onPermissionRequest: approveAll` — required by SDK, can't be omitted or it crashes
+- SDK events for state reporting: `tool.execution_start` (working), `tool.execution_start` with `ask_user` (approval), `permission.requested` (approval), `session.idle` (idle)
+- SDK docs: `~/.copilot/pkg/universal/1.0.3/copilot-sdk/` (types in `types.d.ts`, examples in `docs/examples.md`)
+- `onPermissionRequest` replaces copilot's native approval UI — no way to "pass through"
+
+## Build & test
+
+```bash
+npm run build        # tsc → dist/
+npm run test         # vitest run (58 tests)
+npm run dev          # tsc --watch
+npm run dev:watch    # vite-node hot reload for watch mode
+```
+
+Test files: `src/*.test.ts` (excluded from tsc output via tsconfig.json).
+- `grid.test.ts` — layout computation, geometry, tiling, contiguity (22 tests)
+- `scanner.test.ts` — detector selection, generic detector regexes, filterAgents (27 tests)
+- `state.test.ts` — priority logic, session filtering (9 tests)
 
 ## Issue tracking
 
@@ -81,15 +121,3 @@ br close <id>        # complete issue
 br delete <id>       # delete (tombstones by default, --hard to purge)
 br sync              # sync with git
 ```
-
-Note: `bd` is a legacy alias — always use `br`.
-
-## Build & test
-
-```bash
-npm run build        # tsc → dist/
-npm run dev          # tsc --watch
-npm run dev:watch    # vite-node hot reload for watch mode
-```
-
-No test suite yet. Manual testing via `agents watch` in a tmux session with agent panes running.
