@@ -226,14 +226,14 @@ function scanSync(): AgentPane[] {
 
     const wact = parseInt(wactStr, 10) || 0;
     const { status, detail } = detectStatusSync(pane, title, wact, agentName, tmuxPaneId);
-    const paneShort = pane.replace(/\.0$/, "");
+    const paneShort = pane.replace(/\.\d+$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
     const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
 
     results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd });
   }
 
-  results.sort((a, b) => a.pane.localeCompare(b.pane));
+  results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
   return results;
 }
 
@@ -319,7 +319,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
 
     const wact = parseInt(wactStr, 10) || 0;
     const { status, detail } = await detectStatus(pane, title, wact, agentName, tmuxPaneId);
-    const paneShort = pane.replace(/\.0$/, "");
+    const paneShort = pane.replace(/\.\d+$/, "");
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
     const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
 
@@ -328,7 +328,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);
 
-  results.sort((a, b) => a.pane.localeCompare(b.pane));
+  results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
   return results;
 }
 
@@ -425,6 +425,11 @@ export function ownPaneId(): string {
 /** Kill a pane by its %N id. */
 export function killPane(id: string): void {
   execSync_(`tmux kill-pane -t ${id} 2>/dev/null`);
+}
+
+/** Kill an entire tmux window by session:window_index. */
+export function killWindow(windowId: string): void {
+  execSync_(`tmux kill-window -t ${JSON.stringify(windowId)} 2>/dev/null`);
 }
 
 /** Find sibling panes in the same tmux window, excluding the given pane. */

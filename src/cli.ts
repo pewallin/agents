@@ -7,6 +7,7 @@ import { scan, switchBack } from "./scanner.js";
 import { reportState } from "./state.js";
 import { setup, uninstall, autoSetupIfNeeded } from "./setup.js";
 import { createWorkspace } from "./workspace.js";
+import { getProfileNames, resolveProfile } from "./config.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
@@ -177,15 +178,40 @@ program
 program
   .command("workspace")
   .alias("ws")
-  .description("Create a new workspace window with agent + helper panes")
-  .argument("[command...]", "Agent command + args (uses profile or defaultCommand)")
-  .option("-p, --profile <name>", "Launch profile name")
-  .option("-n, --name <name>", "Window name (defaults to command basename)")
+  .description("Create a new agent workspace in the current directory")
+  .argument("[profile]", "Profile name (omit to list available profiles)")
+  .argument("[overrides...]", "Override agent command (appended after profile command)")
+  .option("-n, --name <name>", "Window name override")
   .option("-l, --layout <layout>", "Layout name (default, small, or custom)")
   .allowUnknownOption()
-  .action((commandParts, opts) => {
-    const cmd = commandParts.length ? commandParts.join(" ") : undefined;
-    createWorkspace(cmd, opts.name, opts.layout, { profile: opts.profile });
+  .action((profile, overrides, opts) => {
+    const profiles = getProfileNames();
+    if (!profile) {
+      console.log("Available profiles:");
+      for (const name of profiles) {
+        const p = resolveProfile(name);
+        console.log(`  ${name}  ${p.command}`);
+      }
+      process.exit(0);
+    }
+    if (!profiles.includes(profile)) {
+      console.error(`Unknown profile "${profile}". Available: ${profiles.join(", ")}`);
+      process.exit(1);
+    }
+    const resolved = resolveProfile(profile);
+    const cmd = overrides.length ? `${resolved.command} ${overrides.join(" ")}` : undefined;
+    createWorkspace(cmd, opts.name, opts.layout, { profile, cwd: process.cwd() });
+    // New pane shell startups trigger iTerm2/terminal DA queries whose responses
+    // leak back to this pane's input buffer. Drain them before exiting.
+    if (process.stdin.isTTY) {
+      try {
+        process.stdin.setRawMode(true);
+        process.stdin.resume();
+        process.stdin.on("data", () => {});
+        setTimeout(() => process.exit(0), 300);
+        return;
+      } catch {}
+    }
   });
 
 program

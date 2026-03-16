@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Text, Box, useApp, useInput } from "ink";
-import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, showPlaceholder, focusPane, ownPaneId, findSiblingPanes, createSplitPane, paneExists, getPaneWidth, resizePaneWidth } from "../scanner.js";
+import { scanAsync, switchToPane, createPreviewSplit, swapPanes, killPane, killWindow, showPlaceholder, focusPane, ownPaneId, findSiblingPanes, createSplitPane, paneExists, getPaneWidth, resizePaneWidth } from "../scanner.js";
 import type { AgentPane } from "../scanner.js";
 import { AgentTable } from "./AgentTable.js";
 import { useMouse } from "../mouse.js";
@@ -194,6 +194,7 @@ export function Dashboard({ interval }: Props) {
     | { step: "cwd"; profile: string; session: string; cwdInput: string; cwdValid: boolean };
   const [wizard, setWizard] = useState<WizardState | null>(null);
   const [showKeys, setShowKeys] = useState(true);
+  const [confirmKill, setConfirmKill] = useState<AgentPane | null>(null);
   const { exit } = useApp();
 
   /** Sync pane width from tmux into both React state and process.stdout.columns.
@@ -507,6 +508,25 @@ export function Dashboard({ interval }: Props) {
   }, []);
 
   useInput((input, key) => {
+    // ── Kill confirmation ──
+    if (confirmKill) {
+      if (input === "y" || input === "Y") {
+        const agent = confirmKill;
+        setConfirmKill(null);
+        const pv = previewRef.current;
+        if (pv && pv.agentTmuxId === agent.tmuxPaneId) {
+          if (pv.zones.length) destroyZones(pv.zones);
+          if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
+          setPreview(null);
+        }
+        killWindow(agent.windowId || agent.paneId);
+        doScan();
+        return;
+      }
+      setConfirmKill(null);
+      return;
+    }
+
     // ── New-agent wizard ──
     if (wizard) {
       if (key.escape) { setWizard(null); return; }
@@ -714,6 +734,11 @@ export function Dashboard({ interval }: Props) {
       }
       return;
     }
+    if (input === "x") {
+      const agent = agents[idx];
+      if (agent) setConfirmKill(agent);
+      return;
+    }
     if (input === "?") {
       setShowKeys((v) => !v);
       return;
@@ -752,7 +777,12 @@ export function Dashboard({ interval }: Props) {
           <AgentTable agents={agents} selectedIndex={idx} showCursor />
           <Text> </Text>
           <Box paddingLeft={2} columnGap={1} overflowX="hidden">
-            {wizard ? (
+            {confirmKill ? (
+              <Box flexDirection="column">
+                <Text wrap="truncate" color="red">Kill workspace <Text bold>{confirmKill.pane}</Text>?</Text>
+                <Text dimColor wrap="truncate">y · any key to cancel</Text>
+              </Box>
+            ) : wizard ? (
               <Box flexDirection="column">
                 {wizard.step === "profile" && (<>
                   <Text dimColor wrap="truncate">New agent — select profile:</Text>
@@ -810,6 +840,7 @@ export function Dashboard({ interval }: Props) {
                     <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
+                    <Text wrap="truncate"><Text color="#6b7385">x</Text>     <Text color="#565e6e">kill workspace</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">q</Text>     <Text color="#565e6e">quit</Text>  <Text color="#565e6e">· ? hide</Text></Text>
                   </Box>
                 ) : (

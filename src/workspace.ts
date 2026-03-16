@@ -64,7 +64,9 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
   }
 
   const defs = resolveLayout(config, layoutName);
-  const windowName = name || cmd.split(/\s+/)[0];
+  const baseName = name || cmd.split(/\s+/)[0];
+  const cwdBase = (opts?.cwd || process.cwd()).split("/").pop() || "";
+  const windowName = cwdBase ? `${baseName}:${cwdBase}` : baseName;
 
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
@@ -83,6 +85,8 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
     console.error("Failed to create tmux window");
     process.exit(1);
   }
+  exec(`tmux set-option -t ${agentPaneId} -w automatic-rename off`);
+  exec(`tmux set-option -t ${agentPaneId} -w allow-rename off`);
   exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);
 
   const paneMap: Record<string, string> = { agent: agentPaneId };
