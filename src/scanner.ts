@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { exec, execAsync } from "./shell.js";
 import { getAgentState, getAgentStateEntry } from "./state.js";
+import { getMux, detectMultiplexer } from "./multiplexer.js";
 
 export type AgentStatus = "attention" | "question" | "working" | "stalled" | "idle";
 
@@ -182,7 +183,133 @@ async function detectStatus(
 
 // Sync version for CLI commands that don't need async
 export function scan(): AgentPane[] {
+  if (detectMultiplexer() === "zellij") return scanZellij();
   return scanSync();
+}
+
+// ── Zellij scan path ────────────────────────────────────────────────
+
+function scanZellij(): AgentPane[] {
+  const mux = getMux();
+  const panes = mux.listPanes();
+  const results: AgentPane[] = [];
+
+  for (const p of panes) {
+    // Get PID — zellij gives us the shell PID, walk tree to find agent
+    let agentName: string | null = null;
+
+    if (p.pid) {
+      const leafCmd = findLeafProcessSync(String(p.pid));
+      if (AGENT_PROCS.test(leafCmd)) {
+        agentName = leafCmd;
+      }
+    }
+
+    // Fallback: check the initial command from zellij
+    if (!agentName && p.command) {
+      const cmd = p.command.replace(/.*\//, "").replace(/^-/, "");
+      if (AGENT_PROCS.test(cmd)) agentName = cmd;
+    }
+
+    if (!agentName) continue;
+
+    // Get pane content for status detection
+    const content = mux.getPaneContent(p.id, 20);
+    const detector = getDetector(agentName);
+    const dur = stateDuration(agentName, p.id);
+
+    let status: AgentStatus;
+    let detail: string | undefined = dur;
+
+    if (detector.isApproval(content, p.id)) {
+      status = "attention";
+    } else if (detector.isIdle(content, p.title, p.id)) {
+      status = detector.isQuestion(content, p.id) ? "question" : "idle";
+      detail = status === "idle" ? undefined : dur;
+    } else if (detector.isWorking(content, p.title, p.id)) {
+      status = "working";
+    } else {
+      status = "idle";
+      detail = undefined;
+    }
+
+    const paneRef = `${p.session}:${p.tab}`;
+    const titleClean = p.title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
+
+    results.push({
+      pane: paneRef,
+      paneId: paneRef,
+      tmuxPaneId: p.id,
+      title: titleClean,
+      agent: friendlyName(agentName),
+      status,
+      detail,
+      windowId: paneRef,
+      cwd: p.cwd?.replace(/^\/Users\/[^/]+/, "~") || undefined,
+    });
+  }
+
+  results.sort((a, b) => a.pane.localeCompare(b.pane));
+  return results;
+}
+
+async function scanZellijAsync(): Promise<AgentPane[]> {
+  const mux = getMux();
+  const panes = await mux.listPanesAsync();
+  const results: AgentPane[] = [];
+
+  for (const p of panes) {
+    let agentName: string | null = null;
+
+    if (p.pid) {
+      const leafCmd = await findLeafProcess(String(p.pid));
+      if (AGENT_PROCS.test(leafCmd)) agentName = leafCmd;
+    }
+
+    if (!agentName && p.command) {
+      const cmd = p.command.replace(/.*\//, "").replace(/^-/, "");
+      if (AGENT_PROCS.test(cmd)) agentName = cmd;
+    }
+
+    if (!agentName) continue;
+
+    const content = mux.getPaneContent(p.id, 20);
+    const detector = getDetector(agentName);
+    const dur = stateDuration(agentName, p.id);
+
+    let status: AgentStatus;
+    let detail: string | undefined = dur;
+
+    if (detector.isApproval(content, p.id)) {
+      status = "attention";
+    } else if (detector.isIdle(content, p.title, p.id)) {
+      status = detector.isQuestion(content, p.id) ? "question" : "idle";
+      detail = status === "idle" ? undefined : dur;
+    } else if (detector.isWorking(content, p.title, p.id)) {
+      status = "working";
+    } else {
+      status = "idle";
+      detail = undefined;
+    }
+
+    const paneRef = `${p.session}:${p.tab}`;
+    const titleClean = p.title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
+
+    results.push({
+      pane: paneRef,
+      paneId: paneRef,
+      tmuxPaneId: p.id,
+      title: titleClean,
+      agent: friendlyName(agentName),
+      status,
+      detail,
+      windowId: paneRef,
+      cwd: p.cwd?.replace(/^\/Users\/[^/]+/, "~") || undefined,
+    });
+  }
+
+  results.sort((a, b) => a.pane.localeCompare(b.pane));
+  return results;
 }
 
 function scanSync(): AgentPane[] {
@@ -278,6 +405,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
 
 // Async version for watch mode — doesn't block the Ink render loop
 export async function scanAsync(): Promise<AgentPane[]> {
+  if (detectMultiplexer() === "zellij") return scanZellijAsync();
   const raw = await execAsync(
     `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
   );

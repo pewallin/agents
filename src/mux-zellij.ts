@@ -36,37 +36,89 @@ async function pluginCmdAsync(name: string, payload: string = "", args?: Record<
   return execAsync(cmd);
 }
 
-interface ZellijPaneJson {
+/** Raw JSON from zellij CLI list-panes --all --json */
+interface ZellijCliPane {
+  id: number;
+  is_plugin: boolean;
+  is_suppressed: boolean;
+  is_floating: boolean;
+  is_focused: boolean;
+  title: string;
+  pane_x: number;
+  pane_y: number;
+  pane_content_x: number;
+  pane_content_y: number;
+  pane_content_columns: number;
+  pane_content_rows: number;
+  terminal_command: string | null;
+  plugin_url: string | null;
+  tab_position: number;
+  tab_name: string;
+  pane_command?: string;
+  pane_cwd?: string;
+}
+
+/** Raw JSON from bridge plugin list-panes */
+interface ZellijPluginPane {
   id: string;
   title: string;
-  command: string | null;
+  command: string;
   tab_index: number;
   tab_name: string;
   focused: boolean;
-  is_floating: boolean;
-  is_suppressed: boolean;
+  suppressed: boolean;
   x: number;
   y: number;
-  width: number;
-  height: number;
+  w: number;
+  h: number;
 }
 
-function parsePaneList(json: string): MuxPaneInfo[] {
+/** Parse CLI list-panes --all --json output. */
+function parseCliPanes(json: string): MuxPaneInfo[] {
   try {
-    const panes: ZellijPaneJson[] = JSON.parse(json);
+    const panes: ZellijCliPane[] = JSON.parse(json);
     const session = process.env.ZELLIJ_SESSION_NAME || "";
     return panes
-      .filter(p => !p.is_suppressed)
+      .filter(p => !p.is_plugin && !p.is_suppressed)
+      .map(p => ({
+        id: `terminal_${p.id}`,
+        title: p.title,
+        command: p.pane_command || p.terminal_command || "",
+        pid: null, // filled in via plugin get-pane-pid
+        tab: p.tab_name,
+        session,
+        focused: p.is_focused,
+        tty: "",
+        cwd: p.pane_cwd,
+        geometry: {
+          x: p.pane_content_x,
+          y: p.pane_content_y,
+          width: p.pane_content_columns,
+          height: p.pane_content_rows,
+        },
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** Parse bridge plugin list-panes output. */
+function parsePluginPanes(json: string): MuxPaneInfo[] {
+  try {
+    const panes: ZellijPluginPane[] = JSON.parse(json);
+    const session = process.env.ZELLIJ_SESSION_NAME || "";
+    return panes
+      .filter(p => !p.suppressed)
       .map(p => ({
         id: p.id,
         title: p.title,
         command: p.command || "",
-        pid: null, // filled in lazily via getPanePid
+        pid: null,
         tab: p.tab_name,
         session,
         focused: p.focused,
         tty: "",
-        geometry: { x: p.x, y: p.y, width: p.width, height: p.height },
+        geometry: { x: p.x, y: p.y, width: p.w, height: p.h },
       }));
   } catch {
     return [];
@@ -77,19 +129,39 @@ export class ZellijMux implements Multiplexer {
   readonly kind = "zellij" as const;
 
   listPanes(): MuxPaneInfo[] {
-    const json = pluginCmd("list-panes");
-    return parsePaneList(json);
+    // CLI list-panes is faster and has richer data (pane_command, pane_cwd)
+    const cliJson = exec("zellij action list-panes --all --json 2>/dev/null");
+    if (cliJson) {
+      const panes = parseCliPanes(cliJson);
+      // Enrich with PIDs from plugin
+      for (const p of panes) {
+        const pidJson = pluginCmd("get-pane-pid", p.id);
+        try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
+      }
+      return panes;
+    }
+    // Fallback to plugin
+    return parsePluginPanes(pluginCmd("list-panes"));
   }
 
   async listPanesAsync(): Promise<MuxPaneInfo[]> {
-    const json = await pluginCmdAsync("list-panes");
-    return parsePaneList(json);
+    const cliJson = await execAsync("zellij action list-panes --all --json 2>/dev/null");
+    if (cliJson) {
+      const panes = parseCliPanes(cliJson);
+      // Enrich with PIDs from plugin (parallelized)
+      await Promise.all(panes.map(async (p) => {
+        const pidJson = await pluginCmdAsync("get-pane-pid", p.id);
+        try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
+      }));
+      return panes;
+    }
+    return parsePluginPanes(await pluginCmdAsync("list-panes"));
   }
 
-  getPaneContent(paneId: string, lines?: number): string {
-    // Use the 0.44 CLI dump-screen with --pane-id
-    const linesFlag = lines ? "" : "-f"; // no line limit flag in zellij, use full or viewport
-    return exec(`zellij action dump-screen --pane-id ${paneId}${lines ? "" : " -f"}`);
+  getPaneContent(paneId: string, _lines?: number): string {
+    // zellij dump-screen returns the viewport (no line count flag)
+    // Use --pane-id to target specific pane without focus
+    return exec(`zellij action dump-screen --pane-id ${paneId} 2>/dev/null`);
   }
 
   createSplit(targetPaneId: string, direction: "right" | "down", size?: string): string | null {
@@ -157,7 +229,12 @@ export class ZellijMux implements Multiplexer {
   }
 
   ownPaneId(): string {
-    return process.env.ZELLIJ_PANE_ID || "";
+    const id = process.env.ZELLIJ_PANE_ID || "";
+    // ZELLIJ_PANE_ID is a bare integer — normalize to terminal_N
+    if (id && !id.startsWith("terminal_") && !id.startsWith("plugin_")) {
+      return `terminal_${id}`;
+    }
+    return id;
   }
 
   ownTabIndex(): number {

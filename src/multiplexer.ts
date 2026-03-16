@@ -11,6 +11,7 @@ export interface MuxPaneInfo {
   session: string;
   focused: boolean;
   tty: string;
+  cwd?: string;
   geometry: { x: number; y: number; width: number; height: number };
 }
 
@@ -45,7 +46,8 @@ export interface Multiplexer {
   showPlaceholder(paneId: string, agentName: string, agentPane: string): void;
 }
 
-/** Detect which multiplexer we're running inside. */
+/** Detect which multiplexer we're running inside.
+ *  Prefers zellij if available, falls back to tmux. */
 export function detectMultiplexer(): "tmux" | "zellij" | null {
   if (process.env.ZELLIJ_SESSION_NAME) return "zellij";
   if (process.env.TMUX) return "tmux";
@@ -53,13 +55,19 @@ export function detectMultiplexer(): "tmux" | "zellij" | null {
 }
 
 let _mux: Multiplexer | null = null;
+let _forceKind: "tmux" | "zellij" | null = null;
+
+/** Force a specific multiplexer backend (e.g. via --tmux flag). */
+export function setMultiplexer(kind: "tmux" | "zellij"): void {
+  _forceKind = kind;
+  _mux = null; // reset singleton
+}
 
 /** Get the singleton multiplexer instance, auto-detecting the backend. */
 export function getMux(): Multiplexer {
   if (_mux) return _mux;
-  const kind = detectMultiplexer();
+  const kind = _forceKind || detectMultiplexer();
   if (kind === "zellij") {
-    // Dynamic import to avoid loading zellij code in tmux
     const { ZellijMux } = require("./mux-zellij.js") as typeof import("./mux-zellij.js");
     _mux = new ZellijMux();
   } else {
