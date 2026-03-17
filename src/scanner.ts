@@ -442,12 +442,21 @@ export function switchBack(): boolean {
  *  (vertical) reserved for the dashboard pane – the agent gets the rest.
  *  Always targets our own pane (via $TMUX_PANE) so focus doesn't matter. */
 export function createPreviewSplit(dashboardSize: number, vertical: boolean = false): string {
+  if (detectMultiplexer() === "zellij") {
+    const mux = getMux();
+    const selfId = mux.ownPaneId();
+    // Create split next to dashboard, sized to leave dashboardSize for dashboard
+    const curWidth = mux.getPaneWidth(selfId);
+    const previewSize = vertical
+      ? Math.max(20, curWidth - dashboardSize - 1)
+      : Math.max(5, (process.stdout.rows || 24) - dashboardSize - 1);
+    const dir = vertical ? "right" : "down";
+    const splitId = mux.createSplit(selfId, dir, String(previewSize));
+    return splitId || "";
+  }
   const self = process.env.TMUX_PANE || "";
   const target = self ? ` -t ${self}` : "";
   if (vertical) {
-    // Query current pane width so we can compute the preview size directly.
-    // Using -l at split time avoids resize-pane which can steal space from
-    // neighboring panes outside the split.
     const curWidth = parseInt(exec(`tmux display-message -t ${self || ""} -p '#{pane_width}'`) || "120", 10);
     const previewCols = Math.max(20, curWidth - dashboardSize - 1);
     return exec(`tmux split-window -h -d${target} -l ${previewCols} -P -F '#{pane_id}' 'tail -f /dev/null'`);
@@ -488,8 +497,41 @@ export function resizePaneWidth(paneId: string, width: number): void {
   exec(`tmux resize-pane -t ${paneId} -x ${width} 2>/dev/null`);
 }
 
-/** Swap two panes by their %N ids. */
+/** Swap two panes by their IDs.
+ *  tmux: real bidirectional swap.
+ *  zellij: move src to dst's tab via breakPaneToTab, then close dst.
+ *  The caller must ensure dst is a disposable placeholder (tail -f /dev/null).
+ */
 export function swapPanes(src: string, dst: string): void {
+  if (detectMultiplexer() === "zellij") {
+    const mux = getMux();
+    // Find dst's tab (the dashboard tab where the split placeholder lives)
+    const dstPane = mux.listPanes().find(p => p.id === dst);
+    if (!dstPane) return;
+    const targetTabId = dstPane.tabId;
+
+    // Find src's tab — if src is the only pane, create a placeholder first
+    const srcPane = mux.listPanes().find(p => p.id === src);
+    if (srcPane) {
+      const srcTabPanes = mux.listPanes().filter(p => p.tabIndex === srcPane.tabIndex);
+      if (srcTabPanes.length <= 1) {
+        // Must add a pane to src's tab before moving src out.
+        // Focus src's tab, create a split, then come back.
+        exec(`zellij action go-to-tab ${srcPane.tabIndex + 1}`); // 1-based
+        mux.createSplit(src, "down", "1");
+        exec(`zellij action go-to-tab ${dstPane.tabIndex + 1}`);
+      }
+    }
+
+    // Move src to dst's tab using stable tab_id
+    if (targetTabId !== undefined) {
+      mux.breakPaneToTab(src, dstPane.tabIndex);
+    }
+
+    // Close the placeholder (dst) — src takes its place
+    mux.closePane(dst);
+    return;
+  }
   exec(`tmux swap-pane -d -s ${src} -t ${dst}`);
 }
 
@@ -715,6 +757,10 @@ printf "%*s\\n" $(( (c + \${#msg}) / 2 )) "$msg"
 tput sgr0
 while true; do sleep 86400; done
 `;
+  if (detectMultiplexer() === "zellij") {
+    getMux().showPlaceholder(paneId, agentName, agentPane);
+    return;
+  }
   const path = join(tmpdir(), `agents-ph-${paneId.replace("%", "")}.sh`);
   writeFileSync(path, script, { mode: 0o755 });
   exec(`tmux respawn-pane -k -t ${paneId} 'bash ${path}'`);

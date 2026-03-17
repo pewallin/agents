@@ -193,22 +193,8 @@ export function Dashboard({ interval }: Props) {
     if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
     const pv = previewRef.current;
     if (!pv) return;
-    if (isZellij) {
-      const mux = getMux();
-      // Move agent back to its original tab
-      if (pv.originalTabIndex !== undefined) {
-        mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
-      }
-      // Kill the placeholder (it's a tail -f /dev/null we created)
-      if (pv.splitPaneId) {
-        try { mux.closePane(pv.splitPaneId); } catch {}
-      }
-      syncPaneSize();
-      process.stdout.write("\x1b[2J\x1b[H");
-      setPreview(null);
-      doScan();
-      return;
-    }
+    // Unified restore — same for tmux and zellij.
+    // swapPanes/killPane/paneExists have mux-specific implementations in scanner.ts.
     if (savedWidth.current) {
       resizePaneWidth(selfPaneId.current, savedWidth.current);
       savedWidth.current = 0;
@@ -237,21 +223,11 @@ export function Dashboard({ interval }: Props) {
       // Preview teardown
       const pv = previewRef.current;
       if (!pv) return;
-      if (isZellij) {
-        try {
-          const mux = getMux();
-          if (pv.originalTabIndex !== undefined) {
-            mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
-          }
-          if (pv.splitPaneId) mux.closePane(pv.splitPaneId);
-        } catch {}
-      } else {
-        if (pv.zones.length) destroyZones(pv.zones);
-        if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
-          swapPanes(pv.agentTmuxId, pv.splitPaneId);
-        }
-        if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
+      if (pv.zones.length) destroyZones(pv.zones);
+      if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
+        swapPanes(pv.agentTmuxId, pv.splitPaneId);
       }
+      if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
       previewRef.current = null;
       _previewStore = null;
       savePreviewState(null);
@@ -320,68 +296,11 @@ export function Dashboard({ interval }: Props) {
   if (!helperLayoutNames.current) helperLayoutNames.current = Object.keys(helperLayouts.current);
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
-    if (isZellij) {
-      // Zellij preview: move the agent pane into the dashboard tab.
-      // breakPaneToTab silently destroys the pane if it's the last one in its tab,
-      // so we must ensure a placeholder exists in the agent's tab BEFORE moving.
-      // We create the placeholder by focusing the agent's tab, creating a pane there,
-      // then moving the agent. All synchronous — no race condition.
-      const mux = getMux();
-      const dashTabIdx = mux.ownTabIndex();
-
-      const allPanes = mux.listPanes();
-      const agentInfo = allPanes.find(p => p.id === agent.tmuxPaneId);
-      const originalTabIndex = agentInfo?.tabIndex ?? 0;
-      const originalTabName = agentInfo?.tab ?? "";
-      const sameTab = originalTabIndex === dashTabIdx;
-
-      let placeholderId = "";
-      if (!sameTab) {
-        // Check if agent is the only terminal pane in its tab
-        const tabPanes = allPanes.filter(p => p.tabIndex === originalTabIndex);
-        if (tabPanes.length <= 1) {
-          // Must create a placeholder FIRST, in the agent's tab.
-          // Focus agent's tab, create pane, then move agent.
-          exec(`zellij action go-to-tab ${originalTabIndex + 1}`); // 1-based
-          const dummyId = mux.createSplit(agent.tmuxPaneId, "down", "1");
-          if (dummyId) placeholderId = dummyId;
-          exec(`zellij action go-to-tab ${dashTabIdx + 1}`); // back to dashboard
-        }
-        mux.breakPaneToTab(agent.tmuxPaneId, dashTabIdx);
-      }
-
-      // Resize: make agent pane take the preview area
-      try {
-        const tabPanes = mux.listPanes().filter(p => p.tabIndex === dashTabIdx);
-        const totalCols = tabPanes.reduce((sum, p) => sum + p.geometry.width, 0) + (tabPanes.length - 1);
-        const dashCols = calcDashboardCols(totalCols);
-        const agentCols = totalCols - dashCols - (tabPanes.length - 1);
-        if (agentCols > 0) {
-          resizePaneWidth(agent.tmuxPaneId, agentCols);
-        }
-      } catch {}
-      syncPaneSize();
-      process.stdout.write("\x1b[2J\x1b[H");
-
-      const pv: PreviewState = {
-        splitPaneId: placeholderId,
-        agentTmuxId: agent.tmuxPaneId,
-        agentName: agent.agent,
-        agentPane: agent.pane,
-        agentPaneId: agent.paneId,
-        vertical: forceVertical,
-        windowId: agent.windowId || "",
-        zones: [],
-        helperLayout: null,
-        originalTabIndex,
-        originalTabName,
-      };
-      previewRef.current = pv;
-      _previewStore = pv;
-      setPreview(pv);
-      doScan();
-      return;
-    }
+    // Unified preview path — both tmux and zellij use the same flow:
+    // 1. createPreviewSplit → creates sized split placeholder
+    // 2. swapPanes(agent, split) → agent goes into the split, placeholder to agent's spot
+    // 3. showPlaceholder → shows message in agent's original position
+    // The multiplexer-specific logic is in scanner.ts functions.
     const dashboardRows = 9 + agents.length;
     const termRows = process.stdout.rows || 24;
     const vertical = forceVertical || termRows < dashboardRows + 10;
