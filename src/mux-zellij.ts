@@ -161,9 +161,21 @@ export class ZellijMux implements Multiplexer {
   }
 
   listPanes(): MuxPaneInfo[] {
-    // Single plugin call — returns all panes with PIDs inline.
-    this.ensurePlugin();
-    return parsePluginPanes(pluginCmd("list-panes"));
+    // CLI for fresh pane list (plugin manifest is stale after mutations),
+    // then one plugin call for all PIDs.
+    const cliJson = exec("zellij action list-panes --all --json 2>/dev/null");
+    const panes = cliJson ? parseCliPanes(cliJson) : [];
+    if (panes.length && this.ensurePlugin()) {
+      const ids = panes.map(p => p.id).join(",");
+      const pidsJson = pluginCmd("get-all-pids", ids);
+      try {
+        const pids: Record<string, number | null> = JSON.parse(pidsJson);
+        for (const p of panes) {
+          if (pids[p.id] !== undefined) p.pid = pids[p.id];
+        }
+      } catch {}
+    }
+    return panes;
   }
 
   async listPanesAsync(): Promise<MuxPaneInfo[]> {
@@ -208,17 +220,23 @@ export class ZellijMux implements Multiplexer {
   }
 
   breakPaneToTab(paneId: string, tabIndex: number): boolean {
-    // Prefer stable tab_id over position-based tab_index.
-    // Look up the tab_id from the tab_info for this tabIndex.
-    const panes = this.listPanes();
-    const tabPane = panes.find(p => p.tabIndex === tabIndex);
-    const args: Record<string, string> = { focus: "false" };
-    if (tabPane?.tabId !== undefined) {
-      args.tab_id = String(tabPane.tabId);
-    } else {
-      args.tab_index = String(tabIndex);
+    // zellij 0.44 bug: break_panes_to_tab_with_index has a position/id mismatch.
+    // We still try it but callers should prefer swapPanes which uses break_panes_to_new_tab.
+    const result = pluginCmd("break-pane-to-tab", paneId, {
+      tab_index: String(tabIndex),
+      focus: "false",
+    });
+    try {
+      return JSON.parse(result).ok === true;
+    } catch {
+      return false;
     }
-    const result = pluginCmd("break-pane-to-tab", paneId, args);
+  }
+
+  breakPanesToNewTab(paneIds: string[], name?: string): boolean {
+    const args: Record<string, string> = { focus: "false" };
+    if (name) args.name = name;
+    const result = pluginCmd("break-pane-to-new-tab", paneIds.join(","), args);
     try {
       return JSON.parse(result).ok === true;
     } catch {

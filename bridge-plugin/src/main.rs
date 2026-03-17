@@ -51,6 +51,11 @@ impl ZellijPlugin for AgentsBridge {
                 let payload = pipe_message.payload.unwrap_or_default();
                 self.get_pane_pid_json(&payload)
             }
+            "get-all-pids" => {
+                // Payload: comma-separated pane IDs (e.g., "terminal_1,terminal_2,terminal_3")
+                let payload = pipe_message.payload.unwrap_or_default();
+                self.get_all_pids_json(&payload)
+            }
             "focus-pane" => {
                 let payload = pipe_message.payload.unwrap_or_default();
                 self.focus_pane_cmd(&payload)
@@ -58,6 +63,10 @@ impl ZellijPlugin for AgentsBridge {
             "break-pane-to-tab" => {
                 let payload = pipe_message.payload.unwrap_or_default();
                 self.break_pane_cmd(&payload, &pipe_message.args)
+            }
+            "break-pane-to-new-tab" => {
+                let payload = pipe_message.payload.unwrap_or_default();
+                self.break_pane_to_new_tab_cmd(&payload, &pipe_message.args)
             }
             "close-pane" => {
                 let payload = pipe_message.payload.unwrap_or_default();
@@ -134,6 +143,23 @@ impl AgentsBridge {
         }
     }
 
+    /// Batch PID lookup: payload is comma-separated pane IDs.
+    /// Returns JSON object mapping pane IDs to PIDs.
+    fn get_all_pids_json(&self, payload: &str) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for id_str in payload.split(',') {
+            let id_str = id_str.trim();
+            if id_str.is_empty() { continue; }
+            if let Some(id) = parse_terminal_id(id_str) {
+                let pid = get_pane_pid(PaneId::Terminal(id))
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|_| "null".to_string());
+                parts.push(format!("\"{}\":{}", id_str, pid));
+            }
+        }
+        format!("{{{}}}", parts.join(","))
+    }
+
     fn focus_pane_cmd(&self, payload: &str) -> String {
         let id = match parse_terminal_id(payload) {
             Some(id) => id,
@@ -161,6 +187,27 @@ impl AgentsBridge {
         match result {
             Some(_) => "{\"ok\":true}".to_string(),
             None => "{\"error\":\"break_panes failed\"}".to_string(),
+        }
+    }
+
+    /// Break one or more panes to a NEW tab (reliable — avoids position/id mismatch bug).
+    /// Payload: comma-separated pane IDs. Args: name (optional tab name), focus (true/false).
+    fn break_pane_to_new_tab_cmd(&self, payload: &str, args: &BTreeMap<String, String>) -> String {
+        let mut pane_ids: Vec<PaneId> = Vec::new();
+        for id_str in payload.split(',') {
+            if let Some(id) = parse_terminal_id(id_str.trim()) {
+                pane_ids.push(PaneId::Terminal(id));
+            }
+        }
+        if pane_ids.is_empty() {
+            return format!("{{\"error\":\"no valid pane ids\"}}");
+        }
+        let name = args.get("name").cloned();
+        let focus = args.get("focus").map(|s| s == "true").unwrap_or(false);
+        let result = break_panes_to_new_tab(&pane_ids, name, focus);
+        match result {
+            Some(tab_index) => format!("{{\"ok\":true,\"tab_index\":{}}}", tab_index),
+            None => "{\"error\":\"break_panes_to_new_tab failed\"}".to_string(),
         }
     }
 

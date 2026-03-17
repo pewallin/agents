@@ -504,32 +504,30 @@ export function resizePaneWidth(paneId: string, width: number): void {
  */
 export function swapPanes(src: string, dst: string): void {
   if (detectMultiplexer() === "zellij") {
+    // Bidirectional swap: src and dst exchange tabs.
+    // NOTE: zellij's break_panes_to_tab_with_id is buggy (treats id as position),
+    // so we must use tab_index (position) and re-read positions between moves.
+    //
+    // Order: move dst to src's tab FIRST — this ensures src's tab has ≥2 panes,
+    // so when we move src out next, the tab won't collapse and shift positions.
     const mux = getMux();
-    // Find dst's tab (the dashboard tab where the split placeholder lives)
-    const dstPane = mux.listPanes().find(p => p.id === dst);
-    if (!dstPane) return;
-    const targetTabId = dstPane.tabId;
+    const before = mux.listPanes();
+    const srcPane = before.find(p => p.id === src);
+    const dstPane = before.find(p => p.id === dst);
+    if (!srcPane || !dstPane) return;
+    if (srcPane.tabIndex === dstPane.tabIndex) return;
 
-    // Find src's tab — if src is the only pane, create a placeholder first
-    const srcPane = mux.listPanes().find(p => p.id === src);
-    if (srcPane) {
-      const srcTabPanes = mux.listPanes().filter(p => p.tabIndex === srcPane.tabIndex);
-      if (srcTabPanes.length <= 1) {
-        // Must add a pane to src's tab before moving src out.
-        // Focus src's tab, create a split, then come back.
-        exec(`zellij action go-to-tab ${srcPane.tabIndex + 1}`); // 1-based
-        mux.createSplit(src, "down", "1");
-        exec(`zellij action go-to-tab ${dstPane.tabIndex + 1}`);
-      }
-    }
+    // zellij 0.44 bug: break_panes_to_tab_with_index has a position/id mismatch
+    // that makes it unreliable after any tab deletion. Use break_panes_to_new_tab instead.
+    //
+    // Step 1: break dst (placeholder) to a new tab with src's tab name
+    const srcTabName = srcPane.tab || "";
+    mux.breakPanesToNewTab([dst], srcTabName);
 
-    // Move src to dst's tab using stable tab_id
-    if (targetTabId !== undefined) {
-      mux.breakPaneToTab(src, dstPane.tabIndex);
-    }
-
-    // Close the placeholder (dst) — src takes its place
-    mux.closePane(dst);
+    // Step 2: break dashboard + src (agent) together to a new tab
+    const selfId = mux.ownPaneId();
+    const dashTabName = dstPane.tab || "";
+    mux.breakPanesToNewTab([selfId, src], dashTabName);
     return;
   }
   exec(`tmux swap-pane -d -s ${src} -t ${dst}`);

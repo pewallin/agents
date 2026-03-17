@@ -32,8 +32,9 @@ export interface Multiplexer {
   resizePaneWidth(paneId: string, width: number): void;
   getPaneWidth(paneId: string): number;
 
-  // Preview — move pane to dashboard tab, restore later
+  // Preview — move pane(s) between tabs
   breakPaneToTab(paneId: string, tabIndex: number): boolean;
+  breakPanesToNewTab(paneIds: string[], name?: string): boolean;
 
   // Tab/window management
   createTab(name: string, cmd: string, opts?: { cwd?: string; session?: string }): string | null;

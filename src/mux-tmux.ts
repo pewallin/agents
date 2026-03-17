@@ -88,6 +88,11 @@ export class TmuxMux implements Multiplexer {
     return false;
   }
 
+  breakPanesToNewTab(_paneIds: string[], _name?: string): boolean {
+    // tmux uses swap-pane, not break-pane. This is handled by scanner.ts directly.
+    return false;
+  }
+
   createTab(name: string, cmd: string, opts?: { cwd?: string; session?: string }): string | null {
     let cmdStr = "tmux new-window";
     if (opts?.session) cmdStr += ` -t ${JSON.stringify(opts.session + ":")}`;
