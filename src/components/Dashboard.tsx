@@ -193,8 +193,20 @@ export function Dashboard({ interval }: Props) {
     if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
     const pv = previewRef.current;
     if (!pv) return;
-    // Unified restore — same for tmux and zellij.
-    // swapPanes/killPane/paneExists have mux-specific implementations in scanner.ts.
+    if (isZellij) {
+      // Zellij restore: break agent to its own tab, kill placeholder, dashboard stays.
+      const mux = getMux();
+      if (paneExists(pv.agentTmuxId)) {
+        const tabName = pv.originalTabName || pv.agentPane?.split(":")[1] || "restored";
+        mux.breakPanesToNewTab([pv.agentTmuxId], tabName);
+      }
+      if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
+      syncPaneSize();
+      process.stdout.write("\x1b[2J\x1b[H");
+      setPreview(null);
+      return;
+    }
+    // tmux restore
     if (savedWidth.current) {
       resizePaneWidth(selfPaneId.current, savedWidth.current);
       savedWidth.current = 0;
@@ -223,11 +235,20 @@ export function Dashboard({ interval }: Props) {
       // Preview teardown
       const pv = previewRef.current;
       if (!pv) return;
-      if (pv.zones.length) destroyZones(pv.zones);
-      if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
-        swapPanes(pv.agentTmuxId, pv.splitPaneId);
+      if (isZellij) {
+        // Zellij: break agent to its own tab, kill placeholder
+        if (paneExists(pv.agentTmuxId)) {
+          const tabName = (pv as any).originalTabName || "restored";
+          getMux().breakPanesToNewTab([pv.agentTmuxId], tabName);
+        }
+        if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
+      } else {
+        if (pv.zones.length) destroyZones(pv.zones);
+        if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
+          swapPanes(pv.agentTmuxId, pv.splitPaneId);
+        }
+        if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
       }
-      if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
       previewRef.current = null;
       _previewStore = null;
       savePreviewState(null);
