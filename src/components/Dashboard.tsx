@@ -194,30 +194,8 @@ export function Dashboard({ interval }: Props) {
     const pv = previewRef.current;
     if (!pv) return;
     if (isZellij) {
-      // Zellij: move agent back. If original tab was destroyed, create a new one first.
-      const mux = getMux();
-      if (pv.originalTabIndex !== undefined) {
-        // Check if original tab still exists
-        const tabs = mux.listPanes().map(p => p.tabIndex);
-        const tabExists = tabs.includes(pv.originalTabIndex);
-        if (tabExists) {
-          mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
-        } else {
-          // Tab was destroyed — create a new tab and move agent there
-          const tabName = (pv as any).originalTabName || "restored";
-          mux.createTab(tabName, "true"); // "true" is a no-op command
-          // Find the new tab index
-          const newPanes = mux.listPanes();
-          const newTab = newPanes.find(p => p.tab === tabName);
-          if (newTab) {
-            mux.breakPaneToTab(pv.agentTmuxId, newTab.tabIndex);
-            // Close the "true" shell pane we created
-            mux.closePane(newTab.id);
-          }
-        }
-      }
-      syncPaneSize();
-      process.stdout.write("\x1b[2J\x1b[H");
+      // Zellij: just focus back to the dashboard pane
+      getMux().focusPane(selfPaneId.current);
       setPreview(null);
       doScan();
       return;
@@ -251,17 +229,7 @@ export function Dashboard({ interval }: Props) {
       const pv = previewRef.current;
       if (!pv) return;
       if (isZellij) {
-        try {
-          const mux = getMux();
-          if (pv.originalTabIndex !== undefined) {
-            const tabs = mux.listPanes().map(p => p.tabIndex);
-            if (tabs.includes(pv.originalTabIndex)) {
-              mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
-            }
-            // If tab was destroyed, agent stays in dashboard tab — will be
-            // moved to a new tab when the next agent is previewed
-          }
-        } catch {}
+        // No pane movement needed — just switch focus to new agent
       } else {
         if (pv.zones.length) destroyZones(pv.zones);
         if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
@@ -338,38 +306,12 @@ export function Dashboard({ interval }: Props) {
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
     if (isZellij) {
-      // Zellij preview: move the agent pane into the dashboard tab.
-      // No dummy pane needed — breakPaneToTab is atomic. If the agent's
-      // original tab had only this pane, the tab closes (fine — we track
-      // the tab name for restore and create a new tab if needed).
+      // Zellij preview: focus the agent's pane in its own tab.
+      // We do NOT move panes between tabs — breakPaneToTab kills processes
+      // when it moves the last pane out of a tab.
+      // Instead: just switch to the agent's tab and focus its pane.
       const mux = getMux();
-      const dashTabIdx = mux.ownTabIndex();
-
-      const allPanes = mux.listPanes();
-      const agentInfo = allPanes.find(p => p.id === agent.tmuxPaneId);
-      const originalTabIndex = agentInfo?.tabIndex ?? 0;
-      const originalTabName = agentInfo?.tab ?? "";
-      const sameTab = originalTabIndex === dashTabIdx;
-
-      if (!sameTab) {
-        mux.breakPaneToTab(agent.tmuxPaneId, dashTabIdx);
-      }
-
-      // 3. Resize: make agent pane take the preview area
-      try {
-        const tabPanes = mux.listPanes().filter(p => p.tabIndex === dashTabIdx);
-        const totalCols = tabPanes.reduce((sum, p) => sum + p.geometry.width, 0) + (tabPanes.length - 1);
-        const dashCols = calcDashboardCols(totalCols);
-        const agentCols = totalCols - dashCols - (tabPanes.length - 1);
-        if (agentCols > 0) {
-          resizePaneWidth(agent.tmuxPaneId, agentCols);
-        }
-      } catch {}
-      syncPaneSize();
-      process.stdout.write("\x1b[2J\x1b[H");
-
-      // NOTE: No focusPane here — dashboard keeps focus for p/P.
-      // Tab/Space use openPreviewAndFocus which calls focusPane separately.
+      mux.focusPane(agent.tmuxPaneId);
 
       const pv: PreviewState = {
         splitPaneId: "",
@@ -381,13 +323,10 @@ export function Dashboard({ interval }: Props) {
         windowId: agent.windowId || "",
         zones: [],
         helperLayout: null,
-        originalTabIndex,
-        originalTabName,
       };
       previewRef.current = pv;
       _previewStore = pv;
       setPreview(pv);
-      doScan();
       return;
     }
     const dashboardRows = 9 + agents.length;
