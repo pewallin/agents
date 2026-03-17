@@ -92,11 +92,11 @@ impl AgentsBridge {
         };
         let mut parts: Vec<String> = Vec::new();
         for (tab_pos, panes) in &manifest.panes {
-            let tab_name = self.tab_info
+            let tab = self.tab_info
                 .iter()
-                .find(|t| t.position == *tab_pos)
-                .map(|t| t.name.as_str())
-                .unwrap_or("?");
+                .find(|t| t.position == *tab_pos);
+            let tab_name = tab.map(|t| t.name.as_str()).unwrap_or("?");
+            let tab_id = tab.map(|t| t.tab_id).unwrap_or(0);
             for p in panes {
                 if p.is_plugin { continue; }
                 let cmd = p.terminal_command.as_deref().unwrap_or("");
@@ -105,12 +105,13 @@ impl AgentsBridge {
                     .map(|pid| pid.to_string())
                     .unwrap_or_else(|_| "null".to_string());
                 parts.push(format!(
-                    "{{\"id\":\"terminal_{}\",\"title\":{},\"command\":{},\"pid\":{},\"tab_index\":{},\"tab_name\":{},\"focused\":{},\"suppressed\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
+                    "{{\"id\":\"terminal_{}\",\"title\":{},\"command\":{},\"pid\":{},\"tab_index\":{},\"tab_id\":{},\"tab_name\":{},\"focused\":{},\"suppressed\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
                     p.id,
                     json_str(&p.title),
                     json_str(cmd),
                     pid,
                     tab_pos,
+                    tab_id,
                     json_str(tab_name),
                     p.is_focused,
                     p.is_suppressed,
@@ -147,12 +148,16 @@ impl AgentsBridge {
             Some(id) => id,
             None => return format!("{{\"error\":\"bad pane id\"}}"),
         };
-        let tab_index: usize = match args.get("tab_index").and_then(|s| s.parse().ok()) {
-            Some(v) => v,
-            None => return format!("{{\"error\":\"missing or bad tab_index\"}}"),
-        };
         let focus = args.get("focus").map(|s| s == "true").unwrap_or(false);
-        let result = break_panes_to_tab_with_index(&[PaneId::Terminal(id)], tab_index, focus);
+
+        // Prefer tab_id (stable) over tab_index (shifts when tabs are created/destroyed)
+        let result = if let Some(tab_id) = args.get("tab_id").and_then(|s| s.parse::<u64>().ok()) {
+            break_panes_to_tab_with_id(&[PaneId::Terminal(id)], tab_id as usize, focus)
+        } else if let Some(tab_index) = args.get("tab_index").and_then(|s| s.parse::<usize>().ok()) {
+            break_panes_to_tab_with_index(&[PaneId::Terminal(id)], tab_index, focus)
+        } else {
+            return format!("{{\"error\":\"missing tab_id or tab_index\"}}");
+        };
         match result {
             Some(_) => "{\"ok\":true}".to_string(),
             None => "{\"error\":\"break_panes failed\"}".to_string(),

@@ -194,8 +194,17 @@ export function Dashboard({ interval }: Props) {
     const pv = previewRef.current;
     if (!pv) return;
     if (isZellij) {
-      // Zellij: just focus back to the dashboard pane
-      getMux().focusPane(selfPaneId.current);
+      const mux = getMux();
+      // Move agent back to its original tab
+      if (pv.originalTabIndex !== undefined) {
+        mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
+      }
+      // Kill the placeholder (it's a tail -f /dev/null we created)
+      if (pv.splitPaneId) {
+        try { mux.closePane(pv.splitPaneId); } catch {}
+      }
+      syncPaneSize();
+      process.stdout.write("\x1b[2J\x1b[H");
       setPreview(null);
       doScan();
       return;
@@ -229,7 +238,13 @@ export function Dashboard({ interval }: Props) {
       const pv = previewRef.current;
       if (!pv) return;
       if (isZellij) {
-        // No pane movement needed — just switch focus to new agent
+        try {
+          const mux = getMux();
+          if (pv.originalTabIndex !== undefined) {
+            mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
+          }
+          if (pv.splitPaneId) mux.closePane(pv.splitPaneId);
+        } catch {}
       } else {
         if (pv.zones.length) destroyZones(pv.zones);
         if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
@@ -306,15 +321,50 @@ export function Dashboard({ interval }: Props) {
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
     if (isZellij) {
-      // Zellij preview: focus the agent's pane in its own tab.
-      // We do NOT move panes between tabs — breakPaneToTab kills processes
-      // when it moves the last pane out of a tab.
-      // Instead: just switch to the agent's tab and focus its pane.
+      // Zellij preview: move the agent pane into the dashboard tab.
+      // breakPaneToTab silently destroys the pane if it's the last one in its tab,
+      // so we must ensure a placeholder exists in the agent's tab BEFORE moving.
+      // We create the placeholder by focusing the agent's tab, creating a pane there,
+      // then moving the agent. All synchronous — no race condition.
       const mux = getMux();
-      mux.focusPane(agent.tmuxPaneId);
+      const dashTabIdx = mux.ownTabIndex();
+
+      const allPanes = mux.listPanes();
+      const agentInfo = allPanes.find(p => p.id === agent.tmuxPaneId);
+      const originalTabIndex = agentInfo?.tabIndex ?? 0;
+      const originalTabName = agentInfo?.tab ?? "";
+      const sameTab = originalTabIndex === dashTabIdx;
+
+      let placeholderId = "";
+      if (!sameTab) {
+        // Check if agent is the only terminal pane in its tab
+        const tabPanes = allPanes.filter(p => p.tabIndex === originalTabIndex);
+        if (tabPanes.length <= 1) {
+          // Must create a placeholder FIRST, in the agent's tab.
+          // Focus agent's tab, create pane, then move agent.
+          exec(`zellij action go-to-tab ${originalTabIndex + 1}`); // 1-based
+          const dummyId = mux.createSplit(agent.tmuxPaneId, "down", "1");
+          if (dummyId) placeholderId = dummyId;
+          exec(`zellij action go-to-tab ${dashTabIdx + 1}`); // back to dashboard
+        }
+        mux.breakPaneToTab(agent.tmuxPaneId, dashTabIdx);
+      }
+
+      // Resize: make agent pane take the preview area
+      try {
+        const tabPanes = mux.listPanes().filter(p => p.tabIndex === dashTabIdx);
+        const totalCols = tabPanes.reduce((sum, p) => sum + p.geometry.width, 0) + (tabPanes.length - 1);
+        const dashCols = calcDashboardCols(totalCols);
+        const agentCols = totalCols - dashCols - (tabPanes.length - 1);
+        if (agentCols > 0) {
+          resizePaneWidth(agent.tmuxPaneId, agentCols);
+        }
+      } catch {}
+      syncPaneSize();
+      process.stdout.write("\x1b[2J\x1b[H");
 
       const pv: PreviewState = {
-        splitPaneId: "",
+        splitPaneId: placeholderId,
         agentTmuxId: agent.tmuxPaneId,
         agentName: agent.agent,
         agentPane: agent.pane,
@@ -323,10 +373,13 @@ export function Dashboard({ interval }: Props) {
         windowId: agent.windowId || "",
         zones: [],
         helperLayout: null,
+        originalTabIndex,
+        originalTabName,
       };
       previewRef.current = pv;
       _previewStore = pv;
       setPreview(pv);
+      doScan();
       return;
     }
     const dashboardRows = 9 + agents.length;

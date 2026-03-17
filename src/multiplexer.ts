@@ -9,6 +9,7 @@ export interface MuxPaneInfo {
   pid: number | null;
   tab: string;          // window name (tmux) or tab name (zellij)
   tabIndex: number;     // window index (tmux) or tab position (zellij)
+  tabId?: number;       // zellij stable tab ID (survives tab reordering)
   session: string;
   focused: boolean;
   tty: string;

@@ -69,6 +69,7 @@ interface ZellijPluginPane {
   command: string;
   pid: number | null;
   tab_index: number;
+  tab_id: number;
   tab_name: string;
   focused: boolean;
   suppressed: boolean;
@@ -122,6 +123,7 @@ function parsePluginPanes(json: string): MuxPaneInfo[] {
         pid: p.pid || null,
         tab: p.tab_name,
         tabIndex: p.tab_index,
+        tabId: p.tab_id,
         session,
         focused: p.focused,
         tty: "",
@@ -206,10 +208,17 @@ export class ZellijMux implements Multiplexer {
   }
 
   breakPaneToTab(paneId: string, tabIndex: number): boolean {
-    const result = pluginCmd("break-pane-to-tab", paneId, {
-      tab_index: String(tabIndex),
-      focus: "false",
-    });
+    // Prefer stable tab_id over position-based tab_index.
+    // Look up the tab_id from the tab_info for this tabIndex.
+    const panes = this.listPanes();
+    const tabPane = panes.find(p => p.tabIndex === tabIndex);
+    const args: Record<string, string> = { focus: "false" };
+    if (tabPane?.tabId !== undefined) {
+      args.tab_id = String(tabPane.tabId);
+    } else {
+      args.tab_index = String(tabIndex);
+    }
+    const result = pluginCmd("break-pane-to-tab", paneId, args);
     try {
       return JSON.parse(result).ok === true;
     } catch {
