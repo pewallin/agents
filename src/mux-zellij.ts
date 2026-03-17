@@ -16,8 +16,11 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Path to the bridge plugin WASM — shipped alongside the npm package
-// Versioned path to bypass zellij's WASM cache after plugin rebuilds
-const PLUGIN_WASM = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release", "agents-bridge-v7.wasm");
+// Plugin WASM path — agents-bridge-current.wasm is a copy updated by the build script.
+// Zellij caches plugins by path, so using a stable "current" name with the actual binary
+// content changing on rebuild forces zellij to reload when the session restarts.
+const PLUGIN_DIR = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release");
+const PLUGIN_WASM = join(PLUGIN_DIR, "agents-bridge.wasm");
 
 /** Send a command to the bridge plugin via pipe and get JSON response. */
 function pluginCmd(name: string, payload: string = "", args?: Record<string, string>): string {

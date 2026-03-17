@@ -202,6 +202,8 @@ export function Dashboard({ interval }: Props) {
       if (pv.splitPaneId) {
         mux.closePane(pv.splitPaneId);
       }
+      syncPaneSize();
+      process.stdout.write("\x1b[2J\x1b[H");
       setPreview(null);
       doScan();
       return;
@@ -317,8 +319,6 @@ export function Dashboard({ interval }: Props) {
   if (!helperLayoutNames.current) helperLayoutNames.current = Object.keys(helperLayouts.current);
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
-    // DEBUG entry point
-    exec(`echo 'openPreview isZellij=${isZellij} agent=${agent.tmuxPaneId} sameTab' >> /tmp/agents-op.txt`);
     if (isZellij) {
       // Zellij preview: move the agent pane into the dashboard tab as a real
       // embedded split. To prevent the agent's original tab from closing,
@@ -331,38 +331,28 @@ export function Dashboard({ interval }: Props) {
       const originalTabIndex = agentInfo?.tabIndex ?? 0;
       const sameTab = originalTabIndex === dashTabIdx;
 
-      exec(`echo 'sameTab=${sameTab} dashTab=${dashTabIdx} origTab=${originalTabIndex}' >> /tmp/agents-op.txt`);
       let placeholderId = "";
       if (!sameTab) {
-        exec(`echo 'creating dummy...' >> /tmp/agents-op.txt`);
+        // 1. Create tiny dummy in dashboard tab, send to agent's tab (keeps it alive)
         const dummyId = mux.createSplit(selfPaneId.current, "down", "1");
-        exec(`echo 'dummy=${dummyId}' >> /tmp/agents-op.txt`);
         if (dummyId) {
           mux.breakPaneToTab(dummyId, originalTabIndex);
           placeholderId = dummyId;
-          exec(`echo 'dummy moved' >> /tmp/agents-op.txt`);
         }
+        // 2. Bring agent to dashboard tab
         mux.breakPaneToTab(agent.tmuxPaneId, dashTabIdx);
-        exec(`echo 'agent moved' >> /tmp/agents-op.txt`);
       }
 
-      exec(`echo 'starting resize...' >> /tmp/agents-op.txt`);
+      // 3. Resize: make agent pane take the preview area
       try {
-        // Use terminal width (not pane widths) for layout calculation
-        const allPanesNow = getMux().listPanes();
-        const tabPanes = allPanesNow.filter(p => p.tabIndex === dashTabIdx);
-        // Total = sum of all pane widths + borders between them
+        const tabPanes = mux.listPanes().filter(p => p.tabIndex === dashTabIdx);
         const totalCols = tabPanes.reduce((sum, p) => sum + p.geometry.width, 0) + (tabPanes.length - 1);
         const dashCols = calcDashboardCols(totalCols);
         const agentCols = totalCols - dashCols - (tabPanes.length - 1);
-        exec(`echo 'resize: totalCols=${totalCols} dashCols=${dashCols} agentCols=${agentCols} panes=${tabPanes.length}' >> /tmp/agents-op.txt`);
         if (agentCols > 0) {
           resizePaneWidth(agent.tmuxPaneId, agentCols);
-          exec(`echo 'resize done' >> /tmp/agents-op.txt`);
         }
-      } catch (e: any) {
-        exec(`echo 'resize error: ${e?.message}' >> /tmp/agents-op.txt`);
-      }
+      } catch {}
       syncPaneSize();
       process.stdout.write("\x1b[2J\x1b[H");
 
@@ -632,8 +622,6 @@ export function Dashboard({ interval }: Props) {
   }, []);
 
   useInput((input, key) => {
-    // DEBUG: log all key presses
-    exec(`echo '${Date.now()} key=${input} preview=${!!previewRef.current} agents=${agents.length} idx=${idx}' >> /tmp/agents-keys.txt`);
     // ── Kill confirmation ──
     if (confirmKill) {
       if (input === "y" || input === "Y") {
@@ -903,7 +891,6 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (input === "n") {
-      if (isZellij) return; // workspace creation not yet supported in zellij
       const profiles = getProfileNames();
       if (!profiles.length) return;
       let cwd = "";
@@ -1040,7 +1027,7 @@ export function Dashboard({ interval }: Props) {
                     {!isZellij && <Text wrap="truncate"><Text color="#6b7385">g/G</Text>   <Text color="#565e6e">grid view</Text></Text>}
                     {!isZellij && <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>}
                     {!isZellij && <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>}
-                    {!isZellij && <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>}
+                    <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">x</Text>     <Text color="#565e6e">kill workspace</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">q</Text>     <Text color="#565e6e">quit</Text>  <Text color="#565e6e">· ? hide</Text></Text>
                   </Box>
