@@ -63,6 +63,10 @@ impl ZellijPlugin for AgentsBridge {
                 let payload = pipe_message.payload.unwrap_or_default();
                 self.close_pane_cmd(&payload)
             }
+            "resize-pane" => {
+                let payload = pipe_message.payload.unwrap_or_default();
+                self.resize_pane_cmd(&payload, &pipe_message.args)
+            }
             _ => format!("{{\"error\":\"unknown command: {}\"}}", pipe_message.name),
         };
         cli_pipe_output(&pipe_id, &response);
@@ -157,6 +161,72 @@ impl AgentsBridge {
         };
         close_terminal_pane(id);
         "{\"ok\":true}".to_string()
+    }
+
+    /// Resize a pane to an absolute width or height.
+    /// Args: width=N and/or height=N (columns/rows).
+    /// Uses the pane manifest to compute delta, then calls resize_pane_with_id in a loop.
+    /// Deterministic resize: set exact pane width/height using a feedback loop.
+    /// Args: width=N and/or height=N (target content columns/rows).
+    /// Uses get_pane_info for synchronous geometry checks between resize steps.
+    fn resize_pane_cmd(&self, payload: &str, args: &BTreeMap<String, String>) -> String {
+        let id = match parse_terminal_id(payload) {
+            Some(id) => id,
+            None => return format!("{{\"error\":\"bad pane id\"}}"),
+        };
+        let pane_id = PaneId::Terminal(id);
+
+        // Width resize with feedback loop
+        if let Some(target_w) = args.get("width").and_then(|s| s.parse::<usize>().ok()) {
+            for _ in 0..50 { // safety cap
+                let info = match get_pane_info(pane_id) {
+                    Some(info) => info,
+                    None => break,
+                };
+                let cur = info.pane_content_columns;
+                if cur == target_w { break; }
+                let resize = if cur < target_w { Resize::Increase } else { Resize::Decrease };
+                let strategy = ResizeStrategy {
+                    resize,
+                    direction: Some(Direction::Right),
+                    invert_on_boundaries: true,
+                };
+                resize_pane_with_id(strategy, pane_id);
+            }
+        }
+
+        // Height resize with feedback loop
+        if let Some(target_h) = args.get("height").and_then(|s| s.parse::<usize>().ok()) {
+            for _ in 0..50 {
+                let info = match get_pane_info(pane_id) {
+                    Some(info) => info,
+                    None => break,
+                };
+                let cur = info.pane_content_rows;
+                if cur == target_h { break; }
+                let resize = if cur < target_h { Resize::Increase } else { Resize::Decrease };
+                let strategy = ResizeStrategy {
+                    resize,
+                    direction: Some(Direction::Down),
+                    invert_on_boundaries: true,
+                };
+                resize_pane_with_id(strategy, pane_id);
+            }
+        }
+
+        format!("{{\"ok\":true}}")
+    }
+
+    fn get_pane_geometry(&self, terminal_id: u32) -> Option<(usize, usize)> {
+        let manifest = self.pane_manifest.as_ref()?;
+        for (_tab_pos, panes) in &manifest.panes {
+            for p in panes {
+                if !p.is_plugin && p.id == terminal_id {
+                    return Some((p.pane_content_columns, p.pane_content_rows));
+                }
+            }
+        }
+        None
     }
 }
 

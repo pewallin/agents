@@ -4,6 +4,7 @@ import { join } from "path";
 import { exec, execAsync } from "./shell.js";
 import { getAgentState, getAgentStateEntry } from "./state.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
+import type { MuxPaneInfo } from "./multiplexer.js";
 
 export type AgentStatus = "attention" | "question" | "working" | "stalled" | "idle";
 
@@ -183,91 +184,40 @@ async function detectStatus(
 
 // Sync version for CLI commands that don't need async
 export function scan(): AgentPane[] {
-  if (detectMultiplexer() === "zellij") return scanZellij();
+  if (detectMultiplexer() === "zellij") {
+    return processZellijPanes(getMux().listPanes());
+  }
   return scanSync();
 }
 
 // ── Zellij scan path ────────────────────────────────────────────────
+// Single implementation used by both sync and async entry points.
 
-function scanZellij(): AgentPane[] {
+function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
   const mux = getMux();
-  const panes = mux.listPanes();
   const results: AgentPane[] = [];
 
   for (const p of panes) {
-    // Get PID — zellij gives us the shell PID, walk tree to find agent
     let agentName: string | null = null;
 
     if (p.pid) {
-      const leafCmd = findLeafProcessSync(String(p.pid));
-      if (AGENT_PROCS.test(leafCmd)) {
-        agentName = leafCmd;
+      // Check the PID itself first — in zellij the returned PID is often
+      // the agent process directly (not a shell), and its children may be
+      // non-agent subprocesses (e.g. caffeinate, node).
+      const pidCmd = exec(`ps -p ${p.pid} -o comm= 2>/dev/null`).replace(/.*\//, "");
+      if (AGENT_PROCS.test(pidCmd)) {
+        agentName = pidCmd;
+      } else {
+        const leafCmd = findLeafProcessSync(String(p.pid));
+        if (AGENT_PROCS.test(leafCmd)) {
+          agentName = leafCmd;
+        }
       }
     }
 
-    // Fallback: check the initial command from zellij
+    // Fallback: check the command string from zellij (may include args)
     if (!agentName && p.command) {
-      const cmd = p.command.replace(/.*\//, "").replace(/^-/, "");
-      if (AGENT_PROCS.test(cmd)) agentName = cmd;
-    }
-
-    if (!agentName) continue;
-
-    // Get pane content for status detection
-    const content = mux.getPaneContent(p.id, 20);
-    const detector = getDetector(agentName);
-    const dur = stateDuration(agentName, p.id);
-
-    let status: AgentStatus;
-    let detail: string | undefined = dur;
-
-    if (detector.isApproval(content, p.id)) {
-      status = "attention";
-    } else if (detector.isIdle(content, p.title, p.id)) {
-      status = detector.isQuestion(content, p.id) ? "question" : "idle";
-      detail = status === "idle" ? undefined : dur;
-    } else if (detector.isWorking(content, p.title, p.id)) {
-      status = "working";
-    } else {
-      status = "idle";
-      detail = undefined;
-    }
-
-    const paneRef = `${p.session}:${p.tab}`;
-    const titleClean = p.title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
-
-    results.push({
-      pane: paneRef,
-      paneId: paneRef,
-      tmuxPaneId: p.id,
-      title: titleClean,
-      agent: friendlyName(agentName),
-      status,
-      detail,
-      windowId: paneRef,
-      cwd: p.cwd?.replace(/^\/Users\/[^/]+/, "~") || undefined,
-    });
-  }
-
-  results.sort((a, b) => a.pane.localeCompare(b.pane));
-  return results;
-}
-
-async function scanZellijAsync(): Promise<AgentPane[]> {
-  const mux = getMux();
-  const panes = await mux.listPanesAsync();
-  const results: AgentPane[] = [];
-
-  for (const p of panes) {
-    let agentName: string | null = null;
-
-    if (p.pid) {
-      const leafCmd = await findLeafProcess(String(p.pid));
-      if (AGENT_PROCS.test(leafCmd)) agentName = leafCmd;
-    }
-
-    if (!agentName && p.command) {
-      const cmd = p.command.replace(/.*\//, "").replace(/^-/, "");
+      const cmd = p.command.replace(/.*\//, "").replace(/^-/, "").split(/\s+/)[0];
       if (AGENT_PROCS.test(cmd)) agentName = cmd;
     }
 
@@ -405,7 +355,12 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
 
 // Async version for watch mode — doesn't block the Ink render loop
 export async function scanAsync(): Promise<AgentPane[]> {
-  if (detectMultiplexer() === "zellij") return scanZellijAsync();
+  if (detectMultiplexer() === "zellij") {
+    // Zellij scan uses sync subprocess calls (zellij pipe doesn't work
+    // reliably with async exec — the process hangs until timeout).
+    // Use the same code path as scan() for consistency.
+    return processZellijPanes(getMux().listPanes());
+  }
   const raw = await execAsync(
     `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
   );
@@ -444,6 +399,10 @@ export async function scanAsync(): Promise<AgentPane[]> {
 const BACK_ENV = "AGENTS_BACK_PANE";
 
 export function switchToPane(paneId: string, tmuxPaneId?: string): void {
+  if (detectMultiplexer() === "zellij") {
+    if (tmuxPaneId) getMux().focusPane(tmuxPaneId);
+    return;
+  }
   const current = exec(`tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`);
   if (current) {
     exec(`tmux set-environment -g ${BACK_ENV} ${JSON.stringify(current)}`);
@@ -500,21 +459,32 @@ export function createPreviewSplit(dashboardSize: number, vertical: boolean = fa
 
 /** Check if a pane exists. */
 export function paneExists(paneId: string): boolean {
+  if (detectMultiplexer() === "zellij") {
+    const panes = getMux().listPanes();
+    return panes.some(p => p.id === paneId);
+  }
   return exec(`tmux display-message -t ${paneId} -p '#{pane_id}' 2>/dev/null`) === paneId;
 }
 
 /** Get the current width of a pane. */
 export function getPaneWidth(paneId: string): number {
+  if (detectMultiplexer() === "zellij") return getMux().getPaneWidth(paneId);
   return parseInt(exec(`tmux display-message -t ${paneId} -p '#{pane_width}' 2>/dev/null`) || "0", 10);
 }
 
 /** Get the current height (rows) of a tmux pane. */
 export function getPaneHeight(paneId: string): number {
+  if (detectMultiplexer() === "zellij") {
+    const panes = getMux().listPanes();
+    const pane = panes.find(p => p.id === paneId);
+    return pane?.geometry.height || 0;
+  }
   return parseInt(exec(`tmux display-message -t ${paneId} -p '#{pane_height}' 2>/dev/null`) || "0", 10);
 }
 
 /** Resize a pane to a specific width. */
 export function resizePaneWidth(paneId: string, width: number): void {
+  if (detectMultiplexer() === "zellij") { getMux().resizePaneWidth(paneId, width); return; }
   exec(`tmux resize-pane -t ${paneId} -x ${width} 2>/dev/null`);
 }
 
@@ -525,24 +495,32 @@ export function swapPanes(src: string, dst: string): void {
 
 /** Focus a pane by its %N id (select it without switching the dashboard away). */
 export function focusPane(tmuxPaneId: string): void {
+  if (detectMultiplexer() === "zellij") { getMux().focusPane(tmuxPaneId); return; }
   exec(`tmux select-pane -t ${tmuxPaneId}`);
 }
 
-/** Get the current pane's %N id. */
+/** Get the current pane's %N id (tmux) or terminal_N id (zellij). */
 export function ownPaneId(): string {
   // TMUX_PANE is set per-pane by tmux and stays correct regardless of focus.
   // display-message without -t returns the *focused* pane, which is wrong if
   // another pane has focus (e.g. during HMR remount).
-  return process.env.TMUX_PANE || exec(`tmux display-message -p '#{pane_id}'`);
+  if (process.env.TMUX_PANE) return process.env.TMUX_PANE;
+  if (process.env.ZELLIJ_PANE_ID) {
+    const id = process.env.ZELLIJ_PANE_ID;
+    return id.startsWith("terminal_") || id.startsWith("plugin_") ? id : `terminal_${id}`;
+  }
+  return exec(`tmux display-message -p '#{pane_id}'`);
 }
 
 /** Kill a pane by its %N id. */
 export function killPane(id: string): void {
+  if (detectMultiplexer() === "zellij") { getMux().closePane(id); return; }
   exec(`tmux kill-pane -t ${id} 2>/dev/null`);
 }
 
 /** Kill an entire tmux window by session:window_index. */
 export function killWindow(windowId: string): void {
+  if (detectMultiplexer() === "zellij") { getMux().closeTab(windowId); return; }
   exec(`tmux kill-window -t ${JSON.stringify(windowId)} 2>/dev/null`);
 }
 

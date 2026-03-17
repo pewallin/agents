@@ -23,6 +23,7 @@ export class TmuxMux implements Multiplexer {
         command: fgCmd,
         pid: parseInt(pid, 10) || null,
         tab: winName,
+        tabIndex: 0, // tmux path uses windowId from scanner, not tabIndex
         session,
         focused: false, // tmux doesn't give this per-pane in list-panes -a
         tty,
@@ -45,6 +46,7 @@ export class TmuxMux implements Multiplexer {
         command: fgCmd,
         pid: parseInt(pid, 10) || null,
         tab: winName,
+        tabIndex: 0, // tmux path uses windowId from scanner, not tabIndex
         session,
         focused: false,
         tty,
@@ -118,5 +120,21 @@ export class TmuxMux implements Multiplexer {
 
   showPlaceholder(paneId: string, agentName: string, agentPane: string): void {
     showPlaceholderImpl(paneId, agentName, agentPane);
+  }
+
+  floatPane(_paneId: string, _coords?: { x: number; y: number; width: string; height: string }): void {
+    // No-op: tmux uses swap-pane model, not floating panes
+  }
+
+  embedPane(_paneId: string): void {
+    // No-op: tmux uses swap-pane model, not floating panes
+  }
+
+  isFloating(_paneId: string): boolean {
+    return false; // tmux doesn't have floating panes
+  }
+
+  sendKeys(paneId: string, keys: string): void {
+    exec(`tmux send-keys -t ${paneId} ${JSON.stringify(keys)}`);
   }
 }

@@ -173,6 +173,10 @@ program
   .option("--session <id>", "Session ID (reads from stdin if not provided)")
   .action(async (opts) => {
     let session = opts.session;
+    // Resolve empty session from zellij env (hooks pass $TMUX_PANE which is empty in zellij)
+    if (!session && process.env.ZELLIJ_PANE_ID) {
+      session = `terminal_${process.env.ZELLIJ_PANE_ID}`;
+    }
     if (!session) {
       // Try reading session_id from stdin (hooks pipe JSON)
       try {

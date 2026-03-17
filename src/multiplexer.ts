@@ -8,6 +8,7 @@ export interface MuxPaneInfo {
   command: string;      // foreground command (tmux) or initial command (zellij)
   pid: number | null;
   tab: string;          // window name (tmux) or tab name (zellij)
+  tabIndex: number;     // window index (tmux) or tab position (zellij)
   session: string;
   focused: boolean;
   tty: string;
@@ -44,6 +45,14 @@ export interface Multiplexer {
 
   // Placeholder
   showPlaceholder(paneId: string, agentName: string, agentPane: string): void;
+
+  // Floating panes (zellij: float/embed/position; tmux: no-op)
+  floatPane(paneId: string, coords?: { x: number; y: number; width: string; height: string }): void;
+  embedPane(paneId: string): void;
+  isFloating(paneId: string): boolean;
+
+  // Send keystrokes to a pane
+  sendKeys(paneId: string, keys: string): void;
 }
 
 /** Detect which multiplexer we're running inside.

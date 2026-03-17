@@ -6,7 +6,7 @@
  * - WASM bridge plugin via `zellij action pipe` for operations the CLI can't do
  *   (focus by ID, break pane cross-tab, get PID)
  */
-import { exec, execAsync } from "./shell.js";
+import { exec, execAsync, execInherit } from "./shell.js";
 import type { Multiplexer, MuxPaneInfo } from "./multiplexer.js";
 import { writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -16,7 +16,8 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Path to the bridge plugin WASM — shipped alongside the npm package
-const PLUGIN_WASM = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release", "agents-bridge.wasm");
+// Versioned path to bypass zellij's WASM cache after plugin rebuilds
+const PLUGIN_WASM = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release", "agents-bridge-v7.wasm");
 
 /** Send a command to the bridge plugin via pipe and get JSON response. */
 function pluginCmd(name: string, payload: string = "", args?: Record<string, string>): string {
@@ -89,6 +90,7 @@ function parseCliPanes(json: string): MuxPaneInfo[] {
         command: p.pane_command || p.terminal_command || "",
         pid: null, // filled in via plugin get-pane-pid
         tab: p.tab_name,
+        tabIndex: p.tab_position,
         session,
         focused: p.is_focused,
         tty: "",
@@ -118,6 +120,7 @@ function parsePluginPanes(json: string): MuxPaneInfo[] {
         command: p.command || "",
         pid: null,
         tab: p.tab_name,
+        tabIndex: p.tab_index,
         session,
         focused: p.focused,
         tty: "",
@@ -132,6 +135,7 @@ export class ZellijMux implements Multiplexer {
   readonly kind = "zellij" as const;
 
   private pluginReady = false;
+  private floatingPanes = new Set<string>(); // track internally — list-panes is stale after toggle
 
   /** Ensure the bridge plugin is loaded and permissions granted.
    *  On first call, prints a hint if the plugin needs permission. */
@@ -212,10 +216,11 @@ export class ZellijMux implements Multiplexer {
   createSplit(targetPaneId: string, direction: "right" | "down", size?: string): string | null {
     // zellij new-pane returns the created pane ID
     let cmd = `zellij action new-pane --direction ${direction}`;
-    if (size) cmd += ` --width ${size}`; // TODO: handle height for "down"
+    if (size) {
+      cmd += direction === "down" ? ` --height ${size}` : ` --width ${size}`;
+    }
     cmd += ` -- tail -f /dev/null`;
     const result = exec(cmd);
-    // Output is like "terminal_42"
     return result.startsWith("terminal_") || result.startsWith("plugin_") ? result.trim() : null;
   }
 
@@ -228,16 +233,8 @@ export class ZellijMux implements Multiplexer {
   }
 
   resizePaneWidth(paneId: string, width: number): void {
-    // Zellij only supports relative resize — this is approximate
-    const current = this.getPaneWidth(paneId);
-    if (current <= 0) return;
-    const delta = width - current;
-    if (delta === 0) return;
-    const dir = delta > 0 ? "increase" : "decrease";
-    const side = "right";
-    for (let i = 0; i < Math.abs(delta); i++) {
-      exec(`zellij action resize --pane-id ${paneId} ${dir} ${side}`);
-    }
+    // Bridge plugin handles the feedback loop internally using synchronous get_pane_info
+    pluginCmd("resize-pane", paneId, { width: String(width) });
   }
 
   getPaneWidth(paneId: string): number {
@@ -283,12 +280,10 @@ export class ZellijMux implements Multiplexer {
   }
 
   ownTabIndex(): number {
-    // Find our pane in the list and return its tab index
     const ownId = this.ownPaneId();
     const panes = this.listPanes();
     const own = panes.find(p => p.id === ownId || p.id === `terminal_${ownId}`);
-    // Fallback: parse from list-tabs
-    return own ? parseInt(own.tab, 10) || 0 : 0;
+    return own?.tabIndex ?? 0;
   }
 
   listSessions(): string[] {
@@ -318,5 +313,34 @@ while true; do sleep 86400; done
     writeFileSync(path, script, { mode: 0o755 });
     // Open placeholder in place of the agent pane (suppresses it)
     exec(`zellij action new-pane --in-place -- bash ${path}`);
+  }
+
+  floatPane(paneId: string, coords?: { x: number; y: number; width: string; height: string }): void {
+    if (!this.floatingPanes.has(paneId)) {
+      // toggle-float needs TTY access to communicate with zellij server
+      execInherit("zellij", ["action", "toggle-pane-embed-or-floating", "--pane-id", paneId]);
+      this.floatingPanes.add(paneId);
+    }
+    if (coords) {
+      execInherit("zellij", ["action", "change-floating-pane-coordinates",
+        "--pane-id", paneId,
+        "--x", String(coords.x), "--y", String(coords.y),
+        "--width", coords.width, "--height", coords.height]);
+    }
+  }
+
+  embedPane(paneId: string): void {
+    if (this.floatingPanes.has(paneId)) {
+      execInherit("zellij", ["action", "toggle-pane-embed-or-floating", "--pane-id", paneId]);
+      this.floatingPanes.delete(paneId);
+    }
+  }
+
+  isFloating(paneId: string): boolean {
+    return this.floatingPanes.has(paneId);
+  }
+
+  sendKeys(paneId: string, keys: string): void {
+    exec(`zellij action write-chars --pane-id ${paneId} ${JSON.stringify(keys)}`);
   }
 }

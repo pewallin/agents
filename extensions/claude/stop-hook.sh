@@ -3,7 +3,13 @@
 # Reads JSON from stdin with last_assistant_message field.
 # Reports "question" if the last text block contains ?, otherwise "idle".
 
-SESSION="${TMUX_PANE:-default}"
+if [ -n "$TMUX_PANE" ]; then
+  SESSION="$TMUX_PANE"
+elif [ -n "$ZELLIJ_PANE_ID" ]; then
+  SESSION="terminal_${ZELLIJ_PANE_ID}"
+else
+  SESSION="default"
+fi
 INPUT=$(cat)
 
 # Don't recurse if stop hook is already active
