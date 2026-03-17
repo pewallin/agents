@@ -208,8 +208,15 @@ export class ZellijMux implements Multiplexer {
   }
 
   resizePaneWidth(paneId: string, width: number): void {
-    // Bridge plugin handles the feedback loop internally using synchronous get_pane_info
-    pluginCmd("resize-pane", paneId, { width: String(width) });
+    // Use CLI resize with feedback loop — plugin resize_pane_with_id doesn't work
+    // on panes created by breakPanesToNewTab (another zellij 0.44 bug).
+    // CLI resize --pane-id works reliably but needs TTY (execInherit).
+    for (let i = 0; i < 30; i++) {
+      const cur = this.getPaneWidth(paneId);
+      if (cur <= 0 || Math.abs(cur - width) <= 3) break; // close enough (within 1 quantum)
+      const action = cur < width ? "increase" : "decrease";
+      execInherit("zellij", ["action", "resize", "--pane-id", paneId, action, "right"]);
+    }
   }
 
   getPaneWidth(paneId: string): number {
