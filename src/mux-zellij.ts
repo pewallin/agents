@@ -8,7 +8,7 @@
  */
 import { exec, execAsync, execInherit } from "./shell.js";
 import type { Multiplexer, MuxPaneInfo } from "./multiplexer.js";
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, copyFileSync, readdirSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -16,11 +16,29 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Path to the bridge plugin WASM — shipped alongside the npm package
-// Plugin WASM path — agents-bridge-current.wasm is a copy updated by the build script.
-// Zellij caches plugins by path, so using a stable "current" name with the actual binary
-// content changing on rebuild forces zellij to reload when the session restarts.
+// Zellij caches WASM plugins by file path. To force reload after rebuilds,
+// we copy the binary to a content-hash-named file on first load.
+import { createHash } from "crypto";
 const PLUGIN_DIR = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release");
-const PLUGIN_WASM = join(PLUGIN_DIR, "agents-bridge.wasm");
+const PLUGIN_SRC = join(PLUGIN_DIR, "agents-bridge.wasm");
+const PLUGIN_WASM = (() => {
+  try {
+    const hash = createHash("md5").update(readFileSync(PLUGIN_SRC)).digest("hex").slice(0, 8);
+    const cached = join(PLUGIN_DIR, `agents-bridge-${hash}.wasm`);
+    if (!existsSync(cached)) {
+      // Clean old hash copies
+      for (const f of readdirSync(PLUGIN_DIR)) {
+        if (f.startsWith("agents-bridge-") && f.endsWith(".wasm") && f !== `agents-bridge-${hash}.wasm`) {
+          try { unlinkSync(join(PLUGIN_DIR, f)); } catch {}
+        }
+      }
+      copyFileSync(PLUGIN_SRC, cached);
+    }
+    return cached;
+  } catch {
+    return PLUGIN_SRC;
+  }
+})();
 
 /** Send a command to the bridge plugin via pipe and get JSON response. */
 function pluginCmd(name: string, payload: string = "", args?: Record<string, string>): string {
