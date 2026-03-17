@@ -517,17 +517,28 @@ export function swapPanes(src: string, dst: string): void {
     if (!srcPane || !dstPane) return;
     if (srcPane.tabIndex === dstPane.tabIndex) return;
 
-    // zellij 0.44 bug: break_panes_to_tab_with_index has a position/id mismatch
-    // that makes it unreliable after any tab deletion. Use break_panes_to_new_tab instead.
+    // zellij 0.44 bug: break_panes_to_tab_with_index has a position/id mismatch.
+    // Use break_panes_to_new_tab (reliable) to move panes.
     //
-    // Step 1: break dst (placeholder) to a new tab with src's tab name
-    const srcTabName = srcPane.tab || "";
-    mux.breakPanesToNewTab([dst], srcTabName);
-
-    // Step 2: break dashboard + src (agent) together to a new tab
+    // For preview open: src=agent, dst=split. Move split to agent's tab,
+    // then move dashboard+agent together to a new tab.
+    // For preview close: src=agent, dst=split. Move agent to its own new tab.
+    //
+    // We detect which case by checking if the dashboard is in dst's tab.
     const selfId = mux.ownPaneId();
-    const dashTabName = dstPane.tab || "";
-    mux.breakPanesToNewTab([selfId, src], dashTabName);
+    const selfInDstTab = before.some(p => p.id === selfId && p.tabIndex === dstPane.tabIndex);
+
+    if (selfInDstTab) {
+      // Preview OPEN: dashboard is in dst's tab (split was created here).
+      // Move split to agent's tab name, move dashboard+agent together.
+      mux.breakPanesToNewTab([dst], srcPane.tab || "agent");
+      mux.breakPanesToNewTab([selfId, src], dstPane.tab || "dashboard");
+    } else {
+      // Preview CLOSE / general swap: just exchange the two panes.
+      // Move each to a new tab with the OTHER's tab name.
+      mux.breakPanesToNewTab([dst], srcPane.tab || "");
+      mux.breakPanesToNewTab([src], dstPane.tab || "");
+    }
     return;
   }
   exec(`tmux swap-pane -d -s ${src} -t ${dst}`);
