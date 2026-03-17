@@ -233,20 +233,30 @@ impl AgentsBridge {
         };
         let pane_id = PaneId::Terminal(id);
 
-        // Width resize with feedback loop
+        // Width resize with feedback loop.
+        // Try Direction::Right first. If the pane is on the right edge, Direction::Right
+        // Increase won't work — detect this (width unchanged) and switch to Direction::Left.
         if let Some(target_w) = args.get("width").and_then(|s| s.parse::<usize>().ok()) {
-            for _ in 0..50 { // safety cap
+            let mut prev_w = 0usize;
+            let mut use_left = false;
+            for _ in 0..50 {
                 let info = match get_pane_info(pane_id) {
                     Some(info) => info,
                     None => break,
                 };
                 let cur = info.pane_content_columns;
                 if cur == target_w { break; }
+                if cur == prev_w {
+                    if use_left { break; } // stuck on both directions
+                    use_left = true; // try the other direction
+                }
+                prev_w = cur;
                 let resize = if cur < target_w { Resize::Increase } else { Resize::Decrease };
+                let direction = if use_left { Direction::Left } else { Direction::Right };
                 let strategy = ResizeStrategy {
                     resize,
-                    direction: Some(Direction::Right),
-                    invert_on_boundaries: true,
+                    direction: Some(direction),
+                    invert_on_boundaries: false,
                 };
                 resize_pane_with_id(strategy, pane_id);
             }
@@ -254,18 +264,20 @@ impl AgentsBridge {
 
         // Height resize with feedback loop
         if let Some(target_h) = args.get("height").and_then(|s| s.parse::<usize>().ok()) {
+            let mut prev_h = 0usize;
             for _ in 0..50 {
                 let info = match get_pane_info(pane_id) {
                     Some(info) => info,
                     None => break,
                 };
                 let cur = info.pane_content_rows;
-                if cur == target_h { break; }
+                if cur == target_h || cur == prev_h { break; }
+                prev_h = cur;
                 let resize = if cur < target_h { Resize::Increase } else { Resize::Decrease };
                 let strategy = ResizeStrategy {
                     resize,
                     direction: Some(Direction::Down),
-                    invert_on_boundaries: true,
+                    invert_on_boundaries: false,
                 };
                 resize_pane_with_id(strategy, pane_id);
             }

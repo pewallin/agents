@@ -332,6 +332,21 @@ export function Dashboard({ interval }: Props) {
     _previewStore = pv;
 
     swapPanes(agent.tmuxPaneId, splitId);
+
+    // In zellij, breakPanesToNewTab resets layout to 50/50 — resize agent to fill preview area
+    if (isZellij) {
+      // Read actual pane widths (not process.stdout which may be stale)
+      const selfWidth = getPaneWidth(selfPaneId.current);
+      const agentWidth = getPaneWidth(agent.tmuxPaneId);
+      const totalCols = selfWidth + agentWidth + 1; // +1 for border
+      const targetAgentCols = totalCols - dashboardCols - 1;
+      if (targetAgentCols > agentWidth) {
+        resizePaneWidth(agent.tmuxPaneId, targetAgentCols);
+      }
+      syncPaneSize();
+      process.stdout.write("\x1b[2J\x1b[H");
+    }
+
     showPlaceholder(splitId, agent.agent, agent.pane);
 
     // Create persistent zones and optionally populate them

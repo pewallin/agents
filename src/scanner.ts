@@ -767,7 +767,9 @@ tput sgr0
 while true; do sleep 86400; done
 `;
   if (detectMultiplexer() === "zellij") {
-    getMux().showPlaceholder(paneId, agentName, agentPane);
+    // In zellij, the split (tail -f /dev/null) is already in the agent's original tab
+    // and serves as a visual placeholder. showPlaceholder uses --in-place which
+    // targets the focused pane (dashboard), not the split in a remote tab.
     return;
   }
   const path = join(tmpdir(), `agents-ph-${paneId.replace("%", "")}.sh`);
