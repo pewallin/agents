@@ -100,11 +100,16 @@ impl AgentsBridge {
             for p in panes {
                 if p.is_plugin { continue; }
                 let cmd = p.terminal_command.as_deref().unwrap_or("");
+                // Include PID inline — avoids N separate get-pane-pid calls
+                let pid = get_pane_pid(PaneId::Terminal(p.id))
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|_| "null".to_string());
                 parts.push(format!(
-                    "{{\"id\":\"terminal_{}\",\"title\":{},\"command\":{},\"tab_index\":{},\"tab_name\":{},\"focused\":{},\"suppressed\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
+                    "{{\"id\":\"terminal_{}\",\"title\":{},\"command\":{},\"pid\":{},\"tab_index\":{},\"tab_name\":{},\"focused\":{},\"suppressed\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
                     p.id,
                     json_str(&p.title),
                     json_str(cmd),
+                    pid,
                     tab_pos,
                     json_str(tab_name),
                     p.is_focused,

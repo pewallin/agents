@@ -8,37 +8,16 @@
  */
 import { exec, execAsync, execInherit } from "./shell.js";
 import type { Multiplexer, MuxPaneInfo } from "./multiplexer.js";
-import { writeFileSync, readFileSync, existsSync, copyFileSync, readdirSync, unlinkSync } from "fs";
+import { writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Path to the bridge plugin WASM — shipped alongside the npm package
-// Zellij caches WASM plugins by file path. To force reload after rebuilds,
-// we copy the binary to a content-hash-named file on first load.
-import { createHash } from "crypto";
-const PLUGIN_DIR = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release");
-const PLUGIN_SRC = join(PLUGIN_DIR, "agents-bridge.wasm");
-const PLUGIN_WASM = (() => {
-  try {
-    const hash = createHash("md5").update(readFileSync(PLUGIN_SRC)).digest("hex").slice(0, 8);
-    const cached = join(PLUGIN_DIR, `agents-bridge-${hash}.wasm`);
-    if (!existsSync(cached)) {
-      // Clean old hash copies
-      for (const f of readdirSync(PLUGIN_DIR)) {
-        if (f.startsWith("agents-bridge-") && f.endsWith(".wasm") && f !== `agents-bridge-${hash}.wasm`) {
-          try { unlinkSync(join(PLUGIN_DIR, f)); } catch {}
-        }
-      }
-      copyFileSync(PLUGIN_SRC, cached);
-    }
-    return cached;
-  } catch {
-    return PLUGIN_SRC;
-  }
-})();
+// Path to the bridge plugin WASM — shipped alongside the npm package.
+// After rebuilding the plugin, restart the zellij session to reload.
+const PLUGIN_WASM = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release", "agents-bridge.wasm");
 
 /** Send a command to the bridge plugin via pipe and get JSON response. */
 function pluginCmd(name: string, payload: string = "", args?: Record<string, string>): string {
@@ -88,6 +67,7 @@ interface ZellijPluginPane {
   id: string;
   title: string;
   command: string;
+  pid: number | null;
   tab_index: number;
   tab_name: string;
   focused: boolean;
@@ -139,7 +119,7 @@ function parsePluginPanes(json: string): MuxPaneInfo[] {
         id: p.id,
         title: p.title,
         command: p.command || "",
-        pid: null,
+        pid: p.pid || null,
         tab: p.tab_name,
         tabIndex: p.tab_index,
         session,
@@ -179,53 +159,13 @@ export class ZellijMux implements Multiplexer {
   }
 
   listPanes(): MuxPaneInfo[] {
-    // Try CLI list-panes first (0.44+ only)
-    const cliJson = exec("zellij action list-panes --all --json 2>/dev/null");
-    const panes = cliJson ? parseCliPanes(cliJson) : [];
-
-    // If CLI didn't work, try plugin
-    if (!panes.length && this.ensurePlugin()) {
-      const pluginJson = pluginCmd("list-panes");
-      const pluginPanes = parsePluginPanes(pluginJson);
-      // Enrich with PIDs
-      for (const p of pluginPanes) {
-        const pidJson = pluginCmd("get-pane-pid", p.id);
-        try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
-      }
-      return pluginPanes;
-    }
-
-    // Enrich CLI panes with PIDs from plugin
-    if (panes.length && this.ensurePlugin()) {
-      for (const p of panes) {
-        const pidJson = pluginCmd("get-pane-pid", p.id);
-        try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
-      }
-    }
-    return panes;
+    // Single plugin call — returns all panes with PIDs inline.
+    this.ensurePlugin();
+    return parsePluginPanes(pluginCmd("list-panes"));
   }
 
   async listPanesAsync(): Promise<MuxPaneInfo[]> {
-    const cliJson = await execAsync("zellij action list-panes --all --json 2>/dev/null");
-    const panes = cliJson ? parseCliPanes(cliJson) : [];
-
-    if (!panes.length && this.ensurePlugin()) {
-      const pluginJson = await pluginCmdAsync("list-panes");
-      const pluginPanes = parsePluginPanes(pluginJson);
-      await Promise.all(pluginPanes.map(async (p) => {
-        const pidJson = await pluginCmdAsync("get-pane-pid", p.id);
-        try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
-      }));
-      return pluginPanes;
-    }
-
-    if (panes.length && this.ensurePlugin()) {
-      await Promise.all(panes.map(async (p) => {
-        const pidJson = await pluginCmdAsync("get-pane-pid", p.id);
-        try { p.pid = JSON.parse(pidJson).pid || null; } catch {}
-      }));
-    }
-    return panes;
+    return this.listPanes();
   }
 
   getPaneContent(paneId: string, _lines?: number): string {
