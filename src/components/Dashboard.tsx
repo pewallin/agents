@@ -16,6 +16,8 @@ import { GRID_FOCUS_FILE } from "../constants.js";
 import { existsSync, statSync, readdirSync, watch as fsWatch } from "fs";
 import { execSync } from "child_process";
 import { join, dirname, basename } from "path";
+import { detectMultiplexer, getMux } from "../multiplexer.js";
+import { exec, execInherit } from "../shell.js";
 
 interface Props {
   interval: number;
@@ -72,8 +74,16 @@ export function Dashboard({ interval }: Props) {
   if (!selfPaneId.current) selfPaneId.current = ownPaneId();
   const selfWindowId = useRef<string>(null!);
   if (!selfWindowId.current) {
-    try { selfWindowId.current = execSync(`tmux display-message -t ${process.env.TMUX_PANE || ""} -p '#{session_name}:#{window_index}'`, { encoding: "utf-8" }).trim(); } catch { selfWindowId.current = ""; }
+    if (detectMultiplexer() === "zellij") {
+      // In zellij the dashboard may share a tab with agents, so use a
+      // unique value that won't match any agent's windowId — this prevents
+      // filterAgents from removing same-tab agents.
+      selfWindowId.current = `__zellij_dashboard_${process.env.ZELLIJ_PANE_ID}__`;
+    } else {
+      try { selfWindowId.current = execSync(`tmux display-message -t ${process.env.TMUX_PANE || ""} -p '#{session_name}:#{window_index}'`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim(); } catch { selfWindowId.current = ""; }
+    }
   }
+  const isZellij = detectMultiplexer() === "zellij";
   const savedWidth = useRef(0);
   const scanSeq = useRef(0);
   const liveIndex = useRef(0);       // tracks selectedIndex synchronously for rapid keypresses
@@ -183,6 +193,15 @@ export function Dashboard({ interval }: Props) {
     if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
     const pv = previewRef.current;
     if (!pv) return;
+    if (isZellij) {
+      // Zellij: just switch back to dashboard tab (no pane movement needed)
+      const mux = getMux();
+      const dashTabIdx = mux.ownTabIndex();
+      exec(`zellij action go-to-tab ${dashTabIdx + 1}`);
+      setPreview(null);
+      return;
+    }
+    // tmux restore
     if (savedWidth.current) {
       resizePaneWidth(selfPaneId.current, savedWidth.current);
       savedWidth.current = 0;
@@ -195,7 +214,7 @@ export function Dashboard({ interval }: Props) {
     if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
     syncPaneSize();
     setPreview(null);
-  }, [setPreview, syncPaneSize]);
+  }, [setPreview, syncPaneSize, isZellij]);
 
   useEffect(() => {
     _hmrDisposing = false;
@@ -211,11 +230,15 @@ export function Dashboard({ interval }: Props) {
       // Preview teardown
       const pv = previewRef.current;
       if (!pv) return;
-      if (pv.zones.length) destroyZones(pv.zones);
-      if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
-        swapPanes(pv.agentTmuxId, pv.splitPaneId);
+      if (isZellij) {
+        // Zellij preview is tab-switch only, nothing to restore
+      } else {
+        if (pv.zones.length) destroyZones(pv.zones);
+        if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
+          swapPanes(pv.agentTmuxId, pv.splitPaneId);
+        }
+        if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
       }
-      if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
       previewRef.current = null;
       _previewStore = null;
       savePreviewState(null);
@@ -284,6 +307,30 @@ export function Dashboard({ interval }: Props) {
   if (!helperLayoutNames.current) helperLayoutNames.current = Object.keys(helperLayouts.current);
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
+    if (isZellij) {
+      // Zellij: side-by-side preview not available (zellij 0.44 pane movement APIs are buggy).
+      // Instead, switch to the agent's tab. Press p again to come back.
+      const mux = getMux();
+      const panes = mux.listPanes();
+      const target = panes.find(p => p.id === agent.tmuxPaneId);
+      if (target) exec(`zellij action go-to-tab ${target.tabIndex + 1}`);
+      mux.focusPane(agent.tmuxPaneId);
+      const pv: PreviewState = {
+        splitPaneId: "",
+        agentTmuxId: agent.tmuxPaneId,
+        agentName: agent.agent,
+        agentPane: agent.pane,
+        agentPaneId: agent.paneId,
+        vertical: forceVertical,
+        windowId: agent.windowId || "",
+        zones: [],
+        helperLayout: null,
+      };
+      previewRef.current = pv;
+      _previewStore = pv;
+      setPreview(pv);
+      return;
+    }
     const dashboardRows = 9 + agents.length;
     const termRows = process.stdout.rows || 24;
     const vertical = forceVertical || termRows < dashboardRows + 10;
@@ -292,14 +339,9 @@ export function Dashboard({ interval }: Props) {
     const splitId = createPreviewSplit(vertical ? dashboardCols : dashboardRows, vertical);
     if (!splitId) return;
 
-    // Sync process.stdout.columns immediately after split so any SIGWINCH-triggered
-    // re-render by Ink already sees the correct width.
     syncPaneSize();
-    // Clear screen so Ink's cursor tracking isn't confused by old output
-    // wrapping at the new (narrower) pane width.
     process.stdout.write("\x1b[2J\x1b[H");
 
-    // Set preview ref BEFORE swapping so async scan filter takes effect immediately
     const pv: PreviewState = {
       splitPaneId: splitId,
       agentTmuxId: agent.tmuxPaneId,
@@ -317,7 +359,6 @@ export function Dashboard({ interval }: Props) {
     swapPanes(agent.tmuxPaneId, splitId);
     showPlaceholder(splitId, agent.agent, agent.pane);
 
-    // Create persistent zones and optionally populate them
     const defs = layout ? helperLayouts.current[layout] : null;
     const zones = defs?.length ? createZones(agent.tmuxPaneId, defs) : [];
     if (zones.length && agent.windowId) {
@@ -326,7 +367,7 @@ export function Dashboard({ interval }: Props) {
     if (zones.length) labelZones(zones);
 
     setPreview({ ...pv, zones });
-  }, [agents.length, setPreview]);
+  }, [agents.length, setPreview, isZellij]);
 
   const switchingRef = useRef(false);
 
@@ -337,9 +378,15 @@ export function Dashboard({ interval }: Props) {
     if (switchingRef.current) return;
     switchingRef.current = true;
 
-    const sameWindow = pv.windowId && agent.windowId === pv.windowId;
-
     try {
+      if (isZellij) {
+        // Zellij: restore current preview, then open preview on the new agent
+        restorePreview();
+        openPreview(agent);
+        return;
+      }
+      const sameWindow = pv.windowId && agent.windowId === pv.windowId;
+
       if (sameWindow && pv.zones.some((z) => z.occupantPaneId)) {
         // Same window: helpers stay in zones, just swap the agent
         swapPanes(pv.agentTmuxId, pv.splitPaneId);
@@ -374,7 +421,7 @@ export function Dashboard({ interval }: Props) {
     } finally {
       switchingRef.current = false;
     }
-  }, [setPreview]);
+  }, [setPreview, isZellij]);
 
   const focusPreviewPane = useCallback(() => {
     const pv = previewRef.current;
@@ -448,7 +495,7 @@ export function Dashboard({ interval }: Props) {
     setTimeout(() => {
       const pv = previewRef.current;
       if (pv) focusPane(pv.agentTmuxId);
-    }, 50);
+    }, isZellij ? 300 : 50); // zellij needs more time for breakPaneToTab to settle
   }, [openPreview, switchPreview]);
 
   useMouse(useCallback((event) => {
@@ -501,7 +548,7 @@ export function Dashboard({ interval }: Props) {
   // Advance wizard from profile step → session or cwd step
   const wizardAfterProfile = useCallback((profile: string, inheritedCwd: string, inheritedSession: string) => {
     let sessions: string[] = [];
-    try { sessions = execSync("tmux list-sessions -F '#{session_name}'", { encoding: "utf-8" }).trim().split("\n").filter(Boolean); } catch {}
+    try { sessions = getMux().listSessions(); } catch {}
     if (sessions.length > 1) {
       const selIdx = Math.max(0, sessions.indexOf(inheritedSession));
       setWizard({ step: "session", profile, sessions, selected: selIdx, inheritedCwd });
@@ -554,8 +601,8 @@ export function Dashboard({ interval }: Props) {
         // If in preview
         const pv = previewRef.current;
         if (pv && pv.agentTmuxId === agent.tmuxPaneId) {
-          if (pv.zones.length) destroyZones(pv.zones);
-          if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
+          if (!isZellij && pv.zones.length) destroyZones(pv.zones);
+          if (!isZellij && paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
           setPreview(null);
         }
         killWindow(agent.windowId || agent.paneId);
@@ -690,6 +737,7 @@ export function Dashboard({ interval }: Props) {
       }
     }
     if (key.tab) {
+      if (isZellij && gridRef.current) return; // grid not yet supported in zellij
       if (agents[idx]) {
         if (gridRef.current) {
           gridSelectAgent(agents[idx]);
@@ -740,6 +788,7 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (input === "h") {
+      if (isZellij) return; // helper zones not yet supported in zellij
       const pv = previewRef.current;
       if (!pv) return;
       const names = helperLayoutNames.current;
@@ -768,6 +817,7 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (input === "g" || input === "G") {
+      if (isZellij) return; // grid not yet supported in zellij
       const scoped = input === "g";
       const scope = scoped && agents[idx] ? agents[idx].pane.split(":")[0] : undefined;
 
@@ -795,8 +845,8 @@ export function Dashboard({ interval }: Props) {
       let inheritedSession = "";
       const sel = agents[idx];
       if (sel) {
-        try { cwd = execSync(`tmux display-message -t ${sel.tmuxPaneId} -p '#{pane_current_path}'`, { encoding: "utf-8" }).trim(); } catch {}
-        try { inheritedSession = execSync(`tmux display-message -t ${sel.tmuxPaneId} -p '#{session_name}'`, { encoding: "utf-8" }).trim(); } catch {}
+        cwd = sel.cwd?.replace(/^~/, process.env.HOME || "") || "";
+        inheritedSession = sel.pane.split(":")[0] || "";
       }
       if (profiles.length === 1) {
         wizardAfterProfile(profiles[0], cwd, inheritedSession);
@@ -812,6 +862,7 @@ export function Dashboard({ interval }: Props) {
     }
     // Space bar: same as tab
     if (input === " ") {
+      if (isZellij && gridRef.current) return; // grid not yet supported in zellij
       if (agents[idx]) {
         if (gridRef.current) {
           gridSelectAgent(agents[idx]);
@@ -921,9 +972,9 @@ export function Dashboard({ interval }: Props) {
                     <Text wrap="truncate"><Text color="#6b7385">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">tab</Text>   <Text color="#565e6e">preview</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">p/P</Text>   <Text color="#565e6e">toggle preview</Text></Text>
-                    <Text wrap="truncate"><Text color="#6b7385">g/G</Text>   <Text color="#565e6e">grid view</Text></Text>
-                    <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>
-                    <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>
+                    {!isZellij && <Text wrap="truncate"><Text color="#6b7385">g/G</Text>   <Text color="#565e6e">grid view</Text></Text>}
+                    {!isZellij && <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>}
+                    {!isZellij && <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>}
                     <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">x</Text>     <Text color="#565e6e">kill workspace</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">q</Text>     <Text color="#565e6e">quit</Text>  <Text color="#565e6e">· ? hide</Text></Text>

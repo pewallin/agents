@@ -11,21 +11,30 @@ import { getProfileNames, resolveProfile } from "./config.js";
 import { Dashboard } from "./components/Dashboard.js";
 import { Select } from "./components/Select.js";
 import { AgentTable } from "./components/AgentTable.js";
+import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
 
-// If launched outside tmux for a command that needs it, re-exec inside a tmux session.
-// Non-interactive commands (report, setup, uninstall, count) work fine without tmux.
-if (!process.env.TMUX) {
+// Handle --tmux flag early (before commander parses, since it's global)
+if (process.argv.includes("--tmux")) {
+  setMultiplexer("tmux");
+  process.argv = process.argv.filter(a => a !== "--tmux");
+}
+
+// If launched outside a multiplexer for a command that needs one, re-exec inside.
+// Non-interactive commands (report, setup, uninstall, count) work fine without one.
+const insideMux = !!detectMultiplexer();
+if (!insideMux) {
   const args = process.argv.slice(2);
   const firstArg = args[0] || "";
-  const needsTmux = !firstArg || firstArg === "watch" || firstArg === "w"
+  const needsMux = !firstArg || firstArg === "watch" || firstArg === "w"
     || firstArg === "list" || firstArg === "ls"
     || firstArg === "workspace" || firstArg === "ws"
     || firstArg === "back";
-  if (needsTmux) {
+  if (needsMux) {
+    // Try tmux (zellij auto-session creation not yet supported)
     try {
       execSync("which tmux", { stdio: "ignore" });
     } catch {
-      console.error("tmux is required but not installed.");
+      console.error("No multiplexer detected. Run inside tmux or zellij, or install tmux.");
       process.exit(1);
     }
     // Attach to existing 'agents' session or create a new one
@@ -77,6 +86,9 @@ if (!process.env.TMUX) {
     process.exit(0);
   }
 }
+
+// Initialize multiplexer (async import of the correct backend)
+await initMux();
 
 // Auto-setup in background if hook config changed since last run
 autoSetupIfNeeded();
@@ -161,6 +173,10 @@ program
   .option("--session <id>", "Session ID (reads from stdin if not provided)")
   .action(async (opts) => {
     let session = opts.session;
+    // Resolve empty session from zellij env (hooks pass $TMUX_PANE which is empty in zellij)
+    if (!session && process.env.ZELLIJ_PANE_ID) {
+      session = `terminal_${process.env.ZELLIJ_PANE_ID}`;
+    }
     if (!session) {
       // Try reading session_id from stdin (hooks pipe JSON)
       try {

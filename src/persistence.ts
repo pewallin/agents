@@ -20,23 +20,32 @@ export interface PreviewState {
   windowId: string;
   zones: HelperZone[];        // persistent helper zones
   helperLayout: string | null; // active layout name, or null
+  originalTabIndex?: number;  // zellij: agent's original tab index (for restore)
+  originalTabName?: string;   // zellij: agent's original tab name (for re-creation)
 }
 
-const selfPane = ownPaneId();
-const stateFile = join(tmpdir(), `agents-preview-${selfPane.replace("%", "")}.json`);
+// Lazy-init to avoid calling ownPaneId() (which may call tmux) at import time
+let _stateFile: string | null = null;
+function stateFile(): string {
+  if (!_stateFile) {
+    const selfPane = ownPaneId();
+    _stateFile = join(tmpdir(), `agents-preview-${selfPane.replace("%", "")}.json`);
+  }
+  return _stateFile;
+}
 
 export function savePreviewState(pv: PreviewState | null): void {
   try {
-    if (pv) writeFileSync(stateFile, JSON.stringify(pv));
-    else unlinkSync(stateFile);
+    if (pv) writeFileSync(stateFile(), JSON.stringify(pv));
+    else unlinkSync(stateFile());
   } catch {}
 }
 
 export function loadPreviewState(): PreviewState | null {
   try {
-    const pv: PreviewState = JSON.parse(readFileSync(stateFile, "utf-8"));
+    const pv: PreviewState = JSON.parse(readFileSync(stateFile(), "utf-8"));
     if (!paneExists(pv.splitPaneId) || !paneExists(pv.agentTmuxId)) {
-      unlinkSync(stateFile);
+      unlinkSync(stateFile());
       return null;
     }
     pv.zones = (pv.zones || []).filter((z) => paneExists(z.zonePaneId));

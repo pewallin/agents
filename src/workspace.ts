@@ -1,4 +1,5 @@
 import { exec } from "./shell.js";
+import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { loadConfig, resolveProfile } from "./config.js";
 import type { WorkspaceDef, LaunchProfile } from "./config.js";
 
@@ -60,6 +61,70 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
   const cwdBase = (opts?.cwd || process.cwd()).split("/").pop() || "";
   const windowName = cwdBase ? `${baseName}:${cwdBase}` : baseName;
 
+  if (detectMultiplexer() === "zellij") {
+    createWorkspaceZellij(cmd, windowName, defs, opts);
+  } else {
+    createWorkspaceTmux(cmd, windowName, defs, opts);
+  }
+}
+
+function createWorkspaceZellij(cmd: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>): void {
+  const mux = getMux();
+
+  // Create tab — getMux().createTab returns the tab name, not pane ID
+  // Snapshot panes before to find the new one after
+  const before = new Set(mux.listPanes().map(p => p.id));
+  mux.createTab(windowName, cmd, { cwd: opts?.cwd });
+
+  // Find the new pane (the one not in the before set)
+  const after = mux.listPanes();
+  const newPane = after.find(p => !before.has(p.id));
+  const agentPaneId = newPane?.id || "";
+
+  if (!agentPaneId) {
+    console.error("Failed to create zellij tab");
+    return;
+  }
+
+  const paneMap: Record<string, string> = { agent: agentPaneId };
+
+  for (const def of defs) {
+    const targetId = paneMap[def.of || "agent"] || agentPaneId;
+    const dir = def.split || "right";
+    // Map tmux directions to zellij's simpler right/down
+    const direction: "right" | "down" = (dir === "left" || dir === "right") ? "right" : "down";
+
+    // Convert percentage size to absolute columns/rows
+    let size: string | undefined;
+    if (def.size) {
+      const pctMatch = def.size.match(/^(\d+)%$/);
+      if (pctMatch) {
+        const pct = parseInt(pctMatch[1], 10);
+        const targetPane = mux.listPanes().find(p => p.id === targetId);
+        if (targetPane) {
+          const total = direction === "right" ? targetPane.geometry.width : targetPane.geometry.height;
+          size = String(Math.round(total * pct / 100));
+        }
+      } else {
+        size = def.size;
+      }
+    }
+
+    const paneId = mux.createSplit(targetId, direction, size);
+    if (paneId) {
+      if (def.command !== "$SHELL") {
+        mux.sendKeys(paneId, def.command + "\n");
+      }
+      const label = def.command.replace(/^\$/, "").split(/\s+/)[0].toLowerCase();
+      paneMap[label] = paneId;
+    }
+  }
+
+  // Focus the agent pane
+  mux.focusPane(agentPaneId);
+}
+
+function createWorkspaceTmux(cmd: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>): void {
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
   if (opts?.tmuxSession) {
