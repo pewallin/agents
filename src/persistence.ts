@@ -20,7 +20,8 @@ export interface PreviewState {
   windowId: string;
   zones: HelperZone[];        // persistent helper zones
   helperLayout: string | null; // active layout name, or null
-  originalTabIndex?: number;  // zellij: agent's original tab (for restore)
+  originalTabIndex?: number;  // zellij: agent's original tab index (for restore)
+  originalTabName?: string;   // zellij: agent's original tab name (for re-creation)
 }
 
 // Lazy-init to avoid calling ownPaneId() (which may call tmux) at import time

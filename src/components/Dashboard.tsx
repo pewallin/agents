@@ -194,13 +194,27 @@ export function Dashboard({ interval }: Props) {
     const pv = previewRef.current;
     if (!pv) return;
     if (isZellij) {
-      // Zellij: move agent back to its original tab and kill the placeholder
+      // Zellij: move agent back. If original tab was destroyed, create a new one first.
       const mux = getMux();
       if (pv.originalTabIndex !== undefined) {
-        mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
-      }
-      if (pv.splitPaneId) {
-        mux.closePane(pv.splitPaneId);
+        // Check if original tab still exists
+        const tabs = mux.listPanes().map(p => p.tabIndex);
+        const tabExists = tabs.includes(pv.originalTabIndex);
+        if (tabExists) {
+          mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
+        } else {
+          // Tab was destroyed — create a new tab and move agent there
+          const tabName = (pv as any).originalTabName || "restored";
+          mux.createTab(tabName, "true"); // "true" is a no-op command
+          // Find the new tab index
+          const newPanes = mux.listPanes();
+          const newTab = newPanes.find(p => p.tab === tabName);
+          if (newTab) {
+            mux.breakPaneToTab(pv.agentTmuxId, newTab.tabIndex);
+            // Close the "true" shell pane we created
+            mux.closePane(newTab.id);
+          }
+        }
       }
       syncPaneSize();
       process.stdout.write("\x1b[2J\x1b[H");
@@ -240,9 +254,13 @@ export function Dashboard({ interval }: Props) {
         try {
           const mux = getMux();
           if (pv.originalTabIndex !== undefined) {
-            mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
+            const tabs = mux.listPanes().map(p => p.tabIndex);
+            if (tabs.includes(pv.originalTabIndex)) {
+              mux.breakPaneToTab(pv.agentTmuxId, pv.originalTabIndex);
+            }
+            // If tab was destroyed, agent stays in dashboard tab — will be
+            // moved to a new tab when the next agent is previewed
           }
-          if (pv.splitPaneId) mux.closePane(pv.splitPaneId);
         } catch {}
       } else {
         if (pv.zones.length) destroyZones(pv.zones);
@@ -320,26 +338,20 @@ export function Dashboard({ interval }: Props) {
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
     if (isZellij) {
-      // Zellij preview: move the agent pane into the dashboard tab as a real
-      // embedded split. To prevent the agent's original tab from closing,
-      // we first create a dummy pane here and send it to the agent's tab.
+      // Zellij preview: move the agent pane into the dashboard tab.
+      // No dummy pane needed — breakPaneToTab is atomic. If the agent's
+      // original tab had only this pane, the tab closes (fine — we track
+      // the tab name for restore and create a new tab if needed).
       const mux = getMux();
       const dashTabIdx = mux.ownTabIndex();
 
       const allPanes = mux.listPanes();
       const agentInfo = allPanes.find(p => p.id === agent.tmuxPaneId);
       const originalTabIndex = agentInfo?.tabIndex ?? 0;
+      const originalTabName = agentInfo?.tab ?? "";
       const sameTab = originalTabIndex === dashTabIdx;
 
-      let placeholderId = "";
       if (!sameTab) {
-        // 1. Create tiny dummy in dashboard tab, send to agent's tab (keeps it alive)
-        const dummyId = mux.createSplit(selfPaneId.current, "down", "1");
-        if (dummyId) {
-          mux.breakPaneToTab(dummyId, originalTabIndex);
-          placeholderId = dummyId;
-        }
-        // 2. Bring agent to dashboard tab
         mux.breakPaneToTab(agent.tmuxPaneId, dashTabIdx);
       }
 
@@ -360,7 +372,7 @@ export function Dashboard({ interval }: Props) {
       // Tab/Space use openPreviewAndFocus which calls focusPane separately.
 
       const pv: PreviewState = {
-        splitPaneId: placeholderId,  // dummy pane sitting in agent's original tab
+        splitPaneId: "",
         agentTmuxId: agent.tmuxPaneId,
         agentName: agent.agent,
         agentPane: agent.pane,
@@ -370,6 +382,7 @@ export function Dashboard({ interval }: Props) {
         zones: [],
         helperLayout: null,
         originalTabIndex,
+        originalTabName,
       };
       previewRef.current = pv;
       _previewStore = pv;
