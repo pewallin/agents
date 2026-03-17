@@ -194,15 +194,10 @@ export function Dashboard({ interval }: Props) {
     const pv = previewRef.current;
     if (!pv) return;
     if (isZellij) {
-      // Zellij restore: break agent to its own tab, kill placeholder, dashboard stays.
+      // Zellij: just switch back to dashboard tab (no pane movement needed)
       const mux = getMux();
-      if (paneExists(pv.agentTmuxId)) {
-        const tabName = pv.originalTabName || pv.agentPane?.split(":")[1] || "restored";
-        mux.breakPanesToNewTab([pv.agentTmuxId], tabName);
-      }
-      if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
-      syncPaneSize();
-      process.stdout.write("\x1b[2J\x1b[H");
+      const dashTabIdx = mux.ownTabIndex();
+      exec(`zellij action go-to-tab ${dashTabIdx + 1}`);
       setPreview(null);
       return;
     }
@@ -236,12 +231,7 @@ export function Dashboard({ interval }: Props) {
       const pv = previewRef.current;
       if (!pv) return;
       if (isZellij) {
-        // Zellij: break agent to its own tab, kill placeholder
-        if (paneExists(pv.agentTmuxId)) {
-          const tabName = (pv as any).originalTabName || "restored";
-          getMux().breakPanesToNewTab([pv.agentTmuxId], tabName);
-        }
-        if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
+        // Zellij preview is tab-switch only, nothing to restore
       } else {
         if (pv.zones.length) destroyZones(pv.zones);
         if (paneExists(pv.agentTmuxId) && paneExists(pv.splitPaneId)) {
@@ -317,11 +307,30 @@ export function Dashboard({ interval }: Props) {
   if (!helperLayoutNames.current) helperLayoutNames.current = Object.keys(helperLayouts.current);
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
-    // Unified preview path — both tmux and zellij use the same flow:
-    // 1. createPreviewSplit → creates sized split placeholder
-    // 2. swapPanes(agent, split) → agent goes into the split, placeholder to agent's spot
-    // 3. showPlaceholder → shows message in agent's original position
-    // The multiplexer-specific logic is in scanner.ts functions.
+    if (isZellij) {
+      // Zellij: side-by-side preview not available (zellij 0.44 pane movement APIs are buggy).
+      // Instead, switch to the agent's tab. Press p again to come back.
+      const mux = getMux();
+      const panes = mux.listPanes();
+      const target = panes.find(p => p.id === agent.tmuxPaneId);
+      if (target) exec(`zellij action go-to-tab ${target.tabIndex + 1}`);
+      mux.focusPane(agent.tmuxPaneId);
+      const pv: PreviewState = {
+        splitPaneId: "",
+        agentTmuxId: agent.tmuxPaneId,
+        agentName: agent.agent,
+        agentPane: agent.pane,
+        agentPaneId: agent.paneId,
+        vertical: forceVertical,
+        windowId: agent.windowId || "",
+        zones: [],
+        helperLayout: null,
+      };
+      previewRef.current = pv;
+      _previewStore = pv;
+      setPreview(pv);
+      return;
+    }
     const dashboardRows = 9 + agents.length;
     const termRows = process.stdout.rows || 24;
     const vertical = forceVertical || termRows < dashboardRows + 10;
@@ -330,14 +339,9 @@ export function Dashboard({ interval }: Props) {
     const splitId = createPreviewSplit(vertical ? dashboardCols : dashboardRows, vertical);
     if (!splitId) return;
 
-    // Sync process.stdout.columns immediately after split so any SIGWINCH-triggered
-    // re-render by Ink already sees the correct width.
     syncPaneSize();
-    // Clear screen so Ink's cursor tracking isn't confused by old output
-    // wrapping at the new (narrower) pane width.
     process.stdout.write("\x1b[2J\x1b[H");
 
-    // Set preview ref BEFORE swapping so async scan filter takes effect immediately
     const pv: PreviewState = {
       splitPaneId: splitId,
       agentTmuxId: agent.tmuxPaneId,
@@ -353,24 +357,8 @@ export function Dashboard({ interval }: Props) {
     _previewStore = pv;
 
     swapPanes(agent.tmuxPaneId, splitId);
-
-    // In zellij, breakPanesToNewTab resets layout to 50/50 — resize agent to fill preview area
-    if (isZellij) {
-      // Read actual pane widths (not process.stdout which may be stale)
-      const selfWidth = getPaneWidth(selfPaneId.current);
-      const agentWidth = getPaneWidth(agent.tmuxPaneId);
-      const totalCols = selfWidth + agentWidth + 1; // +1 for border
-      const targetAgentCols = totalCols - dashboardCols - 1;
-      if (targetAgentCols > agentWidth) {
-        resizePaneWidth(agent.tmuxPaneId, targetAgentCols);
-      }
-      syncPaneSize();
-      process.stdout.write("\x1b[2J\x1b[H");
-    }
-
     showPlaceholder(splitId, agent.agent, agent.pane);
 
-    // Create persistent zones and optionally populate them
     const defs = layout ? helperLayouts.current[layout] : null;
     const zones = defs?.length ? createZones(agent.tmuxPaneId, defs) : [];
     if (zones.length && agent.windowId) {
@@ -889,7 +877,7 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (key.return && agents[idx]) {
-      if (!isZellij) restorePreview();
+      restorePreview();
       switchToPane(agents[idx].paneId, agents[idx].tmuxPaneId);
     }
   });

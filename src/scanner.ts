@@ -400,7 +400,16 @@ const BACK_ENV = "AGENTS_BACK_PANE";
 
 export function switchToPane(paneId: string, tmuxPaneId?: string): void {
   if (detectMultiplexer() === "zellij") {
-    if (tmuxPaneId) getMux().focusPane(tmuxPaneId);
+    if (tmuxPaneId) {
+      // Switch to the agent's tab then focus the pane
+      const mux = getMux();
+      const panes = mux.listPanes();
+      const target = panes.find(p => p.id === tmuxPaneId);
+      if (target) {
+        exec(`zellij action go-to-tab ${target.tabIndex + 1}`); // 1-based
+      }
+      mux.focusPane(tmuxPaneId);
+    }
     return;
   }
   const current = exec(`tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`);
