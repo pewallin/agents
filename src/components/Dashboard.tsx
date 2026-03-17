@@ -666,8 +666,8 @@ export function Dashboard({ interval }: Props) {
         // If in preview
         const pv = previewRef.current;
         if (pv && pv.agentTmuxId === agent.tmuxPaneId) {
-          if (pv.zones.length) destroyZones(pv.zones);
-          if (paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
+          if (!isZellij && pv.zones.length) destroyZones(pv.zones);
+          if (!isZellij && paneExists(pv.splitPaneId)) killPane(pv.splitPaneId);
           setPreview(null);
         }
         killWindow(agent.windowId || agent.paneId);
