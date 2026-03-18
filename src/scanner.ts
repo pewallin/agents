@@ -714,7 +714,12 @@ export function filterAgents(
     for (const ga of grid.agents) {
       const found = scanned.find((a) => a.tmuxPaneId === ga.tmuxPaneId);
       if (found) {
-        list.push({ ...found, pane: ga.pane });
+        list.push({
+          ...found,
+          pane: ga.pane,
+          paneId: ga.paneId || found.paneId,
+          windowId: ga.windowId || found.windowId,
+        });
       }
     }
   }
