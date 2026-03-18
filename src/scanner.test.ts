@@ -89,13 +89,28 @@ describe("filterAgents", () => {
   it("re-adds grid agents with original names", () => {
     const result = filterAgents(agents, selfPane, selfWindow, null, {
       agents: [
-        { tmuxPaneId: "%20", pane: "belgium:pi.0" },
-        { tmuxPaneId: "%21", pane: "belgium:copilot.1" },
+        { tmuxPaneId: "%20", pane: "belgium:pi.0", paneId: "belgium:0", windowId: "belgium:0" },
+        { tmuxPaneId: "%21", pane: "belgium:copilot.1", paneId: "belgium:1", windowId: "belgium:1" },
       ],
       placeholderIds: ["%60", "%61"],
     });
     expect(result.find((a) => a.tmuxPaneId === "%20")?.pane).toBe("belgium:pi.0");
     expect(result.find((a) => a.tmuxPaneId === "%21")?.pane).toBe("belgium:copilot.1");
+  });
+
+  it("re-adds grid agents with original pane targets for enter-jump", () => {
+    const swapped = agents.map((a) =>
+      a.tmuxPaneId === "%20" ? { ...a, paneId: "dustbot:0", windowId: "dustbot:0" } : a
+    );
+    const result = filterAgents(swapped, selfPane, selfWindow, null, {
+      agents: [
+        { tmuxPaneId: "%20", pane: "belgium:pi.0", paneId: "belgium:0", windowId: "belgium:0" },
+      ],
+      placeholderIds: ["%60"],
+    });
+    const found = result.find((a) => a.tmuxPaneId === "%20");
+    expect(found?.paneId).toBe("belgium:0");
+    expect(found?.windowId).toBe("belgium:0");
   });
 
   it("results are sorted by pane name", () => {

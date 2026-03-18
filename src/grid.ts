@@ -172,6 +172,10 @@ export interface GridAgent {
   agent: string;
   /** Pane reference for display (e.g. "belgium:pi.0") */
   pane: string;
+  /** Original window reference used for jump-to-agent */
+  paneId?: string;
+  /** Original window reference kept stable while swapped into grid */
+  windowId?: string;
 }
 
 export interface GridState {

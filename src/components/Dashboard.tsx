@@ -163,7 +163,7 @@ export function Dashboard({ interval }: Props) {
             const newGridAgents = list
               .filter((a) => !scope || a.pane.startsWith(scope + ":"))
               .slice(0, 12)
-              .map((a) => ({ tmuxPaneId: a.tmuxPaneId, agent: a.agent, pane: a.pane }));
+              .map((a) => ({ tmuxPaneId: a.tmuxPaneId, agent: a.agent, pane: a.pane, paneId: a.paneId, windowId: a.windowId }));
             destroyGrid(curGrid);
             if (newGridAgents.length >= 1) {
               const newGs = createGrid(newGridAgents, self);
@@ -448,7 +448,7 @@ export function Dashboard({ interval }: Props) {
     // Filter agents by tmux session scope (if provided)
     let gridAgents: GridAgent[] = agents
       .filter((a) => !scope || a.pane.startsWith(scope + ":"))
-      .map((a) => ({ tmuxPaneId: a.tmuxPaneId, agent: a.agent, pane: a.pane }));
+      .map((a) => ({ tmuxPaneId: a.tmuxPaneId, agent: a.agent, pane: a.pane, paneId: a.paneId, windowId: a.windowId }));
 
     if (gridAgents.length < 1) return;
     if (gridAgents.length > 12) gridAgents = gridAgents.slice(0, 12);
@@ -877,7 +877,11 @@ export function Dashboard({ interval }: Props) {
       return;
     }
     if (key.return && agents[idx]) {
-      restorePreview();
+      if (gridRef.current) {
+        closeGrid();
+      } else {
+        restorePreview();
+      }
       switchToPane(agents[idx].paneId, agents[idx].tmuxPaneId);
     }
   });

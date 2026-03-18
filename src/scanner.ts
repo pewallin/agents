@@ -423,28 +423,6 @@ export function switchToPane(paneId: string, tmuxPaneId?: string): void {
   exec(`tmux switch-client -t ${JSON.stringify(paneId)}`);
 }
 
-export function switchBack(): boolean {
-  const back = exec(`tmux show-environment -g ${BACK_ENV} 2>/dev/null`).replace(`${BACK_ENV}=`, "");
-  if (!back) return false;
-  exec(`tmux select-window -t ${JSON.stringify(back)}`);
-  exec(`tmux switch-client -t ${JSON.stringify(back)}`);
-  // Signal the dashboard to exit fullscreen by sending 'f'
-  // Find the node pane in the back window (the dashboard)
-  const winRef = back.replace(/\.\d+$/, ""); // strip pane index
-  const panes = exec(`tmux list-panes -t ${JSON.stringify(winRef)} -F '#{pane_id}§#{pane_width}' 2>/dev/null`);
-  if (panes) {
-    for (const line of panes.split("\n")) {
-      const [paneId, width] = line.split("§");
-      if (paneId && parseInt(width, 10) <= 5) {
-        // Narrow pane = likely fullscreen dashboard, send 'f' to restore
-        exec(`tmux send-keys -t ${paneId} s`);
-        break;
-      }
-    }
-  }
-  return true;
-}
-
 // ── Preview / swap helpers ──────────────────────────────────────────
 
 /** Create a split for preview. `dashboardSize` is rows (horizontal) or columns
@@ -697,7 +675,7 @@ export interface PreviewFilter {
 }
 
 export interface GridFilter {
-  agents: { tmuxPaneId: string; pane: string }[];
+  agents: { tmuxPaneId: string; pane: string; paneId?: string; windowId?: string }[];
   placeholderIds: string[];
 }
 
