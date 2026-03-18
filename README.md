@@ -1,6 +1,11 @@
 # agents
 
-Monitor and manage AI coding agents across tmux sessions.
+Monitor and manage AI coding agents across tmux sessions (with zellij support in beta).
+
+- Live dashboard with status, preview, and grid view
+- Hook-based reporting for claude, copilot, pi, and opencode
+- Screen-scrape fallback for codex, cursor, and others
+- Agent workspaces with profiles, helper panes, and quick jump-back
 
 ## Install
 
@@ -8,21 +13,21 @@ Monitor and manage AI coding agents across tmux sessions.
 git clone https://github.com/pewallin/agents.git
 cd agents
 npm install && npm run build && npm link
-agents setup   # install reporting hooks for claude, copilot, pi, opencode
+agents setup          # install reporting hooks
+agents                # live dashboard
 ```
 
 ## Commands
 
 ```
 agents                  Live dashboard (default)
-agents ls               One-shot agent list (j/k, enter to jump)
-agents ws               Create agent workspace (uses default profile)
-agents ws -p copilot    Create workspace using named profile
+agents ls               One-shot agent list
+agents ws               Create workspace using default profile
+agents ws claude        Create workspace using named profile
 agents count            Number of running agents
-agents back             Jump to previous pane (bind to Ctrl-b b)
-agents report           Report state (called by hooks)
-agents setup            Install hooks
-agents uninstall        Remove hooks
+agents back             Jump back after enter-from-dashboard
+agents setup            Install hooks/extensions
+agents uninstall        Remove hooks/extensions
 ```
 
 If launched outside tmux, `agents` auto-creates and attaches a tmux session.
@@ -31,17 +36,18 @@ If launched outside tmux, `agents` auto-creates and attaches a tmux session.
 
 | Key | Action |
 |-----|--------|
-| `j/k` / `↑↓` | Navigate (auto-switches preview) |
-| `enter` | Jump to agent pane |
-| `tab` | Preview + fullscreen (compact sidebar) |
-| `click` | Preview clicked agent |
+| `j/k` / `↑↓` | Navigate |
+| `enter` | Jump to the real agent window |
+| `tab` / `space` | Focus agent in preview/grid |
+| `click` | Select / preview agent |
 | `p` / `P` | Toggle preview (horizontal / vertical) |
-| `f` | Toggle compact sidebar |
-| `h` | Cycle helper layouts (off → default → small → off) |
-| `n` | New agent workspace (profile picker) |
-| `q` | Quit (restores all panes) |
+| `g` / `G` | Grid view (session / all sessions) |
+| `h` | Cycle helper layouts |
+| `n` | New workspace from selected agent cwd/session |
+| `x` | Kill selected workspace |
+| `q` | Quit and restore panes |
 
-Add `bind b run-shell "agents back"` to `~/.tmux.conf` to jump back.
+Add `bind -n M-b run-shell "node ~/code/agents/dist/cli.js back 2>/dev/null || tmux last-window"` to `~/.tmux.conf` for instant jump-back.
 
 ## Config
 
@@ -94,11 +100,11 @@ Add `bind b run-shell "agents back"` to `~/.tmux.conf` to jump back.
 }
 ```
 
-Profiles define agent launch commands. Each profile can specify a `workspace` layout, `name` for the tmux window, and `env` vars. The `defaultCommand` field still works as a fallback if no profiles are defined.
+Profiles define agent launch commands. Each profile can set a `workspace` layout, window `name`, and `env`. `defaultCommand` still works as a fallback.
 
 ## Status Detection
 
-Hooks report state for claude, copilot, pi, and opencode. Screen-scraping detects status for codex, cursor, and others.
+Hooks report state for claude, copilot, pi, and opencode. Codex, cursor, and anything else fall back to screen-scraping.
 
 | Indicator | Meaning |
 |-----------|---------|
