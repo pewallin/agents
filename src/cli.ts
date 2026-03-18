@@ -1,16 +1,6 @@
 #!/usr/bin/env node
-import { Command } from "commander";
-import React from "react";
-import { render, Text, Box } from "ink";
 import { execSync } from "child_process";
-import { scan, switchBack } from "./scanner.js";
-import { reportState } from "./state.js";
-import { setup, uninstall, autoSetupIfNeeded } from "./setup.js";
-import { createWorkspace } from "./workspace.js";
-import { getProfileNames, resolveProfile } from "./config.js";
-import { Dashboard } from "./components/Dashboard.js";
-import { Select } from "./components/Select.js";
-import { AgentTable } from "./components/AgentTable.js";
+import { switchBack } from "./back.js";
 import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
 
 // Handle --tmux flag early (before commander parses, since it's global)
@@ -19,16 +9,22 @@ if (process.argv.includes("--tmux")) {
   process.argv = process.argv.filter(a => a !== "--tmux");
 }
 
+const args = process.argv.slice(2);
+const firstArg = args[0] || "";
+const muxKind = detectMultiplexer();
+
+// Fast path: `agents back` should feel instant and does not need Commander/Ink.
+if (args.length === 1 && firstArg === "back" && muxKind === "tmux") {
+  process.exit(switchBack() ? 0 : 1);
+}
+
 // If launched outside a multiplexer for a command that needs one, re-exec inside.
-// Non-interactive commands (report, setup, uninstall, count) work fine without one.
-const insideMux = !!detectMultiplexer();
+// Non-interactive commands (report, setup, uninstall, count, back) work fine without one.
+const insideMux = !!muxKind;
 if (!insideMux) {
-  const args = process.argv.slice(2);
-  const firstArg = args[0] || "";
   const needsMux = !firstArg || firstArg === "watch" || firstArg === "w"
     || firstArg === "list" || firstArg === "ls"
-    || firstArg === "workspace" || firstArg === "ws"
-    || firstArg === "back";
+    || firstArg === "workspace" || firstArg === "ws";
   if (needsMux) {
     // Try tmux (zellij auto-session creation not yet supported)
     try {
@@ -49,6 +45,9 @@ if (!insideMux) {
     ].join(" \\; ");
     const applyStyle = () => {
       try {
+        // Lock the window name so shells/programs can't override it
+        execSync(`tmux set-option -t agents:0 -w automatic-rename off`, { stdio: "ignore" });
+        execSync(`tmux set-option -t agents:0 -w allow-rename off`, { stdio: "ignore" });
         execSync(`tmux rename-window -t agents: "agents"`, { stdio: "ignore" });
         // Apply immediately
         execSync(styleScript, { stdio: "ignore" });
@@ -68,6 +67,8 @@ if (!insideMux) {
     };
     try {
       execSync("tmux has-session -t agents 2>/dev/null");
+      // Re-apply styling on every attach (global theme hooks may have overridden it)
+      applyStyle();
       // Session exists — run the command in it
       if (!firstArg || firstArg === "watch" || firstArg === "w") {
         // Dashboard: attach to existing session
@@ -86,6 +87,44 @@ if (!insideMux) {
     process.exit(0);
   }
 }
+
+const [
+  commander,
+  reactMod,
+  ink,
+  scanner,
+  state,
+  setupMod,
+  workspace,
+  config,
+  dashboardMod,
+  selectMod,
+  agentTableMod,
+] = await Promise.all([
+  import("commander"),
+  import("react"),
+  import("ink"),
+  import("./scanner.js"),
+  import("./state.js"),
+  import("./setup.js"),
+  import("./workspace.js"),
+  import("./config.js"),
+  import("./components/Dashboard.js"),
+  import("./components/Select.js"),
+  import("./components/AgentTable.js"),
+]);
+
+const { Command } = commander;
+const React = reactMod.default;
+const { render } = ink;
+const { scan } = scanner;
+const { reportState } = state;
+const { setup, uninstall, autoSetupIfNeeded } = setupMod;
+const { createWorkspace } = workspace;
+const { getProfileNames, resolveProfile } = config;
+const { Dashboard } = dashboardMod;
+const { Select } = selectMod;
+const { AgentTable } = agentTableMod;
 
 // Initialize multiplexer (async import of the correct backend)
 await initMux();

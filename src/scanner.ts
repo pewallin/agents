@@ -4,6 +4,7 @@ import { join } from "path";
 import { exec, execAsync } from "./shell.js";
 import { getAgentState, getAgentStateEntry } from "./state.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
+import { BACK_ENV, switchBack } from "./back.js";
 import type { MuxPaneInfo } from "./multiplexer.js";
 
 export type AgentStatus = "attention" | "question" | "working" | "stalled" | "idle";
@@ -395,8 +396,6 @@ export async function scanAsync(): Promise<AgentPane[]> {
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
   return results;
 }
-
-const BACK_ENV = "AGENTS_BACK_PANE";
 
 export function switchToPane(paneId: string, tmuxPaneId?: string): void {
   if (detectMultiplexer() === "zellij") {
