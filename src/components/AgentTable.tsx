@@ -81,7 +81,22 @@ export function AgentTable({ agents, selectedIndex, showCursor, summaryView }: P
         <Text color="#6b7385">{pad("AGENT", agentData)}</Text>
         <Text color="#6b7385">STATUS</Text>
       </Box>
-      {agents.map((agent, i) => {
+      {(() => {
+        // In summary view, each entry is ~4 lines. Compute visible window.
+        const termRows = process.stdout.rows || 40;
+        const headerLines = 3; // header + padding
+        const linesPerEntry = summaryView ? 4 : 1;
+        const maxVisible = Math.max(2, Math.floor((termRows - headerLines) / linesPerEntry));
+        let startIdx = 0;
+        let endIdx = agents.length;
+        if (summaryView && agents.length > maxVisible && selectedIndex !== undefined) {
+          // Center the selected index in the visible window
+          const half = Math.floor(maxVisible / 2);
+          startIdx = Math.max(0, Math.min(selectedIndex - half, agents.length - maxVisible));
+          endIdx = Math.min(agents.length, startIdx + maxVisible);
+        }
+        return agents.slice(startIdx, endIdx).map((agent, sliceIdx) => {
+        const i = startIdx + sliceIdx;
         const selected = showCursor && i === selectedIndex;
         const cursorIndent = showCursor ? 3 : 0; // cursor col + gap
         return (
@@ -118,7 +133,8 @@ export function AgentTable({ agents, selectedIndex, showCursor, summaryView }: P
             {summaryView && <Box height={1} />}
           </Box>
         );
-      })}
+      });
+      })()}
     </Box>
   );
 }

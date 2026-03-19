@@ -1000,7 +1000,7 @@ export function Dashboard({ interval }: Props) {
                 })() : null}
                 <Text> </Text>
                 {/* Auto-hide cheatsheet when pane height is tight (e.g. grid cell) */}
-                {showKeys && paneHeight >= agents.length + 20 ? (
+                {showKeys && !summaryView && paneHeight >= agents.length + 20 ? (
                   <Box flexDirection="column" borderStyle="round" borderColor="#3b4252" paddingLeft={1} paddingRight={1}>
                     <Text wrap="truncate"><Text color="#6b7385">enter</Text> <Text color="#565e6e">jump to agent</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">tab</Text>   <Text color="#565e6e">preview</Text></Text>
