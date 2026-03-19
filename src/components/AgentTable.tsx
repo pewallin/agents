@@ -27,9 +27,10 @@ interface Props {
   agents: AgentPane[];
   selectedIndex?: number;
   showCursor?: boolean;
+  summaryView?: boolean;
 }
 
-export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
+export function AgentTable({ agents, selectedIndex, showCursor, summaryView }: Props) {
   if (agents.length === 0) {
     return (
       <Box paddingLeft={2}>
@@ -82,25 +83,39 @@ export function AgentTable({ agents, selectedIndex, showCursor }: Props) {
       </Box>
       {agents.map((agent, i) => {
         const selected = showCursor && i === selectedIndex;
+        const cursorIndent = showCursor ? 3 : 0; // cursor col + gap
         return (
-          <Box key={agent.tmuxPaneId} paddingLeft={2} gap={2} overflowX="hidden">
-            {showCursor && (
-              <Text color="cyan" bold={selected}>
-                {selected ? "›" : " "}
-              </Text>
-            )}
-            <Text bold={selected}>
-              {pad(agent.pane, maxPane)}
-            </Text>
-            {showTitle && (
+          <Box key={agent.tmuxPaneId} flexDirection="column" overflowX="hidden">
+            <Box paddingLeft={2} gap={2} overflowX="hidden">
+              {showCursor && (
+                <Text color="cyan" bold={selected}>
+                  {selected ? "›" : " "}
+                </Text>
+              )}
               <Text bold={selected}>
-                {pad(agent.title, maxTitle)}
+                {pad(agent.pane, maxPane)}
               </Text>
+              {showTitle && (
+                <Text bold={selected}>
+                  {pad(agent.title, maxTitle)}
+                </Text>
+              )}
+              <Text color={agentColor(agent.agent)} bold={selected}>
+                {pad(agent.agent, agentData)}
+              </Text>
+              <StatusBadge status={agent.status} detail={agent.detail} />
+            </Box>
+            {summaryView && (agent.context || agent.cwd) && (
+              <Box flexDirection="column" paddingLeft={2 + cursorIndent} overflowX="hidden">
+                {agent.context && (
+                  <Text dimColor wrap="truncate">  {agent.context}</Text>
+                )}
+                {agent.cwd && (
+                  <Text color="#6b7385" wrap="truncate">  {agent.cwd}</Text>
+                )}
+              </Box>
             )}
-            <Text color={agentColor(agent.agent)} bold={selected}>
-              {pad(agent.agent, agentData)}
-            </Text>
-            <StatusBadge status={agent.status} detail={agent.detail} />
+            {summaryView && <Box height={1} />}
           </Box>
         );
       })}

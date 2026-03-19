@@ -10,10 +10,10 @@ import { AgentTable } from "./AgentTable.js";
 import { useMouse } from "../mouse.js";
 import { loadConfig, getProfileNames, resolveProfile } from "../config.js";
 import type { HelperDef } from "../config.js";
-import { createWorkspace } from "../workspace.js";
+import { createWorkspace, getWorkspacePathState } from "../workspace.js";
 import { createGrid, destroyGrid, readGridFocus, type GridState, type GridAgent } from "../grid.js";
 import { GRID_FOCUS_FILE } from "../constants.js";
-import { existsSync, statSync, readdirSync, watch as fsWatch } from "fs";
+import { statSync, readdirSync, watch as fsWatch } from "fs";
 import { execSync } from "child_process";
 import { join, dirname, basename } from "path";
 import { detectMultiplexer, getMux } from "../multiplexer.js";
@@ -57,6 +57,7 @@ export function Dashboard({ interval }: Props) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [previewing, setPreviewing] = useState(!!_previewStore);
   const [compact, setCompact] = useState(false);
+  const [summaryView, setSummaryView] = useState(false);
   const [paneWidth, setPaneWidth] = useState(() => {
     const w = getPaneWidth(ownPaneId());
     // Sync process.stdout.columns with actual tmux pane width — the PTY size
@@ -92,7 +93,8 @@ export function Dashboard({ interval }: Props) {
   type WizardState =
     | { step: "profile"; profiles: string[]; selected: number; inheritedCwd: string; inheritedSession: string }
     | { step: "session"; profile: string; sessions: string[]; selected: number; inheritedCwd: string }
-    | { step: "cwd"; profile: string; session: string; cwdInput: string; cwdValid: boolean };
+    | { step: "cwd"; profile: string; session: string; cwdInput: string; cwdState: "valid" | "creatable" | "invalid" }
+    | { step: "create-project"; profile: string; session: string; cwdInput: string };
   const [wizard, setWizard] = useState<WizardState | null>(null);
   const [showKeys, setShowKeys] = useState(true);
   const [confirmKill, setConfirmKill] = useState<AgentPane | null>(null);
@@ -559,14 +561,11 @@ export function Dashboard({ interval }: Props) {
   }, []);
 
   const wizardAfterSession = useCallback((profile: string, session: string, inheritedCwd: string) => {
-    const valid = !!inheritedCwd && existsSync(inheritedCwd) && statSync(inheritedCwd).isDirectory();
-    setWizard({ step: "cwd", profile, session, cwdInput: inheritedCwd, cwdValid: valid });
+    setWizard({ step: "cwd", profile, session, cwdInput: inheritedCwd, cwdState: getWorkspacePathState(inheritedCwd) });
   }, []);
 
-  const validateCwd = useCallback((path: string): boolean => {
-    try {
-      return !!path && existsSync(path) && statSync(path).isDirectory();
-    } catch { return false; }
+  const getCwdState = useCallback((path: string): "valid" | "creatable" | "invalid" => {
+    return getWorkspacePathState(path);
   }, []);
 
   useInput((input, key) => {
@@ -650,15 +649,19 @@ export function Dashboard({ interval }: Props) {
       }
 
       if (wizard.step === "cwd") {
-        if (key.return && wizard.cwdValid) {
-          const { profile, session, cwdInput } = wizard;
-          setWizard(null);
-          createWorkspace(undefined, undefined, undefined, { profile, cwd: cwdInput || undefined, tmuxSession: session || undefined });
+        if (key.return) {
+          const { profile, session, cwdInput, cwdState } = wizard;
+          if (cwdState === "valid") {
+            setWizard(null);
+            createWorkspace(undefined, undefined, undefined, { profile, cwd: cwdInput || undefined, tmuxSession: session || undefined });
+          } else if (cwdState === "creatable") {
+            setWizard({ step: "create-project", profile, session, cwdInput });
+          }
           return;
         }
         if (key.backspace || key.delete) {
           const next = wizard.cwdInput.slice(0, -1);
-          setWizard({ ...wizard, cwdInput: next, cwdValid: validateCwd(next) });
+          setWizard({ ...wizard, cwdInput: next, cwdState: getCwdState(next) });
           return;
         }
         if (key.tab) {
@@ -670,7 +673,7 @@ export function Dashboard({ interval }: Props) {
             const dirs = entries.filter((e: string) => { try { return statSync(join(dir, e)).isDirectory(); } catch { return false; } });
             if (dirs.length === 1) {
               const completed = join(dir, dirs[0]) + "/";
-              setWizard({ ...wizard, cwdInput: completed, cwdValid: validateCwd(completed) });
+              setWizard({ ...wizard, cwdInput: completed, cwdState: getCwdState(completed) });
             } else if (dirs.length > 1) {
               let common = dirs[0];
               for (const d of dirs) {
@@ -678,7 +681,7 @@ export function Dashboard({ interval }: Props) {
               }
               if (common.length > prefix.length) {
                 const completed = join(dir, common);
-                setWizard({ ...wizard, cwdInput: completed, cwdValid: validateCwd(completed) });
+                setWizard({ ...wizard, cwdInput: completed, cwdState: getCwdState(completed) });
               }
             }
           } catch {}
@@ -686,9 +689,25 @@ export function Dashboard({ interval }: Props) {
         }
         if (input && !key.ctrl && !key.meta && input.length === 1) {
           const next = wizard.cwdInput + input;
-          setWizard({ ...wizard, cwdInput: next, cwdValid: validateCwd(next) });
+          setWizard({ ...wizard, cwdInput: next, cwdState: getCwdState(next) });
           return;
         }
+        return;
+      }
+
+      if (wizard.step === "create-project") {
+        if (key.return || input === "y" || input === "Y") {
+          const { profile, session, cwdInput } = wizard;
+          setWizard(null);
+          createWorkspace(undefined, undefined, undefined, {
+            profile,
+            cwd: cwdInput || undefined,
+            tmuxSession: session || undefined,
+            initProject: true,
+          });
+          return;
+        }
+        setWizard({ step: "cwd", profile: wizard.profile, session: wizard.session, cwdInput: wizard.cwdInput, cwdState: getCwdState(wizard.cwdInput) });
         return;
       }
       return;
@@ -785,6 +804,10 @@ export function Dashboard({ interval }: Props) {
         }
         setPreview({ ...pv, zones });
       }
+      return;
+    }
+    if (input === "S") {
+      setSummaryView((v) => !v);
       return;
     }
     if (input === "h") {
@@ -911,7 +934,7 @@ export function Dashboard({ interval }: Props) {
             <Text bold>Agent Dashboard</Text>
           </Box>
           <Text> </Text>
-          <AgentTable agents={agents} selectedIndex={idx} showCursor />
+          <AgentTable agents={agents} selectedIndex={idx} showCursor summaryView={summaryView} />
           <Text> </Text>
           <Box paddingLeft={2} columnGap={1} overflowX="hidden">
             {confirmKill ? (
@@ -940,11 +963,17 @@ export function Dashboard({ interval }: Props) {
                 </>)}
                 {wizard.step === "cwd" && (<>
                   <Text dimColor wrap="truncate">New agent — working directory:</Text>
-                  <Text>   <Text color={wizard.cwdValid ? "green" : "red"}>{wizard.cwdInput || "(empty)"}</Text><Text color="gray">▏</Text></Text>
-                  {!wizard.cwdValid && wizard.cwdInput ? <Text color="red">   path not found</Text> : null}
+                  <Text>   <Text color={wizard.cwdState === "valid" ? "green" : wizard.cwdState === "creatable" ? "yellow" : "red"}>{wizard.cwdInput || "(empty)"}</Text><Text color="gray">▏</Text></Text>
+                  {wizard.cwdState === "invalid" && wizard.cwdInput ? <Text color="red">   path not usable</Text> : null}
+                  {wizard.cwdState === "creatable" ? <Text color="yellow">   enter to create folder + git init</Text> : null}
                   <Text dimColor>   tab to complete</Text>
                 </>)}
-                <Text dimColor wrap="truncate">enter · esc</Text>
+                {wizard.step === "create-project" && (<>
+                  <Text dimColor wrap="truncate">Create project here?</Text>
+                  <Text>   <Text color="yellow">{wizard.cwdInput}</Text></Text>
+                  <Text dimColor>   mkdir -p + git init, then launch workspace</Text>
+                </>)}
+                <Text dimColor wrap="truncate">{wizard.step === "create-project" ? "enter/y · any key back" : "enter · esc"}</Text>
               </Box>
             ) : (
               <Box flexDirection="column">
@@ -978,6 +1007,7 @@ export function Dashboard({ interval }: Props) {
                     <Text wrap="truncate"><Text color="#6b7385">p/P</Text>   <Text color="#565e6e">toggle preview</Text></Text>
                     {!isZellij && <Text wrap="truncate"><Text color="#6b7385">g/G</Text>   <Text color="#565e6e">grid view</Text></Text>}
                     {!isZellij && <Text wrap="truncate"><Text color="#6b7385">s</Text>     <Text color="#565e6e">toggle sidebar</Text></Text>}
+                    <Text wrap="truncate"><Text color="#6b7385">S</Text>     <Text color="#565e6e">summary view</Text></Text>
                     {!isZellij && <Text wrap="truncate"><Text color="#6b7385">h</Text>     <Text color="#565e6e">cycle helper layouts</Text></Text>}
                     <Text wrap="truncate"><Text color="#6b7385">n</Text>     <Text color="#565e6e">new agent workspace</Text></Text>
                     <Text wrap="truncate"><Text color="#6b7385">x</Text>     <Text color="#565e6e">kill workspace</Text></Text>

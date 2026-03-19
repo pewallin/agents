@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, statSync } from "fs";
+import { dirname, join, resolve } from "path";
 import { exec } from "./shell.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { loadConfig, resolveProfile } from "./config.js";
@@ -35,6 +37,43 @@ export interface CreateWorkspaceOpts {
   profile?: string;
   cwd?: string;
   tmuxSession?: string;  // target tmux session for the new window
+  initProject?: boolean;
+}
+
+export type WorkspacePathState = "valid" | "creatable" | "invalid";
+
+function nearestExistingAncestor(path: string): string | null {
+  let cur = resolve(path);
+  while (true) {
+    if (existsSync(cur)) return cur;
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
+export function getWorkspacePathState(path: string): WorkspacePathState {
+  if (!path) return "invalid";
+  try {
+    if (existsSync(path)) return statSync(path).isDirectory() ? "valid" : "invalid";
+    const ancestor = nearestExistingAncestor(path);
+    return ancestor && statSync(ancestor).isDirectory() ? "creatable" : "invalid";
+  } catch {
+    return "invalid";
+  }
+}
+
+export function prepareWorkspaceDir(path: string): boolean {
+  try {
+    const state = getWorkspacePathState(path);
+    if (state === "valid") return true;
+    if (state !== "creatable") return false;
+    mkdirSync(path, { recursive: true });
+    exec(`git -C ${JSON.stringify(path)} init`);
+    return existsSync(path) && statSync(path).isDirectory() && existsSync(join(path, ".git"));
+  } catch {
+    return false;
+  }
 }
 
 export function createWorkspace(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): void {
@@ -53,6 +92,11 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
 
   if (!cmd) {
     console.error("No command specified and no defaultCommand in config");
+    process.exit(1);
+  }
+
+  if (opts?.cwd && opts.initProject && !prepareWorkspaceDir(opts.cwd)) {
+    console.error(`Failed to create project directory: ${opts.cwd}`);
     process.exit(1);
   }
 

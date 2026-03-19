@@ -9,6 +9,7 @@ export interface StateEntry {
   ts: number;
   agent: string;
   session: string;
+  context?: string;
 }
 
 const STATE_DIR = join(homedir(), ".agents", "state");
@@ -18,10 +19,33 @@ function ensureDir() {
 }
 
 /** Write state for an agent session. Called by hook integrations. */
-export function reportState(agent: string, session: string, state: ReportedState): void {
+export function reportState(agent: string, session: string, state: ReportedState, context?: string): void {
   ensureDir();
-  const entry: StateEntry = { state, ts: Math.floor(Date.now() / 1000), agent, session };
-  writeFileSync(join(STATE_DIR, `${agent}-${session}.json`), JSON.stringify(entry));
+  const filePath = join(STATE_DIR, `${agent}-${session}.json`);
+  // Preserve existing context if not explicitly provided
+  if (context === undefined) {
+    try {
+      const existing: StateEntry = JSON.parse(readFileSync(filePath, "utf-8"));
+      context = existing.context;
+    } catch {}
+  }
+  const entry: StateEntry = { state, ts: Math.floor(Date.now() / 1000), agent, session, ...(context ? { context } : {}) };
+  writeFileSync(filePath, JSON.stringify(entry));
+}
+
+/** Update only the context field for an agent session, preserving state. */
+export function reportContext(agent: string, session: string, context: string): void {
+  ensureDir();
+  const filePath = join(STATE_DIR, `${agent}-${session}.json`);
+  let entry: StateEntry;
+  try {
+    entry = JSON.parse(readFileSync(filePath, "utf-8"));
+    entry.context = context;
+    entry.ts = Math.floor(Date.now() / 1000);
+  } catch {
+    entry = { state: "idle", ts: Math.floor(Date.now() / 1000), agent, session, context };
+  }
+  writeFileSync(filePath, JSON.stringify(entry));
 }
 
 /** Read all fresh state entries (< maxAge seconds old).

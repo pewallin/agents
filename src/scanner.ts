@@ -19,6 +19,7 @@ export interface AgentPane {
   detail?: string;
   windowId?: string;   // session:window_index for sibling lookup
   cwd?: string;
+  context?: string;    // workspace context description from state file
 }
 
 export interface SiblingPane {
@@ -60,6 +61,11 @@ function stateDuration(agent: string, paneId?: string): string | undefined {
   if (!entry) return undefined;
   const age = Math.floor(Date.now() / 1000) - entry.ts;
   return age >= 1 ? formatDuration(age) : undefined;
+}
+
+function stateContext(agent: string, paneId?: string): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+  return entry?.context;
 }
 
 function makeHookDetector(agentName: string): AgentDetector {
@@ -256,6 +262,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       detail,
       windowId: paneRef,
       cwd: p.cwd?.replace(/^\/Users\/[^/]+/, "~") || undefined,
+      context: stateContext(agentName, p.id),
     });
   }
 
@@ -289,7 +296,7 @@ function scanSync(): AgentPane[] {
     const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
     const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
 
-    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd });
+    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd, context: stateContext(agentName, tmuxPaneId) });
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));

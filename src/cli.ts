@@ -118,7 +118,7 @@ const { Command } = commander;
 const React = reactMod.default;
 const { render } = ink;
 const { scan } = scanner;
-const { reportState } = state;
+const { reportState, reportContext } = state;
 const { setup, uninstall, autoSetupIfNeeded } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
@@ -208,7 +208,8 @@ program
   .command("report")
   .description("Report agent state (called by agent hooks)")
   .requiredOption("--agent <name>", "Agent name (claude, copilot, pi)")
-  .requiredOption("--state <state>", "State: working, idle, approval, question")
+  .option("--state <state>", "State: working, idle, approval, question")
+  .option("--context <text>", "Context description for this workspace")
   .option("--session <id>", "Session ID (reads from stdin if not provided)")
   .action(async (opts) => {
     let session = opts.session;
@@ -227,7 +228,12 @@ program
         session = "default";
       }
     }
-    reportState(opts.agent, session, opts.state);
+    if (opts.context && !opts.state) {
+      // Context-only update — preserve existing state
+      reportContext(opts.agent, session, opts.context);
+    } else if (opts.state) {
+      reportState(opts.agent, session, opts.state, opts.context);
+    }
   });
 
 program
