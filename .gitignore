@@ -4,3 +4,4 @@ dist/
 # bv (beads viewer) local config and caches
 .bv/
 bridge-plugin/target/
+storage.sqlite3*
