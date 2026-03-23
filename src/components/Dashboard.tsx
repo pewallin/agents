@@ -24,10 +24,7 @@ interface Props {
   interval: number;
 }
 
-const AGENT_COLORS: Record<string, string> = {
-  claude: "#d08770", copilot: "#81a1c1", opencode: "#6882a8", pi: "#b48ead",
-};
-function agentColor(name: string): string { return AGENT_COLORS[name] || "#88c0d0"; }
+import { AGENT_COLORS, agentColor } from "../constants.js";
 
 // ── Persistent helper zones ──────────────────────────────────────────
 // Zones are tmux panes created once in the preview layout. Helpers are

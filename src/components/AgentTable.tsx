@@ -2,10 +2,7 @@ import React from "react";
 import { Text, Box } from "ink";
 import type { AgentPane, AgentStatus } from "../scanner.js";
 
-const AGENT_COLORS: Record<string, string> = {
-  claude: "#d08770", copilot: "#81a1c1", opencode: "#6882a8", pi: "#b48ead",
-};
-function agentColor(name: string): string { return AGENT_COLORS[name] || "#88c0d0"; }
+import { AGENT_COLORS, agentColor } from "../constants.js";
 
 function StatusBadge({ status, detail }: { status: AgentStatus; detail?: string }) {
   const suffix = detail ? ` (${detail})` : "";
