@@ -21,7 +21,7 @@ const EXTENSIONS_DIR = join(REPO_ROOT, "extensions");
 
 interface SetupResult {
   agent: string;
-  action: "installed" | "uninstalled" | "skipped" | "already-installed" | "not-installed";
+  action: "installed" | "uninstalled" | "skipped" | "not-installed";
   detail?: string;
 }
 
@@ -30,6 +30,7 @@ interface SetupResult {
 const STOP_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "stop-hook.sh");
 
 const CLAUDE_HOOKS = {
+  PreToolUse: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working --session \"$TMUX_PANE\"" }] }],
   UserPromptSubmit: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working --session \"$TMUX_PANE\"" }] }],
   Stop: [{ hooks: [{ type: "command", command: STOP_HOOK_SCRIPT }] }],
   Notification: [
@@ -61,10 +62,15 @@ function setupClaude(): SetupResult {
   settings.hooks = settings.hooks || {};
   const before = JSON.stringify(settings.hooks);
 
-  // Strip our hooks from all events (current + legacy)
+  // Strip our hooks from all events (current + legacy).
+  // Match inline `agents report` commands AND script references from extensions/claude/.
+  const isOurHook = (h: any) => {
+    const s = JSON.stringify(h);
+    return s.includes("agents report --agent claude") || s.includes("extensions/claude/");
+  };
   for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
     const hooks: any[] = settings.hooks[event] || [];
-    const filtered = hooks.filter((h: any) => !JSON.stringify(h).includes("agents report --agent claude") && !JSON.stringify(h).includes("stop-hook.sh"));
+    const filtered = hooks.filter((h: any) => !isOurHook(h));
     if (filtered.length === 0) {
       delete settings.hooks[event];
     } else {
@@ -79,7 +85,7 @@ function setupClaude(): SetupResult {
   }
 
   if (JSON.stringify(settings.hooks) === before) {
-    return { agent: "claude", action: "already-installed" };
+    return { agent: "claude", action: "installed" };
   }
 
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
@@ -103,12 +109,14 @@ function uninstallClaude(): SetupResult {
     return { agent: "claude", action: "not-installed" };
   }
 
+  const isOurHook = (h: any) => {
+    const s = JSON.stringify(h);
+    return s.includes("agents report --agent claude") || s.includes("extensions/claude/");
+  };
   let removed = false;
   for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
     const hooks: any[] = settings.hooks[event] || [];
-    const filtered = hooks.filter(
-      (h: any) => !JSON.stringify(h).includes("agents report --agent claude") && !JSON.stringify(h).includes("stop-hook.sh")
-    );
+    const filtered = hooks.filter((h: any) => !isOurHook(h));
     if (filtered.length !== hooks.length) {
       removed = true;
       if (filtered.length === 0) {
@@ -152,14 +160,14 @@ function setupCopilot(): SetupResult {
     try {
       const stat = lstatSync(target);
       if (stat.isSymbolicLink()) {
-        return { agent: "copilot", action: "already-installed" };
+        return { agent: "copilot", action: "installed", detail: "symlinked" };
       }
     } catch {}
     // File exists but isn't our symlink — check content
     try {
       const content = readFileSync(target, "utf-8");
       if (content.includes("agents report")) {
-        return { agent: "copilot", action: "already-installed" };
+        return { agent: "copilot", action: "installed", detail: "extension present" };
       }
     } catch {}
   }
@@ -174,7 +182,7 @@ function setupCopilot(): SetupResult {
     writeFileSync(target, readFileSync(source, "utf-8"));
   }
 
-  return { agent: "copilot", action: "installed", detail: "symlinked extension to ~/.copilot/extensions/agents-reporting/" };
+  return { agent: "copilot", action: "installed", detail: "symlinked" };
 }
 
 function uninstallCopilot(): SetupResult {
@@ -223,13 +231,13 @@ function setupPi(): SetupResult {
     try {
       const stat = lstatSync(target);
       if (stat.isSymbolicLink()) {
-        return { agent: "pi", action: "already-installed" };
+        return { agent: "pi", action: "installed", detail: "symlinked" };
       }
     } catch {}
     try {
       const content = readFileSync(target, "utf-8");
       if (content.includes("agents report")) {
-        return { agent: "pi", action: "already-installed" };
+        return { agent: "pi", action: "installed", detail: "extension present" };
       }
     } catch {}
   }
@@ -242,7 +250,7 @@ function setupPi(): SetupResult {
     writeFileSync(target, readFileSync(source, "utf-8"));
   }
 
-  return { agent: "pi", action: "installed", detail: "symlinked extension to ~/.pi/agent/extensions/" };
+  return { agent: "pi", action: "installed", detail: "symlinked" };
 }
 
 function uninstallPi(): SetupResult {
@@ -317,7 +325,7 @@ function setupOpencode(): SetupResult {
 
   const plugins: string[] = config.plugin || [];
   if (plugins.includes(OPENCODE_PLUGIN_NAME)) {
-    return { agent: "opencode", action: "already-installed" };
+    return { agent: "opencode", action: "installed", detail: "symlinked" };
   }
 
   config.plugin = [...plugins, OPENCODE_PLUGIN_NAME];

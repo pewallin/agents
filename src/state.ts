@@ -4,12 +4,20 @@ import { join } from "path";
 
 export type ReportedState = "working" | "idle" | "approval" | "question";
 
+export interface WorkspaceSnapshot {
+  command: string;
+  cwd: string;
+  mux?: "tmux" | "zellij";
+  sessionName?: string;
+}
+
 export interface StateEntry {
   state: ReportedState;
   ts: number;
   agent: string;
   session: string;
   context?: string;
+  workspace?: WorkspaceSnapshot;
 }
 
 const STATE_DIR = join(homedir(), ".agents", "state");
@@ -19,31 +27,46 @@ function ensureDir() {
 }
 
 /** Write state for an agent session. Called by hook integrations. */
-export function reportState(agent: string, session: string, state: ReportedState, context?: string): void {
+export function reportState(agent: string, session: string, state: ReportedState, context?: string, workspace?: WorkspaceSnapshot): void {
   ensureDir();
   const filePath = join(STATE_DIR, `${agent}-${session}.json`);
-  // Preserve existing context if not explicitly provided
-  if (context === undefined) {
-    try {
-      const existing: StateEntry = JSON.parse(readFileSync(filePath, "utf-8"));
-      context = existing.context;
-    } catch {}
+  let existing: StateEntry | null = null;
+  try {
+    existing = JSON.parse(readFileSync(filePath, "utf-8"));
+  } catch {}
+
+  if (context === undefined) context = existing?.context;
+  // Preserve existing workspace if it has a sessionName (seeded by createWorkspace).
+  // Hook-reported snapshots lack sessionName and should not overwrite authoritative data.
+  if (workspace === undefined || (existing?.workspace?.sessionName && !workspace?.sessionName)) {
+    workspace = existing?.workspace;
   }
-  const entry: StateEntry = { state, ts: Math.floor(Date.now() / 1000), agent, session, ...(context ? { context } : {}) };
+
+  const entry: StateEntry = {
+    state,
+    ts: Math.floor(Date.now() / 1000),
+    agent,
+    session,
+    ...(context ? { context } : {}),
+    ...(workspace ? { workspace } : {}),
+  };
   writeFileSync(filePath, JSON.stringify(entry));
 }
 
 /** Update only the context field for an agent session, preserving state. */
-export function reportContext(agent: string, session: string, context: string): void {
+export function reportContext(agent: string, session: string, context: string, workspace?: WorkspaceSnapshot): void {
   ensureDir();
   const filePath = join(STATE_DIR, `${agent}-${session}.json`);
   let entry: StateEntry;
   try {
     entry = JSON.parse(readFileSync(filePath, "utf-8"));
     entry.context = context;
+    if (workspace !== undefined && !(entry.workspace?.sessionName && !workspace?.sessionName)) {
+      entry.workspace = workspace;
+    }
     entry.ts = Math.floor(Date.now() / 1000);
   } catch {
-    entry = { state: "idle", ts: Math.floor(Date.now() / 1000), agent, session, context };
+    entry = { state: "idle", ts: Math.floor(Date.now() / 1000), agent, session, context, ...(workspace ? { workspace } : {}) };
   }
   writeFileSync(filePath, JSON.stringify(entry));
 }

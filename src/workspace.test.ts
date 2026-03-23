@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { getWorkspacePathState, prepareWorkspaceDir } from "./workspace.js";
+import { getWorkspacePathState, prepareWorkspaceDir, getRestorableWorkspacesFromStates } from "./workspace.js";
+import type { StateEntry } from "./state.js";
 
 describe("workspace path helpers", () => {
   it("classifies existing directories as valid", () => {
@@ -58,5 +59,75 @@ describe("workspace path helpers", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("getRestorableWorkspacesFromStates", () => {
+  const now = Math.floor(Date.now() / 1000);
+
+  it("returns empty for entries without workspace snapshots", () => {
+    const entries: StateEntry[] = [
+      { state: "idle", ts: now, agent: "claude", session: "%1" },
+      { state: "working", ts: now, agent: "pi", session: "%2" },
+    ];
+    expect(getRestorableWorkspacesFromStates(entries)).toEqual([]);
+  });
+
+  it("extracts restorable workspaces from entries with workspace data", () => {
+    const entries: StateEntry[] = [
+      {
+        state: "idle", ts: now, agent: "claude", session: "%1",
+        context: "Fixing bugs",
+        workspace: { cwd: "/Users/test/code/myapp", command: "claude" },
+      },
+      {
+        state: "working", ts: now, agent: "pi", session: "%5",
+        workspace: { cwd: "/Users/test/code/other", command: "pi" },
+      },
+    ];
+    const result = getRestorableWorkspacesFromStates(entries);
+    expect(result).toHaveLength(2);
+    expect(result[0].agent).toBe("claude");
+    expect(result[0].cwd).toBe("/Users/test/code/myapp");
+    expect(result[0].command).toBe("claude");
+    expect(result[0].context).toBe("Fixing bugs");
+    expect(result[1].agent).toBe("pi");
+    expect(result[1].cwd).toBe("/Users/test/code/other");
+  });
+
+  it("skips entries with incomplete workspace data (no cwd)", () => {
+    const entries: StateEntry[] = [
+      {
+        state: "idle", ts: now, agent: "claude", session: "%1",
+        workspace: { command: "claude" } as any,
+      },
+    ];
+    expect(getRestorableWorkspacesFromStates(entries)).toEqual([]);
+  });
+
+  it("skips entries with incomplete workspace data (no command)", () => {
+    const entries: StateEntry[] = [
+      {
+        state: "idle", ts: now, agent: "claude", session: "%1",
+        workspace: { cwd: "/some/path" } as any,
+      },
+    ];
+    expect(getRestorableWorkspacesFromStates(entries)).toEqual([]);
+  });
+
+  it("deduplicates by agent:session key", () => {
+    const entries: StateEntry[] = [
+      {
+        state: "idle", ts: now, agent: "claude", session: "%1",
+        workspace: { cwd: "/a", command: "claude" },
+      },
+      {
+        state: "working", ts: now - 10, agent: "claude", session: "%1",
+        workspace: { cwd: "/b", command: "claude" },
+      },
+    ];
+    const result = getRestorableWorkspacesFromStates(entries);
+    expect(result).toHaveLength(1);
+    expect(result[0].cwd).toBe("/a"); // first one wins
   });
 });

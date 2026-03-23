@@ -3,7 +3,9 @@ import { dirname, join, resolve } from "path";
 import { exec } from "./shell.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { loadConfig, resolveProfile } from "./config.js";
+import { readStates, reportState } from "./state.js";
 import type { WorkspaceDef, LaunchProfile } from "./config.js";
+import type { StateEntry, WorkspaceSnapshot } from "./state.js";
 
 const DEFAULT_LAYOUTS: Record<string, WorkspaceDef[]> = {
   default: [
@@ -38,6 +40,15 @@ export interface CreateWorkspaceOpts {
   cwd?: string;
   tmuxSession?: string;  // target tmux session for the new window
   initProject?: boolean;
+}
+
+export interface RestorableWorkspace {
+  key: string;
+  agent: string;
+  cwd: string;
+  command: string;
+  context?: string;
+  sessionName?: string;
 }
 
 export type WorkspacePathState = "valid" | "creatable" | "invalid";
@@ -76,6 +87,33 @@ export function prepareWorkspaceDir(path: string): boolean {
   }
 }
 
+export function getRestorableWorkspacesFromStates(entries: StateEntry[]): RestorableWorkspace[] {
+  const seen = new Set<string>();
+  const list: RestorableWorkspace[] = [];
+
+  for (const entry of entries) {
+    const ws = entry.workspace;
+    if (!ws?.cwd || !ws.command) continue;
+    const key = `${entry.agent}:${entry.session}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    list.push({
+      key,
+      agent: entry.agent,
+      cwd: ws.cwd,
+      command: ws.command,
+      context: entry.context,
+      sessionName: ws.sessionName,
+    });
+  }
+
+  return list;
+}
+
+export function getRestorableWorkspaces(): RestorableWorkspace[] {
+  return getRestorableWorkspacesFromStates(readStates());
+}
+
 export function createWorkspace(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): void {
   const config = loadConfig();
 
@@ -105,14 +143,38 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
   const cwdBase = (opts?.cwd || process.cwd()).split("/").pop() || "";
   const windowName = cwdBase ? `${baseName}:${cwdBase}` : baseName;
 
-  if (detectMultiplexer() === "zellij") {
-    createWorkspaceZellij(cmd, windowName, defs, opts);
+  // Build workspace snapshot at creation time — this is the authoritative
+  // source for session name and cwd. Report hooks will preserve it.
+  const muxKind = detectMultiplexer();
+  const wsSnapshot: WorkspaceSnapshot = {
+    command: cmd,
+    cwd: opts?.cwd || process.cwd(),
+    mux: muxKind || undefined,
+    sessionName: opts?.tmuxSession || undefined,
+  };
+
+  if (muxKind === "zellij") {
+    createWorkspaceZellij(cmd, windowName, defs, opts, wsSnapshot);
   } else {
-    createWorkspaceTmux(cmd, windowName, defs, opts);
+    createWorkspaceTmux(cmd, windowName, defs, opts, wsSnapshot);
   }
 }
 
-function createWorkspaceZellij(cmd: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>): void {
+/** Seed the state file with workspace metadata right after pane creation.
+ *  This captures the authoritative session/cwd before preview swaps can muddy it. */
+function seedWorkspaceState(agentPaneId: string, cmd: string, snapshot: WorkspaceSnapshot): void {
+  // Infer agent name from command (e.g. "claude --dangerously-skip-permissions" → "claude")
+  const agent = cmd.split(/\s+/)[0].replace(/.*\//, "").toLowerCase();
+  // For tmux, also capture session name from the actual pane if not already set
+  if (!snapshot.sessionName && agentPaneId.startsWith("%")) {
+    try {
+      snapshot.sessionName = exec(`tmux display-message -t ${agentPaneId} -p '#{session_name}'`) || undefined;
+    } catch {}
+  }
+  reportState(agent, agentPaneId, "idle", undefined, snapshot);
+}
+
+function createWorkspaceZellij(cmd: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): void {
   const mux = getMux();
 
   // Create tab — getMux().createTab returns the tab name, not pane ID
@@ -129,6 +191,8 @@ function createWorkspaceZellij(cmd: string, windowName: string, defs: WorkspaceD
     console.error("Failed to create zellij tab");
     return;
   }
+
+  if (wsSnapshot) seedWorkspaceState(agentPaneId, cmd, wsSnapshot);
 
   const paneMap: Record<string, string> = { agent: agentPaneId };
 
@@ -168,7 +232,7 @@ function createWorkspaceZellij(cmd: string, windowName: string, defs: WorkspaceD
   mux.focusPane(agentPaneId);
 }
 
-function createWorkspaceTmux(cmd: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>): void {
+function createWorkspaceTmux(cmd: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): void {
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
   if (opts?.tmuxSession) {
@@ -189,6 +253,7 @@ function createWorkspaceTmux(cmd: string, windowName: string, defs: WorkspaceDef
   exec(`tmux set-option -t ${agentPaneId} -w automatic-rename off`);
   exec(`tmux set-option -t ${agentPaneId} -w allow-rename off`);
   exec(`tmux rename-window -t ${agentPaneId} ${JSON.stringify(windowName)}`);
+  if (wsSnapshot) seedWorkspaceState(agentPaneId, cmd, wsSnapshot);
   exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);
 
   const paneMap: Record<string, string> = { agent: agentPaneId };

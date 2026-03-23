@@ -228,11 +228,28 @@ program
         session = "default";
       }
     }
+    // Workspace snapshot is seeded at creation time by createWorkspace().
+    // Here we only build a fallback for agents started manually (not via `agents ws` or `n`).
+    // Existing workspace data is never overwritten — reportState preserves it.
+    let wsSnapshot: undefined | { command: string; cwd: string; mux?: "tmux" | "zellij" };
+    const muxKind = detectMultiplexer();
+    if (muxKind === "tmux" && session?.startsWith("%")) {
+      try {
+        const paneCwd = execSync(
+          `tmux display-message -t ${session} -p '#{pane_current_path}'`,
+          { encoding: "utf-8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"] }
+        ).trim();
+        if (paneCwd) wsSnapshot = { command: opts.agent, cwd: paneCwd, mux: "tmux" };
+      } catch {}
+    } else if (muxKind === "zellij" && process.env.PWD) {
+      wsSnapshot = { command: opts.agent, cwd: process.env.PWD, mux: "zellij" };
+    }
+
     if (opts.context && !opts.state) {
       // Context-only update — preserve existing state
-      reportContext(opts.agent, session, opts.context);
+      reportContext(opts.agent, session, opts.context, wsSnapshot);
     } else if (opts.state) {
-      reportState(opts.agent, session, opts.state, opts.context);
+      reportState(opts.agent, session, opts.state, opts.context, wsSnapshot);
     }
   });
 
@@ -283,7 +300,7 @@ program
     const results = setup(opts.quiet);
     if (!opts.quiet) {
       for (const r of results) {
-        const icon = r.action === "installed" ? "✓" : r.action === "already-installed" ? "•" : "–";
+        const icon = r.action === "installed" ? "✓" : "–";
         const detail = r.detail ? ` (${r.detail})` : "";
         console.log(`  ${icon} ${r.agent}: ${r.action}${detail}`);
       }

@@ -10,7 +10,8 @@ import { AgentTable } from "./AgentTable.js";
 import { useMouse } from "../mouse.js";
 import { loadConfig, getProfileNames, resolveProfile } from "../config.js";
 import type { HelperDef } from "../config.js";
-import { createWorkspace, getWorkspacePathState } from "../workspace.js";
+import { createWorkspace, getWorkspacePathState, getRestorableWorkspaces } from "../workspace.js";
+import type { RestorableWorkspace } from "../workspace.js";
 import { createGrid, destroyGrid, readGridFocus, type GridState, type GridAgent } from "../grid.js";
 import { GRID_FOCUS_FILE } from "../constants.js";
 import { statSync, readdirSync, watch as fsWatch } from "fs";
@@ -98,6 +99,14 @@ export function Dashboard({ interval }: Props) {
   const [wizard, setWizard] = useState<WizardState | null>(null);
   const [showKeys, setShowKeys] = useState(true);
   const [confirmKill, setConfirmKill] = useState<AgentPane | null>(null);
+  // Restore prompt: shown once on startup if no agents found but restorable workspaces exist
+  type RestorePromptState = {
+    workspaces: RestorableWorkspace[];
+    selected: Set<number>;  // indices of selected workspaces
+    cursor: number;
+  };
+  const [restorePrompt, setRestorePrompt] = useState<RestorePromptState | null>(null);
+  const didInitialScan = useRef(false);
   const { exit } = useApp();
 
   /** Sync pane width and height from tmux into React state.
@@ -147,6 +156,21 @@ export function Dashboard({ interval }: Props) {
         gs ? { agents: gs.agents, placeholderIds: gs.placeholderIds } : null,
       );
       setAgents(list);
+
+      // On first scan: if no agents found, check for restorable workspaces
+      if (!didInitialScan.current) {
+        didInitialScan.current = true;
+        if (list.length === 0) {
+          const restorable = getRestorableWorkspaces();
+          if (restorable.length > 0) {
+            setRestorePrompt({
+              workspaces: restorable,
+              selected: new Set(restorable.map((_, i) => i)),
+              cursor: 0,
+            });
+          }
+        }
+      }
 
       // Auto-rebuild grid if agents changed (new agent added, agent exited)
       {
@@ -612,6 +636,46 @@ export function Dashboard({ interval }: Props) {
       return;
     }
 
+    // ── Restore prompt ──
+    if (restorePrompt) {
+      if (key.escape) { setRestorePrompt(null); return; }
+      if (input === "j" || key.downArrow) {
+        setRestorePrompt({ ...restorePrompt, cursor: Math.min(restorePrompt.cursor + 1, restorePrompt.workspaces.length - 1) });
+        return;
+      }
+      if (input === "k" || key.upArrow) {
+        setRestorePrompt({ ...restorePrompt, cursor: Math.max(restorePrompt.cursor - 1, 0) });
+        return;
+      }
+      if (input === " ") {
+        // Toggle selection
+        const next = new Set(restorePrompt.selected);
+        if (next.has(restorePrompt.cursor)) next.delete(restorePrompt.cursor);
+        else next.add(restorePrompt.cursor);
+        setRestorePrompt({ ...restorePrompt, selected: next });
+        return;
+      }
+      if (input === "a") {
+        // Toggle all
+        const allSelected = restorePrompt.selected.size === restorePrompt.workspaces.length;
+        setRestorePrompt({
+          ...restorePrompt,
+          selected: allSelected ? new Set() : new Set(restorePrompt.workspaces.map((_, i) => i)),
+        });
+        return;
+      }
+      if (key.return) {
+        const toRestore = restorePrompt.workspaces.filter((_, i) => restorePrompt.selected.has(i));
+        setRestorePrompt(null);
+        for (const ws of toRestore) {
+          createWorkspace(ws.command, undefined, undefined, { cwd: ws.cwd, tmuxSession: ws.sessionName });
+        }
+        doScan();
+        return;
+      }
+      return;
+    }
+
     // ── New-agent wizard ──
     if (wizard) {
       if (key.escape) { setWizard(null); return; }
@@ -937,7 +1001,29 @@ export function Dashboard({ interval }: Props) {
           <AgentTable agents={agents} selectedIndex={idx} showCursor summaryView={summaryView} />
           <Text> </Text>
           <Box paddingLeft={2} columnGap={1} overflowX="hidden">
-            {confirmKill ? (
+            {restorePrompt ? (
+              <Box flexDirection="column">
+                <Text bold color="cyan">Restore previous workspaces?</Text>
+                <Text> </Text>
+                {restorePrompt.workspaces.map((ws, i) => {
+                  const sel = i === restorePrompt.cursor;
+                  const checked = restorePrompt.selected.has(i);
+                  const cwdShort = ws.cwd.replace(/^\/Users\/[^/]+/, "~");
+                  return (
+                    <Text key={ws.key} wrap="truncate">
+                      <Text color={sel ? "cyan" : undefined} bold={sel}>{sel ? "›" : " "}</Text>
+                      <Text color={checked ? "green" : "#565e6e"}>{checked ? " ☑ " : " ☐ "}</Text>
+                      <Text bold color={agentColor(ws.agent)}>{ws.agent}</Text>
+                      <Text color="#7b8494"> {cwdShort}</Text>
+                      {ws.sessionName ? <Text dimColor> [{ws.sessionName}]</Text> : null}
+                      {ws.context ? <Text dimColor> — {ws.context}</Text> : null}
+                    </Text>
+                  );
+                })}
+                <Text> </Text>
+                <Text dimColor wrap="truncate">space toggle · a all · enter restore · esc skip</Text>
+              </Box>
+            ) : confirmKill ? (
               <Box flexDirection="column">
                 <Text wrap="truncate" color="red">Kill workspace <Text bold>{confirmKill.pane}</Text>?</Text>
                 <Text dimColor wrap="truncate">y · any key to cancel</Text>
