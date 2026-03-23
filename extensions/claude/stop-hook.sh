@@ -2,6 +2,7 @@
 # Claude Stop hook: detect if the agent asked a question.
 # Reads JSON from stdin with last_assistant_message field.
 # Reports "question" if the last text block contains ?, otherwise "idle".
+# Also reads context window data from statusline bridge file.
 
 if [ -n "$TMUX_PANE" ]; then
   SESSION="$TMUX_PANE"
@@ -18,6 +19,20 @@ if [ "$ACTIVE" = "true" ]; then
   exit 0
 fi
 
+# Read context data from statusline bridge file
+CTX_ARGS=""
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+if [ -n "$SESSION_ID" ]; then
+  BRIDGE="/tmp/claude-ctx-${SESSION_ID}.json"
+  if [ -f "$BRIDGE" ]; then
+    USED_PCT=$(jq -r '.used_pct // empty' "$BRIDGE" 2>/dev/null)
+    if [ -n "$USED_PCT" ] && [ "$USED_PCT" != "null" ]; then
+      TOKENS=$(( USED_PCT * 2000 ))
+      CTX_ARGS="--context-tokens $TOKENS --context-max 200000"
+    fi
+  fi
+fi
+
 MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // ""')
 
 # Check if the last 3 non-empty lines contain a question mark.
@@ -25,7 +40,7 @@ MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // ""')
 # conversation (code comments, URLs, explanations) are not relevant.
 TAIL=$(printf '%s' "$MSG" | grep -v '^[[:space:]]*$' | tail -3)
 if printf '%s' "$TAIL" | grep -Fq '?'; then
-  agents report --agent claude --state question --session "$SESSION"
+  agents report --agent claude --state question --session "$SESSION" $CTX_ARGS
 else
-  agents report --agent claude --state idle --session "$SESSION"
+  agents report --agent claude --state idle --session "$SESSION" $CTX_ARGS
 fi

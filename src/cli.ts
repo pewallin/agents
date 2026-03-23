@@ -210,6 +210,8 @@ program
   .requiredOption("--agent <name>", "Agent name (claude, copilot, pi)")
   .option("--state <state>", "State: working, idle, approval, question")
   .option("--context <text>", "Context description for this workspace")
+  .option("--context-tokens <n>", "Current token usage in conversation", parseInt)
+  .option("--context-max <n>", "Context window limit for the model", parseInt)
   .option("--session <id>", "Session ID (reads from stdin if not provided)")
   .action(async (opts) => {
     let session = opts.session;
@@ -245,11 +247,13 @@ program
       wsSnapshot = { command: opts.agent, cwd: process.env.PWD, mux: "zellij" };
     }
 
+    const ctxTokens = isNaN(opts.contextTokens) ? undefined : opts.contextTokens;
+    const ctxMax = isNaN(opts.contextMax) ? undefined : opts.contextMax;
     if (opts.context && !opts.state) {
       // Context-only update — preserve existing state
-      reportContext(opts.agent, session, opts.context, wsSnapshot);
+      reportContext(opts.agent, session, opts.context, wsSnapshot, ctxTokens, ctxMax);
     } else if (opts.state) {
-      reportState(opts.agent, session, opts.state, opts.context, wsSnapshot);
+      reportState(opts.agent, session, opts.state, opts.context, wsSnapshot, ctxTokens, ctxMax);
     }
   });
 

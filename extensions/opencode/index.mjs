@@ -4,6 +4,9 @@
  * Reports opencode state (working/idle/approval/question) to the agents
  * dashboard via `agents report` so the tmux agent monitor can track status.
  *
+ * Note: OpenCode's plugin API does not expose session-level context usage,
+ * so token tracking is not supported. Only state changes are reported.
+ *
  * Install: add "opencode-agents-reporting" to the plugin array in opencode.json,
  * or run `agents setup` to have it configured automatically.
  */

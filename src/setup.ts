@@ -27,16 +27,17 @@ interface SetupResult {
 
 // ── Claude Code ─────────────────────────────────────────────────────
 
+const STATE_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "state-hook.sh");
 const STOP_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "stop-hook.sh");
 
 const CLAUDE_HOOKS = {
-  PreToolUse: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working --session \"$TMUX_PANE\"" }] }],
-  UserPromptSubmit: [{ hooks: [{ type: "command", command: "agents report --agent claude --state working --session \"$TMUX_PANE\"" }] }],
+  PreToolUse: [{ hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} working` }] }],
+  UserPromptSubmit: [{ hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} working` }] }],
   Stop: [{ hooks: [{ type: "command", command: STOP_HOOK_SCRIPT }] }],
   Notification: [
-    { matcher: "idle_prompt", hooks: [{ type: "command", command: "agents report --agent claude --state idle --session \"$TMUX_PANE\"" }] },
-    { matcher: "permission_prompt", hooks: [{ type: "command", command: "agents report --agent claude --state approval --session \"$TMUX_PANE\"" }] },
-    { matcher: "elicitation_dialog", hooks: [{ type: "command", command: "agents report --agent claude --state question --session \"$TMUX_PANE\"" }] },
+    { matcher: "idle_prompt", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} idle` }] },
+    { matcher: "permission_prompt", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} approval` }] },
+    { matcher: "elicitation_dialog", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} question` }] },
   ],
 };
 
@@ -66,7 +67,7 @@ function setupClaude(): SetupResult {
   // Match inline `agents report` commands AND script references from extensions/claude/.
   const isOurHook = (h: any) => {
     const s = JSON.stringify(h);
-    return s.includes("agents report --agent claude") || s.includes("extensions/claude/");
+    return s.includes("agents report --agent claude") || s.includes("extensions/claude/") || s.includes("state-hook.sh");
   };
   for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {
     const hooks: any[] = settings.hooks[event] || [];
@@ -111,7 +112,7 @@ function uninstallClaude(): SetupResult {
 
   const isOurHook = (h: any) => {
     const s = JSON.stringify(h);
-    return s.includes("agents report --agent claude") || s.includes("extensions/claude/");
+    return s.includes("agents report --agent claude") || s.includes("extensions/claude/") || s.includes("state-hook.sh");
   };
   let removed = false;
   for (const event of [...Object.keys(CLAUDE_HOOKS), ...LEGACY_EVENTS]) {

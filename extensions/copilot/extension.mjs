@@ -7,6 +7,8 @@
  * - working: user prompt submitted, or tool executing
  * - approval: ask_user tool is waiting for user input
  * - idle: turn complete, waiting for next prompt
+ *
+ * Also tracks context window usage via session.usage_info events.
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -24,8 +26,15 @@ const AGENTS_BIN = [
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
 
+// Track context window usage
+let contextTokens = undefined;
+let contextMax = undefined;
+
 function report(state) {
-  execFile(AGENTS_BIN, ["report", "--agent", "copilot", "--state", state, "--session", SESSION_ID], (err) => {
+  const args = ["report", "--agent", "copilot", "--state", state, "--session", SESSION_ID];
+  if (contextTokens !== undefined) args.push("--context-tokens", String(contextTokens));
+  if (contextMax !== undefined) args.push("--context-max", String(contextMax));
+  execFile(AGENTS_BIN, args, (err) => {
     if (err) {
       // Silently ignore — agents CLI may not be on PATH
     }
@@ -42,6 +51,14 @@ const session = await joinSession({
       report("idle");
     },
   },
+});
+
+// Context window tracking
+session.on("session.usage_info", (event) => {
+  if (event.data) {
+    contextTokens = event.data.currentTokens;
+    contextMax = event.data.tokenLimit;
+  }
 });
 
 // Permission prompt — agent needs user approval for a tool
