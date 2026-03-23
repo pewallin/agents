@@ -20,10 +20,10 @@ fi
 
 MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // ""')
 
-# Check if the last ~500 chars contain a question mark.
-# Use tail -c for portability (bash 3.2 ${var: -N} fails when N > length).
-# Use grep -F for literal '?' match (not regex).
-TAIL=$(printf '%s' "$MSG" | tail -c 500)
+# Check if the last 3 non-empty lines contain a question mark.
+# Only the tail of the message matters — earlier questions in the
+# conversation (code comments, URLs, explanations) are not relevant.
+TAIL=$(printf '%s' "$MSG" | grep -v '^[[:space:]]*$' | tail -3)
 if printf '%s' "$TAIL" | grep -Fq '?'; then
   agents report --agent claude --state question --session "$SESSION"
 else
