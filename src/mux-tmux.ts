@@ -6,6 +6,11 @@ import { exec, execAsync } from "./shell.js";
 import { showPlaceholder as showPlaceholderImpl } from "./scanner.js";
 import type { Multiplexer, MuxPaneInfo } from "./multiplexer.js";
 
+/** Sessions created by the Agents app for internal use (linked sessions). */
+function isLinkedSession(name: string): boolean {
+  return name.startsWith("_agents_");
+}
+
 export class TmuxMux implements Multiplexer {
   readonly kind = "tmux" as const;
 
@@ -29,7 +34,7 @@ export class TmuxMux implements Multiplexer {
         tty,
         geometry: { x: 0, y: 0, width: 0, height: 0 }, // not used for tmux path
       } as MuxPaneInfo;
-    });
+    }).filter(p => !isLinkedSession(p.session));
   }
 
   async listPanesAsync(): Promise<MuxPaneInfo[]> {
@@ -52,7 +57,7 @@ export class TmuxMux implements Multiplexer {
         tty,
         geometry: { x: 0, y: 0, width: 0, height: 0 },
       } as MuxPaneInfo;
-    });
+    }).filter(p => !isLinkedSession(p.session));
   }
 
   getPaneContent(paneId: string, lines?: number): string {
@@ -120,7 +125,9 @@ export class TmuxMux implements Multiplexer {
   }
 
   listSessions(): string[] {
-    return exec("tmux list-sessions -F '#{session_name}' 2>/dev/null").split("\n").filter(Boolean);
+    return exec("tmux list-sessions -F '#{session_name}' 2>/dev/null")
+      .split("\n")
+      .filter(s => s && !isLinkedSession(s));
   }
 
   showPlaceholder(paneId: string, agentName: string, agentPane: string): void {

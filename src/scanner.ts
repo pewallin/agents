@@ -281,6 +281,10 @@ function scanSync(): AgentPane[] {
     if (!line) continue;
     const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
 
+    // Skip panes from Agents app linked sessions
+    const session = pane.split(":")[0];
+    if (session.startsWith("_agents_")) continue;
+
     const leafCmd = findLeafProcessSync(pid);
     let agentName: string | null = null;
     if (AGENT_PROCS.test(leafCmd)) {
@@ -376,8 +380,11 @@ export async function scanAsync(): Promise<AgentPane[]> {
 
   const lines = raw.split("\n").filter(Boolean);
 
-  // Process all panes concurrently
-  const promises = lines.map(async (line) => {
+  // Process all panes concurrently (skip Agents app linked sessions)
+  const promises = lines.filter(line => {
+    const session = line.split("§")[0].split(":")[0];
+    return !session.startsWith("_agents_");
+  }).map(async (line) => {
     const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
 
     const leafCmd = await findLeafProcess(pid);
