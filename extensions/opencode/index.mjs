@@ -75,6 +75,18 @@ const plugin = async () => {
         report("idle");
       }
 
+      if (type === "session.compacted") {
+        report("idle");
+      }
+
+      if (type === "message.updated") {
+        const mode = event.properties?.info?.mode;
+        if (mode === "compaction") {
+          const args = ["report", "--agent", "opencode", "--state", "working", "--context", "compacting", "--session", SESSION_ID];
+          try { execFileSync(AGENTS_BIN, args, { timeout: 3000 }); } catch {}
+        }
+      }
+
       if (type === "session.error") {
         report("approval");
       }

@@ -80,6 +80,16 @@ session.on("tool.execution_complete", () => {
   report("working");
 });
 
+// Compaction — report working state with context
+session.on("session.compaction_start", () => {
+  const args = ["report", "--agent", "copilot", "--state", "working", "--context", "compacting", "--session", SESSION_ID];
+  execFile(AGENTS_BIN, args, () => {});
+});
+
+session.on("session.compaction_complete", () => {
+  report("idle");
+});
+
 // Turn completed — agent is waiting for input
 session.on("session.idle", () => {
   report("idle");

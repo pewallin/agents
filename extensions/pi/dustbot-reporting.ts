@@ -57,6 +57,17 @@ function report(state: string, ctx: any): void {
   execFile(AGENTS_BIN, args, () => {});
 }
 
+function reportWithContext(state: string, context: string, ctx: any): void {
+  const args = ["report", "--agent", "pi", "--state", state, "--context", context, "--session", SESSION_ID];
+  try {
+    const usage = ctx?.getContextUsage?.();
+    if (usage && usage.tokens != null && usage.contextWindow) {
+      args.push("--context-tokens", String(usage.tokens), "--context-max", String(usage.contextWindow));
+    }
+  } catch {}
+  execFile(AGENTS_BIN, args, () => {});
+}
+
 /** Check if the last 3 non-empty lines of a message contain a question mark. */
 function endsWithQuestion(message: any): boolean {
   try {
@@ -98,6 +109,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     if (event?.toolName === "AskUserQuestion" || event?.toolName === "ask_user") {
       report("question", ctx);
     }
+  });
+
+  pi.on("session_before_compact", async (_event: any, ctx: any) => {
+    reportWithContext("working", "compacting", ctx);
+  });
+
+  pi.on("session_compact", async (_event: any, ctx: any) => {
+    report("idle", ctx);
   });
 
   pi.on("turn_end", async (event: any, ctx: any) => {
