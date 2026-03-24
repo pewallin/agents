@@ -40,6 +40,7 @@ export interface CreateWorkspaceOpts {
   cwd?: string;
   tmuxSession?: string;  // target tmux session for the new window
   initProject?: boolean;
+  agentOnly?: boolean;   // skip helper pane creation (app creates them on demand)
 }
 
 export interface RestorableWorkspace {
@@ -138,7 +139,7 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
     process.exit(1);
   }
 
-  const defs = resolveLayout(config, layoutName);
+  const defs = opts?.agentOnly ? [] : resolveLayout(config, layoutName);
   const baseName = name || cmd.split(/\s+/)[0];
   const cwdBase = (opts?.cwd || process.cwd()).split("/").pop() || "";
   const windowName = cwdBase ? `${baseName}:${cwdBase}` : baseName;

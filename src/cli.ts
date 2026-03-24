@@ -265,6 +265,7 @@ program
   .argument("[overrides...]", "Override agent command (appended after profile command)")
   .option("-n, --name <name>", "Window name override")
   .option("-l, --layout <layout>", "Layout name (default, small, or custom)")
+  .option("--agent-only", "Skip helper pane creation (app creates them on demand)")
   .allowUnknownOption()
   .action((profile, overrides, opts) => {
     const profiles = getProfileNames();
@@ -282,7 +283,7 @@ program
     }
     const resolved = resolveProfile(profile);
     const cmd = overrides.length ? `${resolved.command} ${overrides.join(" ")}` : undefined;
-    createWorkspace(cmd, opts.name, opts.layout, { profile, cwd: process.cwd() });
+    createWorkspace(cmd, opts.name, opts.layout, { profile, cwd: process.cwd(), agentOnly: opts.agentOnly });
     // New pane shell startups trigger iTerm2/terminal DA queries whose responses
     // leak back to this pane's input buffer. Drain them before exiting.
     if (process.stdin.isTTY) {
