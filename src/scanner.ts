@@ -130,6 +130,17 @@ const FRIENDLY_NAMES: Record<string, string> = {};
 
 
 
+/** Sanitize pane title: strip spinner chars, control chars, and reject escape sequence leaks. */
+function cleanTitle(raw: string): string {
+  // Strip braille spinners
+  let t = raw.replace(/^[\u2801-\u28FF] */u, "");
+  // Strip control characters (except normal whitespace)
+  t = t.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+  // Reject if it looks like a leaked escape sequence (DA response, etc.)
+  if (/\x1b\[|[\x00-\x1f]/.test(raw)) return "";
+  return t.slice(0, 30);
+}
+
 function friendlyName(name: string): string {
   return FRIENDLY_NAMES[name] ?? name;
 }
@@ -261,7 +272,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     }
 
     const paneRef = `${p.session}:${p.tab}`;
-    const titleClean = p.title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
+    const titleClean = cleanTitle(p.title);
 
     results.push({
       pane: paneRef,
@@ -309,7 +320,7 @@ function scanSync(): AgentPane[] {
     const wact = parseInt(wactStr, 10) || 0;
     const { status, detail } = detectStatusSync(pane, title, wact, agentName, tmuxPaneId);
     const paneShort = pane.replace(/\.\d+$/, "");
-    const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
+    const titleClean = cleanTitle(title);
     const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
 
     results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) });
@@ -411,7 +422,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const wact = parseInt(wactStr, 10) || 0;
     const { status, detail } = await detectStatus(pane, title, wact, agentName, tmuxPaneId);
     const paneShort = pane.replace(/\.\d+$/, "");
-    const titleClean = title.replace(/^[\u2801-\u28FF] */u, "").slice(0, 30);
+    const titleClean = cleanTitle(title);
     const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
 
     return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd } as AgentPane;
