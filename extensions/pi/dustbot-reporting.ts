@@ -57,27 +57,55 @@ function report(state: string, ctx: any): void {
   execFile(AGENTS_BIN, args, () => {});
 }
 
+/** Check if the last 3 non-empty lines of a message contain a question mark. */
+function endsWithQuestion(message: any): boolean {
+  try {
+    const content = message?.content;
+    if (!Array.isArray(content)) return false;
+    // Extract text from content blocks
+    const text = content
+      .filter((c: any) => c?.type === "text" && c?.text)
+      .map((c: any) => c.text)
+      .join("\n");
+    if (!text) return false;
+    const lines = text.split("\n").filter((l: string) => l.trim());
+    const tail = lines.slice(-3).join("\n");
+    return tail.includes("?");
+  } catch {
+    return false;
+  }
+}
+
 const extension: ExtensionFactory = (pi: ExtensionAPI) => {
-  pi.on("agent_start", async (ctx: any) => {
+  pi.on("agent_start", async (_event: any, ctx: any) => {
     report("working", ctx);
   });
 
-  pi.on("agent_end", async (ctx: any) => {
+  pi.on("agent_end", async (event: any, ctx: any) => {
+    // Check if the last assistant message ends with a question
+    const messages = event?.messages;
+    if (Array.isArray(messages) && messages.length > 0) {
+      const last = messages[messages.length - 1];
+      if (endsWithQuestion(last)) {
+        report("question", ctx);
+        return;
+      }
+    }
     report("idle", ctx);
   });
 
-  pi.on("tool_call", async (ctx: any) => {
-    if (ctx?.tool === "AskUserQuestion" || ctx?.tool === "ask_user") {
+  pi.on("tool_call", async (event: any, ctx: any) => {
+    if (event?.toolName === "AskUserQuestion" || event?.toolName === "ask_user") {
       report("question", ctx);
     }
   });
 
-  pi.on("turn_end", async (ctx: any) => {
+  pi.on("turn_end", async (event: any, ctx: any) => {
     // Update context data at end of each turn
     report("idle", ctx);
   });
 
-  pi.on("session_shutdown", async (ctx: any) => {
+  pi.on("session_shutdown", async (_event: any, ctx: any) => {
     report("idle", ctx);
   });
 };
