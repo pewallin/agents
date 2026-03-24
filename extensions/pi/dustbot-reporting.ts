@@ -74,7 +74,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
 
   pi.on("turn_end", async (ctx: any) => {
     // Update context data at end of each turn
-    report("working", ctx);
+    report("idle", ctx);
   });
 
   pi.on("session_shutdown", async (ctx: any) => {
