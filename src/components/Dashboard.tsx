@@ -19,6 +19,7 @@ import { execSync } from "child_process";
 import { join, dirname, basename } from "path";
 import { detectMultiplexer, getMux } from "../multiplexer.js";
 import { exec, execInherit } from "../shell.js";
+import { isAgentsAppRunning } from "../mux-tmux.js";
 
 interface Props {
   interval: number;
@@ -69,6 +70,7 @@ export function Dashboard({ interval }: Props) {
   const previewRef = useRef<PreviewState | null>(_previewStore);
   const gridRef = useRef<GridState | null>(_gridStore);
   const [gridActive, setGridActive] = useState(!!_gridStore);
+  const [appRunning, setAppRunning] = useState(false);
   const selfPaneId = useRef<string>(null!);
   if (!selfPaneId.current) selfPaneId.current = ownPaneId();
   const selfWindowId = useRef<string>(null!);
@@ -137,6 +139,10 @@ export function Dashboard({ interval }: Props) {
 
   const doScan = useCallback(() => {
     syncPaneSize();
+
+    // Check if the Agents desktop app is running (linked sessions present).
+    // When it is, preview/grid are disabled to avoid swap-pane conflicts.
+    if (!isZellij) setAppRunning(isAgentsAppRunning());
 
     const seq = ++scanSeq.current;
     scanAsync().then((scanned) => {
@@ -330,6 +336,9 @@ export function Dashboard({ interval }: Props) {
   if (!helperLayoutNames.current) helperLayoutNames.current = Object.keys(helperLayouts.current);
 
   const openPreview = useCallback((agent: AgentPane, forceVertical: boolean = false, layout: string | null = null) => {
+    // Agents desktop app uses linked tmux sessions that share windows —
+    // swap-pane would corrupt the shared layout.
+    if (appRunning) return;
     if (isZellij) {
       // Zellij: side-by-side preview not available (zellij 0.44 pane movement APIs are buggy).
       // Instead, switch to the agent's tab. Press p again to come back.
@@ -390,7 +399,7 @@ export function Dashboard({ interval }: Props) {
     if (zones.length) labelZones(zones);
 
     setPreview({ ...pv, zones });
-  }, [agents.length, setPreview, isZellij]);
+  }, [agents.length, setPreview, isZellij, appRunning]);
 
   const switchingRef = useRef(false);
 
@@ -465,6 +474,7 @@ export function Dashboard({ interval }: Props) {
   }, [syncPaneSize, doScan]);
 
   const openGrid = useCallback((scope?: string) => {
+    if (appRunning) return;
     // Close existing preview/helpers first
     restorePreview();
 
@@ -487,7 +497,7 @@ export function Dashboard({ interval }: Props) {
     setGridActive(true);
     syncPaneSize();
     doScan();
-  }, [agents, restorePreview, syncPaneSize, doScan]);
+  }, [agents, restorePreview, syncPaneSize, doScan, appRunning]);
 
   /** Focus an agent in grid mode. If scoped and agent is in a different session, rebuild grid. */
   const gridSelectAgent = useCallback((agent: AgentPane) => {
@@ -991,8 +1001,9 @@ export function Dashboard({ interval }: Props) {
         </>
       ) : (
         <>
-          <Box paddingLeft={2}>
+          <Box paddingLeft={2} columnGap={1}>
             <Text bold>Agent Dashboard</Text>
+            {appRunning && <Text color="#7b8494">[app]</Text>}
           </Box>
           <Text> </Text>
           <AgentTable agents={agents} selectedIndex={idx} showCursor summaryView={summaryView} />

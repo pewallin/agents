@@ -11,6 +11,18 @@ function isLinkedSession(name: string): boolean {
   return name.startsWith("_agents_");
 }
 
+/**
+ * Check whether the Agents desktop app is running.
+ * It creates linked tmux sessions prefixed `_agents_<pid>_` that share windows
+ * with real sessions. Preview/grid swap-pane operations in the CLI dashboard
+ * would corrupt the shared window state, so we disable them when detected.
+ */
+export function isAgentsAppRunning(): boolean {
+  const raw = exec("tmux list-sessions -F '#{session_name}' 2>/dev/null");
+  if (!raw) return false;
+  return raw.split("\n").some(s => s.startsWith("_agents_"));
+}
+
 export class TmuxMux implements Multiplexer {
   readonly kind = "tmux" as const;
 
