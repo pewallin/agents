@@ -66,6 +66,11 @@ function stateDuration(agent: string, paneId?: string): string | undefined {
   return age >= 1 ? formatDuration(age) : undefined;
 }
 
+function stateDetail(agent: string, paneId?: string): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+  return entry?.detail;
+}
+
 function stateContext(agent: string, paneId?: string): string | undefined {
   const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
   return entry?.context;
@@ -278,6 +283,10 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const zellijCwd = p.cwd?.replace(/^\/Users\/[^/]+/, "~") || undefined;
     const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
+    // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
+    const richDetail = stateDetail(agentName, p.id);
+    const finalDetail = richDetail || detail;
+
     results.push({
       pane: paneRef,
       paneId: paneRef,
@@ -285,7 +294,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       title: titleClean,
       agent: friendlyName(agentName),
       status,
-      detail,
+      detail: finalDetail,
       windowId: paneRef,
       cwd: zellijCwd,
       branch: zellijBranch,
@@ -427,12 +436,15 @@ export async function scanAsync(): Promise<AgentPane[]> {
 
     const wact = parseInt(wactStr, 10) || 0;
     const { status, detail } = await detectStatus(pane, title, wact, agentName, tmuxPaneId);
+    // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
+    const richDetail = stateDetail(agentName, tmuxPaneId);
+    const finalDetail = richDetail || detail;
     const paneShort = pane.replace(/\.\d+$/, "");
     const titleClean = cleanTitle(title);
     const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
     const branch = cwdRaw ? (await execAsync(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`))?.trim() || undefined : undefined;
 
-    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd, branch } as AgentPane;
+    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail: finalDetail, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);

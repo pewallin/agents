@@ -209,6 +209,7 @@ program
   .description("Report agent state (called by agent hooks)")
   .requiredOption("--agent <name>", "Agent name (claude, copilot, pi)")
   .option("--state <state>", "State: working, idle, approval, question")
+  .option("--detail <text>", "Current activity detail (tool name, filename, etc.)")
   .option("--context <text>", "Context description for this workspace")
   .option("--context-tokens <n>", "Current token usage in conversation", parseInt)
   .option("--context-max <n>", "Context window limit for the model", parseInt)
@@ -253,7 +254,13 @@ program
       // Context-only update — preserve existing state
       reportContext(opts.agent, session, opts.context, wsSnapshot, ctxTokens, ctxMax);
     } else if (opts.state) {
-      reportState(opts.agent, session, opts.state, opts.context, wsSnapshot, ctxTokens, ctxMax);
+      reportState(opts.agent, session, opts.state, {
+        detail: opts.detail,
+        context: opts.context,
+        workspace: wsSnapshot,
+        contextTokens: ctxTokens,
+        contextMax: ctxMax,
+      });
     }
   });
 

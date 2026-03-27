@@ -16,6 +16,7 @@ export interface StateEntry {
   ts: number;
   agent: string;
   session: string;
+  detail?: string;         // transient activity detail (e.g. tool name, filename)
   context?: string;
   contextTokens?: number;
   contextMax?: number;
@@ -29,7 +30,24 @@ function ensureDir() {
 }
 
 /** Write state for an agent session. Called by hook integrations. */
-export function reportState(agent: string, session: string, state: ReportedState, context?: string, workspace?: WorkspaceSnapshot, contextTokens?: number, contextMax?: number): void {
+export interface ReportOptions {
+  detail?: string;
+  context?: string;
+  workspace?: WorkspaceSnapshot;
+  contextTokens?: number;
+  contextMax?: number;
+}
+
+/** Write state for an agent session. Called by hook integrations. */
+export function reportState(agent: string, session: string, state: ReportedState, optsOrContext?: ReportOptions | string, workspace?: WorkspaceSnapshot, contextTokens?: number, contextMax?: number): void {
+  // Support both new options-object style and legacy positional args
+  let opts: ReportOptions;
+  if (typeof optsOrContext === "object" && optsOrContext !== null && !("command" in optsOrContext)) {
+    opts = optsOrContext as ReportOptions;
+  } else {
+    opts = { context: optsOrContext as string | undefined, workspace, contextTokens, contextMax };
+  }
+
   ensureDir();
   const filePath = join(STATE_DIR, `${agent}-${session}.json`);
   let existing: StateEntry | null = null;
@@ -37,13 +55,14 @@ export function reportState(agent: string, session: string, state: ReportedState
     existing = JSON.parse(readFileSync(filePath, "utf-8"));
   } catch {}
 
+  let { detail, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
   if (context === undefined) context = existing?.context;
-  if (contextTokens === undefined) contextTokens = existing?.contextTokens;
-  if (contextMax === undefined) contextMax = existing?.contextMax;
+  if (ctxTokens === undefined) ctxTokens = existing?.contextTokens;
+  if (ctxMax === undefined) ctxMax = existing?.contextMax;
   // Preserve existing workspace if it has a sessionName (seeded by createWorkspace).
   // Hook-reported snapshots lack sessionName and should not overwrite authoritative data.
-  if (workspace === undefined || (existing?.workspace?.sessionName && !workspace?.sessionName)) {
-    workspace = existing?.workspace;
+  if (ws === undefined || (existing?.workspace?.sessionName && !ws?.sessionName)) {
+    ws = existing?.workspace;
   }
 
   const entry: StateEntry = {
@@ -51,10 +70,11 @@ export function reportState(agent: string, session: string, state: ReportedState
     ts: Math.floor(Date.now() / 1000),
     agent,
     session,
+    ...(detail ? { detail } : {}),
     ...(context ? { context } : {}),
-    ...(contextTokens !== undefined ? { contextTokens } : {}),
-    ...(contextMax !== undefined ? { contextMax } : {}),
-    ...(workspace ? { workspace } : {}),
+    ...(ctxTokens !== undefined ? { contextTokens: ctxTokens } : {}),
+    ...(ctxMax !== undefined ? { contextMax: ctxMax } : {}),
+    ...(ws ? { workspace: ws } : {}),
   };
   writeFileSync(filePath, JSON.stringify(entry));
 }
