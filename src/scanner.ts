@@ -19,6 +19,7 @@ export interface AgentPane {
   detail?: string;
   windowId?: string;   // session:window_index for sibling lookup
   cwd?: string;
+  branch?: string;     // git branch name for the cwd
   context?: string;    // workspace context description from state file
   contextTokens?: number;
   contextMax?: number;
@@ -274,6 +275,9 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const paneRef = `${p.session}:${p.tab}`;
     const titleClean = cleanTitle(p.title);
 
+    const zellijCwd = p.cwd?.replace(/^\/Users\/[^/]+/, "~") || undefined;
+    const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
+
     results.push({
       pane: paneRef,
       paneId: paneRef,
@@ -283,7 +287,8 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       status,
       detail,
       windowId: paneRef,
-      cwd: p.cwd?.replace(/^\/Users\/[^/]+/, "~") || undefined,
+      cwd: zellijCwd,
+      branch: zellijBranch,
       context: stateContext(agentName, p.id),
       ...stateTokens(agentName, p.id),
     });
@@ -322,8 +327,9 @@ function scanSync(): AgentPane[] {
     const paneShort = pane.replace(/\.\d+$/, "");
     const titleClean = cleanTitle(title);
     const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
+    const branch = cwdRaw ? exec(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
-    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) });
+    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) });
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
@@ -424,8 +430,9 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const paneShort = pane.replace(/\.\d+$/, "");
     const titleClean = cleanTitle(title);
     const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
+    const branch = cwdRaw ? (await execAsync(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`))?.trim() || undefined : undefined;
 
-    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd } as AgentPane;
+    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd, branch } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);
