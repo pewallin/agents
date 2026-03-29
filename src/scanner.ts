@@ -375,15 +375,15 @@ function scanSync(): AgentPane[] {
 
   // Build process tree once — replaces per-pane pgrep/ps calls
   const tree = buildProcessTree();
-  // Cache git branch per directory
-  const branchCache = new Map<string, string | undefined>();
+  // Pass 1: identify agent panes and collect unique cwds
+  type ParsedPane = { pane: string; pid: string; title: string; wactStr: string; tty: string; paneId: string; tmuxPaneId: string; cwdRaw: string; agentName: string };
+  const agentPanes: ParsedPane[] = [];
+  const uniqueCwds = new Set<string>();
 
-  const results: AgentPane[] = [];
   for (const line of raw.split("\n")) {
     if (!line) continue;
     const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
 
-    // Skip panes from Agents app linked sessions
     const session = pane.split(":")[0];
     if (session.startsWith("_agents_")) continue;
 
@@ -397,26 +397,34 @@ function scanSync(): AgentPane[] {
     }
     if (!agentName) continue;
 
-    const wact = parseInt(wactStr, 10) || 0;
-    const { status, detail } = detectStatusSync(pane, title, wact, agentName, tmuxPaneId);
-    // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
-    const richDetail = stateDetail(agentName, tmuxPaneId);
-    const finalDetail = richDetail || detail;
-    const paneShort = pane.replace(/\.\d+$/, "");
-    const titleClean = cleanTitle(title);
-    const cwd = cwdRaw?.replace(homedir(), "~") || undefined;
+    agentPanes.push({ pane, pid, title, wactStr, tty, paneId, tmuxPaneId, cwdRaw, agentName });
+    if (cwdRaw) uniqueCwds.add(cwdRaw);
+  }
 
-    let branch: string | undefined;
-    if (cwdRaw) {
-      if (branchCache.has(cwdRaw)) {
-        branch = branchCache.get(cwdRaw);
-      } else {
-        branch = exec(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined;
-        branchCache.set(cwdRaw, branch);
-      }
+  // Batch git branch lookup — single shell invocation for all unique cwds
+  const branchCache = new Map<string, string | undefined>();
+  if (uniqueCwds.size > 0) {
+    const cwdArr = [...uniqueCwds];
+    const script = cwdArr.map(d => `git -C ${JSON.stringify(d)} rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""`).join("\n");
+    const branches = exec(`bash -c ${JSON.stringify(script)}`).split("\n");
+    for (let i = 0; i < cwdArr.length; i++) {
+      branchCache.set(cwdArr[i], branches[i] || undefined);
     }
+  }
 
-    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail: finalDetail, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) } as AgentPane);
+  // Pass 2: detect status and build results
+  const results: AgentPane[] = [];
+  for (const p of agentPanes) {
+    const wact = parseInt(p.wactStr, 10) || 0;
+    const { status, detail } = detectStatusSync(p.pane, p.title, wact, p.agentName, p.tmuxPaneId);
+    const richDetail = stateDetail(p.agentName, p.tmuxPaneId);
+    const finalDetail = richDetail || detail;
+    const paneShort = p.pane.replace(/\.\d+$/, "");
+    const titleClean = cleanTitle(p.title);
+    const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
+    const branch = branchCache.get(p.cwdRaw);
+
+    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId), ...stateTokens(p.agentName, p.tmuxPaneId) } as AgentPane);
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
@@ -446,19 +454,30 @@ function findAgentOnTtySync(tty: string): string | null {
   return null;
 }
 
+/** Agents with hook-based state reporting — detectors read state files, not pane content. */
+const HOOK_AGENTS = new Set(["claude", "copilot", "pi", "opencode"]);
+
 function detectStatusSync(paneRef: string, title: string, windowActivity: number, agent: string, tmuxPaneId?: string): { status: AgentStatus; detail?: string } {
   const detector = getDetector(agent);
+  const dur = stateDuration(agent, tmuxPaneId);
 
+  // Hook-based agents: state comes from files, skip expensive capture-pane
+  if (HOOK_AGENTS.has(agent.toLowerCase())) {
+    if (detector.isApproval("", tmuxPaneId)) return { status: "attention", detail: dur };
+    if (detector.isIdle("", title, tmuxPaneId)) {
+      if (detector.isQuestion("", tmuxPaneId)) return { status: "question", detail: dur };
+      return { status: "idle" };
+    }
+    if (detector.isWorking("", title, tmuxPaneId)) return { status: "working", detail: dur };
+    return { status: "idle" };
+  }
+
+  // Generic (screen-scrape) agents: need pane content
   const rawLines = exec(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`);
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
-  const dur = stateDuration(agent, tmuxPaneId);
-
-  // 1. Detector checks (hooks for claude/copilot/pi, screen-scrape for others)
   if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
 
-  // Check idle first — if the screen shows a prompt, the agent stopped
-  // (even if the hook state is stale from a missed Stop event, e.g. Ctrl-C).
   if (detector.isIdle(content, title, tmuxPaneId)) {
     if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
     return { status: "idle" };
@@ -466,16 +485,11 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
 
   if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
 
-  // 2. Fallback: only reached for generic (screen-scrape) agents when
-  //    none of the patterns matched. Check if pane has any content at all.
+  // Fallback: check if pane has any content at all
   const fullPane = exec(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`);
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
   if (isEmpty) return { status: "idle" };
 
-  // No patterns matched but pane has content — use window_activity as
-  // last resort. NOTE: window_activity is per-window (not per-pane),
-  // so this can be inaccurate when helper panes share the window.
-  // Never reports "working" — window_activity is polluted by helper panes.
   const now = Math.floor(Date.now() / 1000);
   const age = now - windowActivity;
   if (age < 120) return { status: "stalled", detail: `${age}s` };
