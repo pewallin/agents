@@ -307,11 +307,76 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
   return results;
 }
 
+// ── Process tree snapshot ─────────────────────────────────────────────
+// Single `ps` call builds an in-memory process tree. Used by scanSync()
+// to avoid per-pane pgrep/ps forks (27 panes × ~4 execs → 1 exec).
+
+interface ProcEntry { pid: number; ppid: number; comm: string; tty: string }
+
+function buildProcessTree(): { byPid: Map<number, ProcEntry>; children: Map<number, number[]>; byTty: Map<string, ProcEntry[]> } {
+  const raw = exec("ps -eo pid=,ppid=,comm=,tty= 2>/dev/null");
+  const byPid = new Map<number, ProcEntry>();
+  const children = new Map<number, number[]>();
+  const byTty = new Map<string, ProcEntry[]>();
+
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)$/);
+    if (!match) continue;
+    const entry: ProcEntry = {
+      pid: parseInt(match[1]),
+      ppid: parseInt(match[2]),
+      comm: match[3].replace(/.*\//, ""),
+      tty: match[4],
+    };
+    byPid.set(entry.pid, entry);
+    const siblings = children.get(entry.ppid);
+    if (siblings) siblings.push(entry.pid);
+    else children.set(entry.ppid, [entry.pid]);
+    if (entry.tty !== "??" && entry.tty !== "?") {
+      const list = byTty.get(entry.tty);
+      if (list) list.push(entry);
+      else byTty.set(entry.tty, [entry]);
+    }
+  }
+  return { byPid, children, byTty };
+}
+
+function findLeafInTree(pid: number, tree: { byPid: Map<number, ProcEntry>; children: Map<number, number[]> }): string {
+  let current = pid;
+  for (;;) {
+    const kids = tree.children.get(current);
+    if (!kids || kids.length === 0) break;
+    const child = kids[0];
+    const entry = tree.byPid.get(child);
+    if (entry && AGENT_PROCS.test(entry.comm)) return entry.comm;
+    current = child;
+  }
+  return tree.byPid.get(current)?.comm || "";
+}
+
+function findAgentOnTtyInTree(tty: string, tree: { byTty: Map<string, ProcEntry[]> }): string | null {
+  const ttyShort = tty.replace(/^\/dev\//, "");
+  const procs = tree.byTty.get(ttyShort);
+  if (!procs) return null;
+  for (const p of procs) {
+    const cmd = p.comm.replace(/^-/, "");
+    if (AGENT_PROCS.test(cmd)) return cmd;
+  }
+  return null;
+}
+
 function scanSync(): AgentPane[] {
   const raw = exec(
     `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
   );
   if (!raw) return [];
+
+  // Build process tree once — replaces per-pane pgrep/ps calls
+  const tree = buildProcessTree();
+  // Cache git branch per directory
+  const branchCache = new Map<string, string | undefined>();
 
   const results: AgentPane[] = [];
   for (const line of raw.split("\n")) {
@@ -322,29 +387,43 @@ function scanSync(): AgentPane[] {
     const session = pane.split(":")[0];
     if (session.startsWith("_agents_")) continue;
 
-    const leafCmd = findLeafProcessSync(pid);
+    const pidNum = parseInt(pid, 10) || 0;
+    const leafCmd = findLeafInTree(pidNum, tree);
     let agentName: string | null = null;
     if (AGENT_PROCS.test(leafCmd)) {
       agentName = leafCmd;
     } else if (tty) {
-      agentName = findAgentOnTtySync(tty);
+      agentName = findAgentOnTtyInTree(tty, tree);
     }
     if (!agentName) continue;
 
     const wact = parseInt(wactStr, 10) || 0;
     const { status, detail } = detectStatusSync(pane, title, wact, agentName, tmuxPaneId);
+    // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
+    const richDetail = stateDetail(agentName, tmuxPaneId);
+    const finalDetail = richDetail || detail;
     const paneShort = pane.replace(/\.\d+$/, "");
     const titleClean = cleanTitle(title);
     const cwd = cwdRaw?.replace(homedir(), "~") || undefined;
-    const branch = cwdRaw ? exec(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
-    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) });
+    let branch: string | undefined;
+    if (cwdRaw) {
+      if (branchCache.has(cwdRaw)) {
+        branch = branchCache.get(cwdRaw);
+      } else {
+        branch = exec(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined;
+        branchCache.set(cwdRaw, branch);
+      }
+    }
+
+    results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail: finalDetail, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) } as AgentPane);
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
   return results;
 }
 
+// Legacy per-process helpers — kept for async scan path
 function findLeafProcessSync(pid: string): string {
   let leaf = pid;
   for (;;) {
