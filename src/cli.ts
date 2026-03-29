@@ -22,8 +22,9 @@ if (args.length === 1 && firstArg === "back" && muxKind === "tmux") {
 // Non-interactive commands (report, setup, uninstall, count, back) work fine without one.
 const insideMux = !!muxKind;
 if (!insideMux) {
+  const hasJson = args.includes("--json");
   const needsMux = !firstArg || firstArg === "watch" || firstArg === "w"
-    || firstArg === "list" || firstArg === "ls"
+    || ((firstArg === "list" || firstArg === "ls") && !hasJson)
     || firstArg === "workspace" || firstArg === "ws";
   if (needsMux) {
     // Try tmux (zellij auto-session creation not yet supported)

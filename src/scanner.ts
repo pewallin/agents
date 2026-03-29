@@ -1,5 +1,5 @@
 import { writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { tmpdir, homedir } from "os";
 import { join } from "path";
 import { exec, execAsync } from "./shell.js";
 import { getAgentState, getAgentStateEntry } from "./state.js";
@@ -280,7 +280,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const paneRef = `${p.session}:${p.tab}`;
     const titleClean = cleanTitle(p.title);
 
-    const zellijCwd = p.cwd?.replace(/^\/Users\/[^/]+/, "~") || undefined;
+    const zellijCwd = p.cwd?.replace(homedir(), "~") || undefined;
     const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
@@ -335,7 +335,7 @@ function scanSync(): AgentPane[] {
     const { status, detail } = detectStatusSync(pane, title, wact, agentName, tmuxPaneId);
     const paneShort = pane.replace(/\.\d+$/, "");
     const titleClean = cleanTitle(title);
-    const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
+    const cwd = cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = cwdRaw ? exec(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
     results.push({ pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) });
@@ -441,7 +441,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const finalDetail = richDetail || detail;
     const paneShort = pane.replace(/\.\d+$/, "");
     const titleClean = cleanTitle(title);
-    const cwd = cwdRaw?.replace(/^\/Users\/[^/]+/, "~") || undefined;
+    const cwd = cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = cwdRaw ? (await execAsync(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`))?.trim() || undefined : undefined;
 
     return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail: finalDetail, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) } as AgentPane;
