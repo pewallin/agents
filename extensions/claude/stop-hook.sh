@@ -25,10 +25,13 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 if [ -n "$SESSION_ID" ]; then
   BRIDGE="/tmp/claude-ctx-${SESSION_ID}.json"
   if [ -f "$BRIDGE" ]; then
-    USED_PCT=$(jq -r '.used_pct // empty' "$BRIDGE" 2>/dev/null)
-    if [ -n "$USED_PCT" ] && [ "$USED_PCT" != "null" ]; then
-      TOKENS=$(( USED_PCT * 2000 ))
-      CTX_ARGS="--context-tokens $TOKENS --context-max 200000"
+    USED_TOKENS=$(jq -r '.used_tokens // empty' "$BRIDGE" 2>/dev/null)
+    MAX_TOKENS=$(jq -r '.max_tokens // empty' "$BRIDGE" 2>/dev/null)
+    if [ -n "$USED_TOKENS" ] && [ "$USED_TOKENS" != "null" ]; then
+      CTX_ARGS="--context-tokens $USED_TOKENS"
+      if [ -n "$MAX_TOKENS" ] && [ "$MAX_TOKENS" != "null" ]; then
+        CTX_ARGS="$CTX_ARGS --context-max $MAX_TOKENS"
+      fi
     fi
   fi
 fi
