@@ -136,6 +136,14 @@ const FRIENDLY_NAMES: Record<string, string> = {};
 
 
 
+/** Check if a pane title is meaningful (not a default/command-prefix title). */
+function isTitleUseful(title: string): boolean {
+  if (!title || title.length === 0) return false;
+  // Reject titles that look like "agent:x" command prefixes (e.g., "pi:c")
+  if (/^[a-z]+:[a-z]$/i.test(title)) return false;
+  return true;
+}
+
 /** Sanitize pane title: strip spinner chars, control chars, and reject escape sequence leaks. */
 function cleanTitle(raw: string): string {
   // Strip braille spinners
@@ -144,7 +152,7 @@ function cleanTitle(raw: string): string {
   t = t.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
   // Reject if it looks like a leaked escape sequence (DA response, etc.)
   if (/\x1b\[|[\x00-\x1f]/.test(raw)) return "";
-  return t.slice(0, 30);
+  return t;
 }
 
 function friendlyName(name: string): string {
@@ -382,7 +390,7 @@ function scanSync(): AgentPane[] {
 
   for (const line of raw.split("\n")) {
     if (!line) continue;
-    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
 
     const session = pane.split(":")[0];
     if (session.startsWith("_agents_")) continue;
@@ -397,7 +405,10 @@ function scanSync(): AgentPane[] {
     }
     if (!agentName) continue;
 
-    agentPanes.push({ pane, pid, title, wactStr, tty, paneId, tmuxPaneId, cwdRaw, agentName });
+    // Use window_name as fallback when pane_title is unhelpful
+    // (e.g., "pi:c" from agents that don't set a useful terminal title)
+    const resolvedTitle = isTitleUseful(title) ? title : winname || title;
+    agentPanes.push({ pane, pid, title: resolvedTitle, wactStr, tty, paneId, tmuxPaneId, cwdRaw, agentName });
     if (cwdRaw) uniqueCwds.add(cwdRaw);
   }
 
@@ -516,7 +527,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const session = line.split("§")[0].split(":")[0];
     return !session.startsWith("_agents_");
   }).map(async (line) => {
-    const [pane, pid, title, _winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
 
     const leafCmd = await findLeafProcess(pid);
     let agentName: string | null = null;
@@ -527,13 +538,15 @@ export async function scanAsync(): Promise<AgentPane[]> {
     }
     if (!agentName) return null;
 
+    // Use window_name as fallback when pane_title is unhelpful
+    const resolvedTitle = isTitleUseful(title) ? title : winname || title;
     const wact = parseInt(wactStr, 10) || 0;
-    const { status, detail } = await detectStatus(pane, title, wact, agentName, tmuxPaneId);
+    const { status, detail } = await detectStatus(pane, resolvedTitle, wact, agentName, tmuxPaneId);
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
     const richDetail = stateDetail(agentName, tmuxPaneId);
     const finalDetail = richDetail || detail;
     const paneShort = pane.replace(/\.\d+$/, "");
-    const titleClean = cleanTitle(title);
+    const titleClean = cleanTitle(resolvedTitle);
     const cwd = cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = cwdRaw ? (await execAsync(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`))?.trim() || undefined : undefined;
 
