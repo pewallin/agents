@@ -29,9 +29,11 @@ const SESSION_ID = process.env.TMUX_PANE || "default";
 // Track context window usage
 let contextTokens = undefined;
 let contextMax = undefined;
+let currentModel = undefined;
 
 function report(state) {
   const args = ["report", "--agent", "copilot", "--state", state, "--session", SESSION_ID];
+  if (currentModel) args.push("--model", String(currentModel));
   if (contextTokens !== undefined) args.push("--context-tokens", String(contextTokens));
   if (contextMax !== undefined) args.push("--context-max", String(contextMax));
   execFile(AGENTS_BIN, args, (err) => {
@@ -51,6 +53,14 @@ const session = await joinSession({
       report("idle");
     },
   },
+});
+
+session.on("session.start", (event) => {
+  currentModel = event.data?.selectedModel || currentModel;
+});
+
+session.on("session.model_change", (event) => {
+  currentModel = event.data?.newModel || currentModel;
 });
 
 // Context window tracking
@@ -83,6 +93,7 @@ session.on("tool.execution_complete", () => {
 // Compaction — report working state with context
 session.on("session.compaction_start", () => {
   const args = ["report", "--agent", "copilot", "--state", "working", "--context", "compacting", "--session", SESSION_ID];
+  if (currentModel) args.push("--model", String(currentModel));
   execFile(AGENTS_BIN, args, () => {});
 });
 

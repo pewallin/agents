@@ -118,7 +118,7 @@ const [
 const { Command } = commander;
 const React = reactMod.default;
 const { render } = ink;
-const { scan } = scanner;
+const { scan, inferContextFromContent, inferModelFromContent } = scanner;
 const { reportState, reportContext } = state;
 const { setup, uninstall, autoSetupIfNeeded } = setupMod;
 const { createWorkspace } = workspace;
@@ -211,6 +211,8 @@ program
   .requiredOption("--agent <name>", "Agent name (claude, copilot, pi)")
   .option("--state <state>", "State: working, idle, approval, question")
   .option("--detail <text>", "Current activity detail (tool name, filename, etc.)")
+  .option("--model <name>", "Model currently selected for the agent")
+  .option("--external-session-id <id>", "Underlying agent session ID, if different from the pane ID")
   .option("--context <text>", "Context description for this workspace")
   .option("--context-tokens <n>", "Current token usage in conversation", parseInt)
   .option("--context-max <n>", "Context window limit for the model", parseInt)
@@ -249,14 +251,30 @@ program
       wsSnapshot = { command: opts.agent, cwd: process.env.PWD, mux: "zellij" };
     }
 
-    const ctxTokens = isNaN(opts.contextTokens) ? undefined : opts.contextTokens;
-    const ctxMax = isNaN(opts.contextMax) ? undefined : opts.contextMax;
+    const externalSessionId = opts.externalSessionId as string | undefined;
+    let model = opts.model as string | undefined;
+    let ctxTokens = isNaN(opts.contextTokens) ? undefined : opts.contextTokens;
+    let ctxMax = isNaN(opts.contextMax) ? undefined : opts.contextMax;
+    if (muxKind === "tmux" && session?.startsWith("%") && (!model || ctxTokens === undefined || ctxMax === undefined)) {
+      try {
+        const paneTail = execSync(
+          `tmux capture-pane -t ${session} -p -S -20 2>/dev/null`,
+          { encoding: "utf-8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"] }
+        ).trim();
+        if (!model) model = inferModelFromContent(opts.agent, paneTail);
+        const inferredContext = inferContextFromContent(opts.agent, paneTail);
+        if (ctxTokens === undefined) ctxTokens = inferredContext.contextTokens;
+        if (ctxMax === undefined) ctxMax = inferredContext.contextMax;
+      } catch {}
+    }
     if (opts.context && !opts.state) {
       // Context-only update — preserve existing state
-      reportContext(opts.agent, session, opts.context, wsSnapshot, ctxTokens, ctxMax);
+      reportContext(opts.agent, session, opts.context, wsSnapshot, ctxTokens, ctxMax, model, externalSessionId);
     } else if (opts.state) {
       reportState(opts.agent, session, opts.state, {
         detail: opts.detail,
+        model,
+        externalSessionId,
         context: opts.context,
         workspace: wsSnapshot,
         contextTokens: ctxTokens,

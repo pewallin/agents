@@ -17,6 +17,8 @@ export interface StateEntry {
   agent: string;
   session: string;
   detail?: string;         // transient activity detail (e.g. tool name, filename)
+  model?: string;
+  externalSessionId?: string;
   context?: string;
   contextTokens?: number;
   contextMax?: number;
@@ -32,6 +34,8 @@ function ensureDir() {
 /** Write state for an agent session. Called by hook integrations. */
 export interface ReportOptions {
   detail?: string;
+  model?: string;
+  externalSessionId?: string;
   context?: string;
   workspace?: WorkspaceSnapshot;
   contextTokens?: number;
@@ -39,13 +43,13 @@ export interface ReportOptions {
 }
 
 /** Write state for an agent session. Called by hook integrations. */
-export function reportState(agent: string, session: string, state: ReportedState, optsOrContext?: ReportOptions | string, workspace?: WorkspaceSnapshot, contextTokens?: number, contextMax?: number): void {
+export function reportState(agent: string, session: string, state: ReportedState, optsOrContext?: ReportOptions | string, workspace?: WorkspaceSnapshot, contextTokens?: number, contextMax?: number, model?: string, externalSessionId?: string): void {
   // Support both new options-object style and legacy positional args
   let opts: ReportOptions;
   if (typeof optsOrContext === "object" && optsOrContext !== null && !("command" in optsOrContext)) {
     opts = optsOrContext as ReportOptions;
   } else {
-    opts = { context: optsOrContext as string | undefined, workspace, contextTokens, contextMax };
+    opts = { context: optsOrContext as string | undefined, workspace, contextTokens, contextMax, model, externalSessionId };
   }
 
   ensureDir();
@@ -55,7 +59,9 @@ export function reportState(agent: string, session: string, state: ReportedState
     existing = JSON.parse(readFileSync(filePath, "utf-8"));
   } catch {}
 
-  let { detail, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
+  let { detail, model: modelName, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
+  if (modelName === undefined) modelName = existing?.model;
+  if (extSessionId === undefined) extSessionId = existing?.externalSessionId;
   if (context === undefined) context = existing?.context;
   if (ctxTokens === undefined) ctxTokens = existing?.contextTokens;
   if (ctxMax === undefined) ctxMax = existing?.contextMax;
@@ -71,6 +77,8 @@ export function reportState(agent: string, session: string, state: ReportedState
     agent,
     session,
     ...(detail ? { detail } : {}),
+    ...(modelName ? { model: modelName } : {}),
+    ...(extSessionId ? { externalSessionId: extSessionId } : {}),
     ...(context ? { context } : {}),
     ...(ctxTokens !== undefined ? { contextTokens: ctxTokens } : {}),
     ...(ctxMax !== undefined ? { contextMax: ctxMax } : {}),
@@ -80,13 +88,15 @@ export function reportState(agent: string, session: string, state: ReportedState
 }
 
 /** Update only the context field for an agent session, preserving state. */
-export function reportContext(agent: string, session: string, context: string, workspace?: WorkspaceSnapshot, contextTokens?: number, contextMax?: number): void {
+export function reportContext(agent: string, session: string, context: string, workspace?: WorkspaceSnapshot, contextTokens?: number, contextMax?: number, model?: string, externalSessionId?: string): void {
   ensureDir();
   const filePath = join(STATE_DIR, `${agent}-${session}.json`);
   let entry: StateEntry;
   try {
     entry = JSON.parse(readFileSync(filePath, "utf-8"));
     entry.context = context;
+    if (model !== undefined) entry.model = model;
+    if (externalSessionId !== undefined) entry.externalSessionId = externalSessionId;
     if (contextTokens !== undefined) entry.contextTokens = contextTokens;
     if (contextMax !== undefined) entry.contextMax = contextMax;
     if (workspace !== undefined && !(entry.workspace?.sessionName && !workspace?.sessionName)) {
@@ -95,6 +105,8 @@ export function reportContext(agent: string, session: string, context: string, w
     entry.ts = Math.floor(Date.now() / 1000);
   } catch {
     entry = { state: "idle", ts: Math.floor(Date.now() / 1000), agent, session, context,
+      ...(model ? { model } : {}),
+      ...(externalSessionId ? { externalSessionId } : {}),
       ...(contextTokens !== undefined ? { contextTokens } : {}),
       ...(contextMax !== undefined ? { contextMax } : {}),
       ...(workspace ? { workspace } : {}) };

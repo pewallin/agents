@@ -42,8 +42,13 @@ MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // ""')
 # Only the tail of the message matters — earlier questions in the
 # conversation (code comments, URLs, explanations) are not relevant.
 TAIL=$(printf '%s' "$MSG" | grep -v '^[[:space:]]*$' | tail -3)
+SESSION_ARGS=""
+if [ -n "$SESSION_ID" ]; then
+  SESSION_ARGS="--external-session-id $SESSION_ID"
+fi
+
 if printf '%s' "$TAIL" | grep -Fq '?'; then
-  agents report --agent claude --state question --session "$SESSION" $CTX_ARGS
+  agents report --agent claude --state question --session "$SESSION" $SESSION_ARGS $CTX_ARGS
 else
-  agents report --agent claude --state idle --session "$SESSION" $CTX_ARGS
+  agents report --agent claude --state idle --session "$SESSION" $SESSION_ARGS $CTX_ARGS
 fi

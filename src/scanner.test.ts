@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getDetector, filterAgents } from "./scanner.js";
+import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, getDetector, filterAgents, inferContextFromContent, inferModelFromContent } from "./scanner.js";
 import type { AgentPane } from "./scanner.js";
 
 describe("getDetector", () => {
@@ -37,6 +37,63 @@ function makeAgent(overrides: Partial<AgentPane> & { pane: string; tmuxPaneId: s
     ...overrides,
   };
 }
+
+describe("detectAgentProcess", () => {
+  it("detects codex from a node wrapper command", () => {
+    expect(detectAgentProcess("node", "node /Users/peter/.nvm/versions/node/v22.20.0/bin/codex --full-auto")).toBe("codex");
+  });
+
+  it("detects codex from a truncated comm using full args", () => {
+    expect(detectAgentProcess("/Users/peter/.nv", "/Users/peter/.nvm/versions/node/v22.20.0/lib/node_modules/@openai/codex/vendor/codex/codex --full-auto")).toBe("codex");
+  });
+});
+
+describe("inferModelFromContent", () => {
+  it("extracts codex model from footer", () => {
+    const content = [
+      "• Done",
+      "",
+      "gpt-5.2-codex high · 69% left · ~/code/agents-app",
+    ].join("\n");
+    expect(inferModelFromContent("codex", content)).toBe("gpt-5.2-codex");
+  });
+
+  it("extracts pi model from footer", () => {
+    const content = [
+      "~/code · 11 pkgs • ↻...  (sub) · 9.5%/400k · 1h18m",
+      "(github-copilot) GPT-5.4",
+    ].join("\n");
+    expect(inferModelFromContent("pi", content)).toBe("GPT-5.4");
+  });
+});
+
+describe("inferContextFromContent", () => {
+  it("extracts pi context usage from footer", () => {
+    const content = "~/code · 11 pkgs • ↻...  (sub) · 9.5%/400k · 1h18m\n(github-copilot) GPT-5.4";
+    expect(inferContextFromContent("pi", content)).toEqual({
+      contextTokens: 38000,
+      contextMax: 400000,
+    });
+  });
+
+  it("extracts claude context usage from footer", () => {
+    const content = "❯ \n  ✓ Dustbot | code | Context: 7% | Opus 4.6 (1M context)";
+    expect(inferContextFromContent("claude", content)).toEqual({
+      contextTokens: 70000,
+      contextMax: 1000000,
+    });
+  });
+});
+
+describe("extractClaudeRenameTitleFromTranscript", () => {
+  it("extracts the latest non-empty /rename title", () => {
+    const lines = [
+      JSON.stringify({ type: "system", subtype: "local_command", content: "<command-name>/rename</command-name>\n<command-message>rename</command-message>\n<command-args></command-args>" }),
+      JSON.stringify({ type: "system", subtype: "local_command", content: "<command-name>/rename</command-name>\n<command-message>rename</command-message>\n<command-args>Computer Help</command-args>" }),
+    ];
+    expect(extractClaudeRenameTitleFromTranscript(lines)).toBe("Computer Help");
+  });
+});
 
 describe("filterAgents", () => {
   const selfPane = "%10";

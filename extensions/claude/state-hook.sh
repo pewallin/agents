@@ -35,4 +35,9 @@ if [ -n "$SESSION_ID" ]; then
   fi
 fi
 
-agents report --agent claude --state "$STATE" --session "$SESSION" $CTX_ARGS
+SESSION_ARGS=""
+if [ -n "$SESSION_ID" ]; then
+  SESSION_ARGS="--external-session-id $SESSION_ID"
+fi
+
+agents report --agent claude --state "$STATE" --session "$SESSION" $SESSION_ARGS $CTX_ARGS

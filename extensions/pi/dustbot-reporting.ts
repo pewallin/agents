@@ -4,7 +4,7 @@
  * Hooks:
  *   agent_start      — reports "working" state
  *   agent_end        — reports "idle" state
- *   tool_call        — reports "question" for ask_user tools
+ *   tool_call        — reports "question" for ask_user tools, otherwise "working"
  *   session_shutdown — reports "idle" state (cleanup)
  *
  * Also reports context window usage via getContextUsage().
@@ -45,8 +45,17 @@ const AGENTS_BIN = findAgentsBin();
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
 
+function appendModel(args: string[], ctx: any): void {
+  try {
+    const model = ctx?.model;
+    const label = model?.name || model?.id;
+    if (label) args.push("--model", String(label));
+  } catch {}
+}
+
 function report(state: string, ctx: any): void {
   const args = ["report", "--agent", "pi", "--state", state, "--session", SESSION_ID];
+  appendModel(args, ctx);
   // Include context window data if available
   try {
     const usage = ctx?.getContextUsage?.();
@@ -59,6 +68,7 @@ function report(state: string, ctx: any): void {
 
 function reportWithContext(state: string, context: string, ctx: any): void {
   const args = ["report", "--agent", "pi", "--state", state, "--context", context, "--session", SESSION_ID];
+  appendModel(args, ctx);
   try {
     const usage = ctx?.getContextUsage?.();
     if (usage && usage.tokens != null && usage.contextWindow) {
@@ -108,6 +118,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   pi.on("tool_call", async (event: any, ctx: any) => {
     if (event?.toolName === "AskUserQuestion" || event?.toolName === "ask_user") {
       report("question", ctx);
+    } else {
+      report("working", ctx);
     }
   });
 
@@ -116,12 +128,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   });
 
   pi.on("session_compact", async (_event: any, ctx: any) => {
-    report("idle", ctx);
+    // Compaction is an internal step within an active run, not completion.
+    report("working", ctx);
   });
 
-  pi.on("turn_end", async (event: any, ctx: any) => {
-    // Update context data at end of each turn
-    report("idle", ctx);
+  pi.on("turn_end", async (_event: any, _ctx: any) => {
+    // A turn can end after an intermediate tool/result cycle.
+    // Only agent_end/session_shutdown should report idle.
   });
 
   pi.on("session_shutdown", async (_event: any, ctx: any) => {

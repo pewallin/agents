@@ -117,10 +117,13 @@ export function AgentTable({ agents, selectedIndex, showCursor, summaryView }: P
               </Text>
               <StatusBadge status={agent.status} detail={agent.detail} />
             </Box>
-            {summaryView && (agent.context || agent.cwd) && (
+            {summaryView && (agent.context || agent.model || agent.cwd) && (
               <Box flexDirection="column" paddingLeft={2 + cursorIndent} overflowX="hidden">
                 {agent.context && (
                   <Text dimColor wrap="truncate">  {agent.context}</Text>
+                )}
+                {agent.model && (
+                  <Text color="#6b7385" wrap="truncate">  {agent.model}</Text>
                 )}
                 {agent.cwd && (
                   <Text color="#6b7385" wrap="truncate">  {agent.cwd}</Text>

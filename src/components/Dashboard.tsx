@@ -1088,6 +1088,7 @@ export function Dashboard({ interval }: Props) {
                       </Text>
                       <Text wrap="truncate" color="#7b8494">⌘ {a.pane}</Text>
                       {a.title ? <Text wrap="truncate" color="#7b8494">◇ {a.title}</Text> : null}
+                      {a.model ? <Text wrap="truncate" color="#7b8494">◌ {a.model}</Text> : null}
                       {a.cwd ? <Text wrap="truncate" color="#7b8494">⌂ {a.cwd}</Text> : null}
                     </Box>
                   );

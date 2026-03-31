@@ -1,6 +1,6 @@
-import { writeFileSync } from "fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
 import { tmpdir, homedir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
 import { exec, execAsync } from "./shell.js";
 import { getAgentState, getAgentStateEntry } from "./state.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
@@ -17,6 +17,7 @@ export interface AgentPane {
   agent: string;
   status: AgentStatus;
   detail?: string;
+  model?: string;      // model currently selected for the agent
   windowId?: string;   // session:window_index for sibling lookup
   cwd?: string;
   branch?: string;     // git branch name for the cwd
@@ -34,7 +35,9 @@ export interface SiblingPane {
 }
 
 // Agent process names to detect — extend this list for custom agents
-const AGENT_PROCS = /^(claude|copilot|opencode|codex|cursor|pi)$/i;
+const AGENT_PROC_NAMES = ["claude", "copilot", "opencode", "codex", "cursor", "pi"] as const;
+const AGENT_PROCS = new RegExp(`^(${AGENT_PROC_NAMES.join("|")})$`, "i");
+const WRAPPER_PROCS = new Set(["node", "bun", "bunx", "deno", "tsx", "ts-node", "env", "npm", "npx", "pnpm", "yarn"]);
 
 // ── Per-agent detection ──────────────────────────────────────────────
 
@@ -83,6 +86,164 @@ function stateTokens(agent: string, paneId?: string): { contextTokens?: number; 
     ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
     ...(entry.contextMax !== undefined ? { contextMax: entry.contextMax } : {}),
   };
+}
+
+function mergedContextTokens(agent: string, paneId: string | undefined, content: string): { contextTokens?: number; contextMax?: number } {
+  const stored = stateTokens(agent, paneId);
+  const inferred = inferContextFromContent(agent, content);
+  return {
+    ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : inferred.contextTokens !== undefined ? { contextTokens: inferred.contextTokens } : {}),
+    ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : inferred.contextMax !== undefined ? { contextMax: inferred.contextMax } : {}),
+  };
+}
+
+function stateModel(agent: string, paneId?: string): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+  return entry?.model;
+}
+
+function stateExternalSessionId(agent: string, paneId?: string): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+  return entry?.externalSessionId;
+}
+
+function normalizeProcessToken(token: string): string {
+  if (!token) return "";
+  const trimmed = token.trim().replace(/^['"]+|['"]+$/g, "");
+  if (!trimmed) return "";
+  return basename(trimmed).replace(/^-/, "");
+}
+
+export function detectAgentProcess(comm: string, args: string): string | null {
+  const rawTokens = [comm, ...args.trim().split(/\s+/)].filter(Boolean);
+  const candidates: string[] = [];
+
+  for (let i = 0; i < rawTokens.length; i++) {
+    const current = normalizeProcessToken(rawTokens[i]);
+    if (!current) continue;
+    candidates.push(current);
+    if (WRAPPER_PROCS.has(current.toLowerCase()) && rawTokens[i + 1]) {
+      const wrapped = normalizeProcessToken(rawTokens[i + 1]);
+      if (wrapped) candidates.push(wrapped);
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (AGENT_PROCS.test(candidate)) return candidate.toLowerCase();
+  }
+  return null;
+}
+
+function parseContextWindowLabel(label?: string): number | undefined {
+  if (!label) return undefined;
+  const match = label.match(/(\d+(?:\.\d+)?)\s*([kKmM])/);
+  if (!match) return undefined;
+  const base = Number.parseFloat(match[1]);
+  const multiplier = match[2].toLowerCase() === "m" ? 1_000_000 : 1_000;
+  return Math.round(base * multiplier);
+}
+
+export function inferContextFromContent(agent: string, content: string): { contextTokens?: number; contextMax?: number } {
+  const lines = content.split("\n").map((line) => line.trim()).filter(Boolean).slice(-12).reverse();
+  switch (agent.toLowerCase()) {
+    case "pi": {
+      for (const line of lines) {
+        const match = line.match(/([0-9]+(?:\.[0-9]+)?)%\/(\d+(?:\.\d+)?)([kKmM])/);
+        if (!match) continue;
+        const pct = Number.parseFloat(match[1]);
+        const max = parseContextWindowLabel(`${match[2]}${match[3]}`);
+        if (max === undefined) return {};
+        return { contextTokens: Math.round(max * pct / 100), contextMax: max };
+      }
+      return {};
+    }
+    case "claude": {
+      for (const line of lines) {
+        const pctMatch = line.match(/Context:\s*([0-9]+(?:\.[0-9]+)?)%/i);
+        if (!pctMatch) continue;
+        const pct = Number.parseFloat(pctMatch[1]);
+        const max = parseContextWindowLabel(line);
+        if (max === undefined) return {};
+        return { contextTokens: Math.round(max * pct / 100), contextMax: max };
+      }
+      return {};
+    }
+    default:
+      return {};
+  }
+}
+
+export function inferModelFromContent(agent: string, content: string): string | undefined {
+  const lines = content.split("\n").map((line) => line.trim()).filter(Boolean).slice(-12).reverse();
+  switch (agent.toLowerCase()) {
+    case "codex":
+      for (const line of lines) {
+        let match = line.match(/^([A-Za-z0-9][A-Za-z0-9._/-]*)\s+(?:low|medium|high|xhigh)\s+·/i);
+        if (match) return match[1];
+        match = line.match(/^([A-Za-z0-9][A-Za-z0-9._/-]*)\s+·/);
+        if (match && /(gpt|codex|claude|gemini|sonnet|opus|haiku|o\d)/i.test(match[1])) return match[1];
+      }
+      return undefined;
+    case "pi":
+      for (const line of lines) {
+        const match = line.match(/^\([^)]+\)\s+(.+)$/);
+        if (match) return match[1].replace(/\s+·.*$/, "").trim();
+      }
+      return undefined;
+    case "claude":
+      for (const line of lines) {
+        const parts = line.split("|").map((part) => part.trim()).filter(Boolean);
+        const last = parts.at(-1);
+        if (parts.length >= 3 && last && /(opus|sonnet|haiku|claude)/i.test(last)) {
+          return last.replace(/\s*\([^)]*$/, "").trim();
+        }
+      }
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+const claudeRenameCache = new Map<string, { mtimeMs: number; title?: string }>();
+
+export function extractClaudeRenameTitleFromTranscript(lines: string[]): string | undefined {
+  let renamedTitle: string | undefined;
+  for (const line of lines) {
+    if (!line) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: string; subtype?: string; content?: string };
+      if (entry.type !== "system" || entry.subtype !== "local_command" || !entry.content?.includes("<command-name>/rename</command-name>")) continue;
+      const match = entry.content.match(/<command-args>(.*?)<\/command-args>/s);
+      const candidate = match?.[1]?.trim();
+      renamedTitle = candidate || undefined;
+    } catch {
+      // Ignore malformed lines — transcript may contain partial writes while Claude is active.
+    }
+  }
+  return renamedTitle;
+}
+
+function claudeTranscriptPath(cwdRaw?: string, externalSessionId?: string): string | undefined {
+  if (!cwdRaw || !externalSessionId) return undefined;
+  const projectDir = cwdRaw.replace(/\//g, "-");
+  return join(homedir(), ".claude", "projects", projectDir, `${externalSessionId}.jsonl`);
+}
+
+function getClaudeRenamedTitle(cwdRaw?: string, externalSessionId?: string): string | undefined {
+  const transcript = claudeTranscriptPath(cwdRaw, externalSessionId);
+  if (!transcript || !existsSync(transcript)) return undefined;
+
+  try {
+    const mtimeMs = statSync(transcript).mtimeMs;
+    const cached = claudeRenameCache.get(transcript);
+    if (cached?.mtimeMs === mtimeMs) return cached.title;
+
+    const renamedTitle = extractClaudeRenameTitleFromTranscript(readFileSync(transcript, "utf-8").split("\n"));
+    claudeRenameCache.set(transcript, { mtimeMs, title: renamedTitle });
+    return renamedTitle;
+  } catch {
+    return undefined;
+  }
 }
 
 function makeHookDetector(agentName: string): AgentDetector {
@@ -167,19 +328,19 @@ async function findLeafProcess(pid: string): Promise<string> {
     // Check if current child is an agent before walking deeper —
     // agents like claude spawn sub-processes (e.g. pi) that would
     // incorrectly win if we always walk to the true leaf.
-    const cmd = (await execAsync(`ps -p ${child} -o comm= 2>/dev/null`)).replace(/.*\//, "");
-    if (AGENT_PROCS.test(cmd)) return cmd;
+    const agent = detectAgentProcess("", await execAsync(`ps -p ${child} -o args= 2>/dev/null`));
+    if (agent) return agent;
     leaf = child;
   }
-  return (await execAsync(`ps -p ${leaf} -o comm= 2>/dev/null`)).replace(/.*\//, "");
+  return detectAgentProcess("", await execAsync(`ps -p ${leaf} -o args= 2>/dev/null`)) || "";
 }
 
 async function findAgentOnTty(tty: string): Promise<string | null> {
   const ttyShort = tty.replace(/^\/dev\//, "");
-  const procs = await execAsync(`ps -o comm= -t ${ttyShort} 2>/dev/null`);
+  const procs = await execAsync(`ps -o args= -t ${ttyShort} 2>/dev/null`);
   for (const line of procs.split("\n")) {
-    const cmd = line.replace(/.*\//, "").replace(/^-/, "");
-    if (AGENT_PROCS.test(cmd)) return cmd;
+    const agent = detectAgentProcess("", line);
+    if (agent) return agent;
   }
   return null;
 }
@@ -247,21 +408,16 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       // Check the PID itself first — in zellij the returned PID is often
       // the agent process directly (not a shell), and its children may be
       // non-agent subprocesses (e.g. caffeinate, node).
-      const pidCmd = exec(`ps -p ${p.pid} -o comm= 2>/dev/null`).replace(/.*\//, "");
-      if (AGENT_PROCS.test(pidCmd)) {
-        agentName = pidCmd;
-      } else {
+      agentName = detectAgentProcess("", exec(`ps -p ${p.pid} -o args= 2>/dev/null`));
+      if (!agentName) {
         const leafCmd = findLeafProcessSync(String(p.pid));
-        if (AGENT_PROCS.test(leafCmd)) {
-          agentName = leafCmd;
-        }
+        if (leafCmd) agentName = leafCmd;
       }
     }
 
     // Fallback: check the command string from zellij (may include args)
     if (!agentName && p.command) {
-      const cmd = p.command.replace(/.*\//, "").replace(/^-/, "").split(/\s+/)[0];
-      if (AGENT_PROCS.test(cmd)) agentName = cmd;
+      agentName = detectAgentProcess("", p.command);
     }
 
     if (!agentName) continue;
@@ -289,25 +445,29 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const titleClean = cleanTitle(p.title);
 
     const zellijCwd = p.cwd?.replace(homedir(), "~") || undefined;
+    const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(p.cwd, stateExternalSessionId(agentName, p.id)) : undefined;
     const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
     const richDetail = stateDetail(agentName, p.id);
     const finalDetail = richDetail || detail;
+    const model = stateModel(agentName, p.id) || inferModelFromContent(agentName, content);
+    const tokenInfo = mergedContextTokens(agentName, p.id, content);
 
     results.push({
       pane: paneRef,
       paneId: paneRef,
       tmuxPaneId: p.id,
-      title: titleClean,
+      title: renamedTitle || titleClean,
       agent: friendlyName(agentName),
       status,
       detail: finalDetail,
+      model,
       windowId: paneRef,
       cwd: zellijCwd,
       branch: zellijBranch,
       context: stateContext(agentName, p.id),
-      ...stateTokens(agentName, p.id),
+      ...tokenInfo,
     });
   }
 
@@ -319,10 +479,10 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
 // Single `ps` call builds an in-memory process tree. Used by scanSync()
 // to avoid per-pane pgrep/ps forks (27 panes × ~4 execs → 1 exec).
 
-interface ProcEntry { pid: number; ppid: number; comm: string; tty: string }
+interface ProcEntry { pid: number; ppid: number; comm: string; tty: string; args: string }
 
 function buildProcessTree(): { byPid: Map<number, ProcEntry>; children: Map<number, number[]>; byTty: Map<string, ProcEntry[]> } {
-  const raw = exec("ps -eo pid=,ppid=,comm=,tty= 2>/dev/null");
+  const raw = exec("ps -eo pid=,ppid=,comm=,tty=,args= 2>/dev/null");
   const byPid = new Map<number, ProcEntry>();
   const children = new Map<number, number[]>();
   const byTty = new Map<string, ProcEntry[]>();
@@ -330,13 +490,14 @@ function buildProcessTree(): { byPid: Map<number, ProcEntry>; children: Map<numb
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)$/);
+    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/);
     if (!match) continue;
     const entry: ProcEntry = {
       pid: parseInt(match[1]),
       ppid: parseInt(match[2]),
       comm: match[3].replace(/.*\//, ""),
       tty: match[4],
+      args: match[5] || "",
     };
     byPid.set(entry.pid, entry);
     const siblings = children.get(entry.ppid);
@@ -358,10 +519,12 @@ function findLeafInTree(pid: number, tree: { byPid: Map<number, ProcEntry>; chil
     if (!kids || kids.length === 0) break;
     const child = kids[0];
     const entry = tree.byPid.get(child);
-    if (entry && AGENT_PROCS.test(entry.comm)) return entry.comm;
+    const agent = entry ? detectAgentProcess(entry.comm, entry.args) : null;
+    if (agent) return agent;
     current = child;
   }
-  return tree.byPid.get(current)?.comm || "";
+  const entry = tree.byPid.get(current);
+  return entry ? (detectAgentProcess(entry.comm, entry.args) || "") : "";
 }
 
 function findAgentOnTtyInTree(tty: string, tree: { byTty: Map<string, ProcEntry[]> }): string | null {
@@ -369,8 +532,8 @@ function findAgentOnTtyInTree(tty: string, tree: { byTty: Map<string, ProcEntry[
   const procs = tree.byTty.get(ttyShort);
   if (!procs) return null;
   for (const p of procs) {
-    const cmd = p.comm.replace(/^-/, "");
-    if (AGENT_PROCS.test(cmd)) return cmd;
+    const agent = detectAgentProcess(p.comm, p.args);
+    if (agent) return agent;
   }
   return null;
 }
@@ -397,10 +560,8 @@ function scanSync(): AgentPane[] {
 
     const pidNum = parseInt(pid, 10) || 0;
     const leafCmd = findLeafInTree(pidNum, tree);
-    let agentName: string | null = null;
-    if (AGENT_PROCS.test(leafCmd)) {
-      agentName = leafCmd;
-    } else if (tty) {
+    let agentName: string | null = leafCmd || null;
+    if (!agentName && tty) {
       agentName = findAgentOnTtyInTree(tty, tree);
     }
     if (!agentName) continue;
@@ -434,8 +595,12 @@ function scanSync(): AgentPane[] {
     const titleClean = cleanTitle(p.title);
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
+    const renamedTitle = p.agentName === "claude" ? getClaudeRenamedTitle(p.cwdRaw, stateExternalSessionId(p.agentName, p.tmuxPaneId)) : undefined;
+    const inferenceContent = exec(`tmux capture-pane -t ${JSON.stringify(p.tmuxPaneId)} -p -S -20 2>/dev/null`);
+    const model = stateModel(p.agentName, p.tmuxPaneId) || inferModelFromContent(p.agentName, inferenceContent);
+    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, inferenceContent);
 
-    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId), ...stateTokens(p.agentName, p.tmuxPaneId) } as AgentPane);
+    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: renamedTitle || titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, model, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId), ...tokenInfo } as AgentPane);
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
@@ -448,19 +613,19 @@ function findLeafProcessSync(pid: string): string {
   for (;;) {
     const child = exec(`pgrep -P ${leaf} 2>/dev/null | head -1`);
     if (!child) break;
-    const cmd = exec(`ps -p ${child} -o comm= 2>/dev/null`).replace(/.*\//, "");
-    if (AGENT_PROCS.test(cmd)) return cmd;
+    const agent = detectAgentProcess("", exec(`ps -p ${child} -o args= 2>/dev/null`));
+    if (agent) return agent;
     leaf = child;
   }
-  return exec(`ps -p ${leaf} -o comm= 2>/dev/null`).replace(/.*\//, "");
+  return detectAgentProcess("", exec(`ps -p ${leaf} -o args= 2>/dev/null`)) || "";
 }
 
 function findAgentOnTtySync(tty: string): string | null {
   const ttyShort = tty.replace(/^\/dev\//, "");
-  const procs = exec(`ps -o comm= -t ${ttyShort} 2>/dev/null`);
+  const procs = exec(`ps -o args= -t ${ttyShort} 2>/dev/null`);
   for (const line of procs.split("\n")) {
-    const cmd = line.replace(/.*\//, "").replace(/^-/, "");
-    if (AGENT_PROCS.test(cmd)) return cmd;
+    const agent = detectAgentProcess("", line);
+    if (agent) return agent;
   }
   return null;
 }
@@ -530,10 +695,8 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
 
     const leafCmd = await findLeafProcess(pid);
-    let agentName: string | null = null;
-    if (AGENT_PROCS.test(leafCmd)) {
-      agentName = leafCmd;
-    } else if (tty) {
+    let agentName: string | null = leafCmd || null;
+    if (!agentName && tty) {
       agentName = await findAgentOnTty(tty);
     }
     if (!agentName) return null;
@@ -549,8 +712,12 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const titleClean = cleanTitle(resolvedTitle);
     const cwd = cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = cwdRaw ? (await execAsync(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`))?.trim() || undefined : undefined;
+    const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(cwdRaw, stateExternalSessionId(agentName, tmuxPaneId)) : undefined;
+    const inferenceContent = await execAsync(`tmux capture-pane -t ${JSON.stringify(tmuxPaneId)} -p -S -20 2>/dev/null`);
+    const model = stateModel(agentName, tmuxPaneId) || inferModelFromContent(agentName, inferenceContent);
+    const tokenInfo = mergedContextTokens(agentName, tmuxPaneId, inferenceContent);
 
-    return { pane: paneShort, paneId, tmuxPaneId, title: titleClean, agent: friendlyName(agentName), status, detail: finalDetail, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...stateTokens(agentName, tmuxPaneId) } as AgentPane;
+    return { pane: paneShort, paneId, tmuxPaneId, title: renamedTitle || titleClean, agent: friendlyName(agentName), status, detail: finalDetail, model, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...tokenInfo } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);
