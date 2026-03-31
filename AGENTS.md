@@ -8,6 +8,7 @@ A CLI tool that monitors AI agent panes across tmux (and soon zellij) sessions, 
 npm run build          # compile TypeScript
 agents                 # live dashboard (default command)
 agents ls              # one-shot agent list
+agents history         # persisted session history across supported agent backends
 agents ws              # create workspace window (uses default profile)
 agents ws -p opencode  # create workspace using named profile
 agents setup           # install hooks for all supported agents
@@ -42,6 +43,7 @@ src/
     Select.tsx       — interactive one-shot agent picker
 
 extensions/
+  codex/             — Codex hook scripts (wired via ~/.codex/hooks.json)
   copilot/           — Copilot CLI extension (extension.mjs, uses SDK events)
   pi/                — Pi extension (TypeScript, lives in dustbot repo)
   opencode/          — OpenCode plugin (index.mjs, installed as npm package)
@@ -55,8 +57,8 @@ docs/                — feature plans (zellij-support.md)
 **Agent detection**: The scanner walks pane process trees looking for known agent binaries (`claude`, `copilot`, `opencode`, `codex`, `cursor`, `pi`). It also checks TTY sessions for agents that spawn under shells.
 
 **Status detection** has two modes:
-- **Hook-based** (claude, copilot, pi, opencode): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`. Falls back to screen-scraping for approval detection only.
-- **Screen-scraping** (codex, cursor, others): Pattern-matches pane content for spinners, prompts, permission dialogs. The generic detector regexes are tested in `scanner.test.ts`.
+- **Hook-based** (claude, codex, copilot, pi, opencode): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`. Falls back to screen-scraping for approval detection only.
+- **Screen-scraping** (cursor, others): Pattern-matches pane content for spinners, prompts, permission dialogs. The generic detector regexes are tested in `scanner.test.ts`.
 
 **Preview**: The dashboard swaps an agent pane into a split beside itself using `tmux swap-pane`. Pane IDs follow the process (not the position) after a swap. `filterAgents()` in scanner.ts handles re-adding swapped agents to the scan results.
 

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { tmpdir, homedir } from "os";
 import { basename, join } from "path";
 import { exec, execAsync } from "./shell.js";
@@ -26,6 +26,24 @@ export interface AgentPane {
   contextMax?: number;
 }
 
+export interface AgentSessionHistoryItem {
+  sessionId: string;
+  title: string;
+  titleSource?: "rename" | "summary" | "stored_title" | "session_info" | "first_prompt" | "fallback";
+  model?: string;
+  updatedAt: number;
+  current?: boolean;
+}
+
+export interface AgentSessionHistoryGroup {
+  agent: string;
+  cwd: string;
+  pane?: string;
+  tmuxPaneId?: string;
+  currentSessionId?: string;
+  sessions: AgentSessionHistoryItem[];
+}
+
 export interface SiblingPane {
   tmuxPaneId: string;  // %N
   command: string;     // pane_current_command
@@ -48,6 +66,7 @@ export interface AgentDetector {
   isQuestion(content: string, tmuxPaneId?: string): boolean;
 }
 const claudeDetector = makeHookDetector("claude");
+const codexDetector = makeHybridHookDetector("codex");
 const copilotDetector = makeHookDetector("copilot");
 const piDetector = makeHookDetector("pi");
 const opencodeDetector = makeHookDetector("opencode");
@@ -79,6 +98,11 @@ function stateContext(agent: string, paneId?: string): string | undefined {
   return entry?.context;
 }
 
+function stateWorkspaceCwd(agent: string, paneId?: string): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+  return entry?.workspace?.cwd;
+}
+
 function stateTokens(agent: string, paneId?: string): { contextTokens?: number; contextMax?: number } {
   const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
   if (!entry) return {};
@@ -91,6 +115,14 @@ function stateTokens(agent: string, paneId?: string): { contextTokens?: number; 
 function mergedContextTokens(agent: string, paneId: string | undefined, content: string): { contextTokens?: number; contextMax?: number } {
   const stored = stateTokens(agent, paneId);
   const inferred = inferContextFromContent(agent, content);
+
+  if (agent.toLowerCase() === "codex") {
+    return {
+      ...(inferred.contextTokens !== undefined ? { contextTokens: inferred.contextTokens } : stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : {}),
+      ...(inferred.contextMax !== undefined ? { contextMax: inferred.contextMax } : stored.contextMax !== undefined ? { contextMax: stored.contextMax } : {}),
+    };
+  }
+
   return {
     ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : inferred.contextTokens !== undefined ? { contextTokens: inferred.contextTokens } : {}),
     ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : inferred.contextMax !== undefined ? { contextMax: inferred.contextMax } : {}),
@@ -143,6 +175,33 @@ function parseContextWindowLabel(label?: string): number | undefined {
   return Math.round(base * multiplier);
 }
 
+const codexModelCachePath = join(homedir(), ".codex", "models_cache.json");
+let codexModelCache: { mtimeMs: number; models: Map<string, number> } | null = null;
+
+function codexContextMaxForModel(model?: string): number | undefined {
+  if (!model || !existsSync(codexModelCachePath)) return undefined;
+
+  try {
+    const mtimeMs = statSync(codexModelCachePath).mtimeMs;
+    if (!codexModelCache || codexModelCache.mtimeMs !== mtimeMs) {
+      const parsed = JSON.parse(readFileSync(codexModelCachePath, "utf-8")) as {
+        models?: Array<{ slug?: string; context_window?: number; effective_context_window_percent?: number }>;
+      };
+      const models = new Map<string, number>();
+      for (const entry of parsed.models || []) {
+        if (!entry.slug || entry.context_window === undefined) continue;
+        const pct = entry.effective_context_window_percent ?? 100;
+        models.set(entry.slug.toLowerCase(), Math.round(entry.context_window * pct / 100));
+      }
+      codexModelCache = { mtimeMs, models };
+    }
+
+    return codexModelCache.models.get(model.toLowerCase());
+  } catch {
+    return undefined;
+  }
+}
+
 export function inferContextFromContent(agent: string, content: string): { contextTokens?: number; contextMax?: number } {
   const lines = content.split("\n").map((line) => line.trim()).filter(Boolean).slice(-12).reverse();
   switch (agent.toLowerCase()) {
@@ -165,6 +224,19 @@ export function inferContextFromContent(agent: string, content: string): { conte
         const max = parseContextWindowLabel(line);
         if (max === undefined) return {};
         return { contextTokens: Math.round(max * pct / 100), contextMax: max };
+      }
+      return {};
+    }
+    case "codex": {
+      for (const line of lines) {
+        const leftMatch = line.match(/([0-9]+(?:\.[0-9]+)?)%\s+left\b/i);
+        if (!leftMatch) continue;
+        const model = inferModelFromContent("codex", line);
+        const max = codexContextMaxForModel(model);
+        if (max === undefined) return {};
+        const leftPct = Number.parseFloat(leftMatch[1]);
+        const usedPct = Math.max(0, Math.min(100, 100 - leftPct));
+        return { contextTokens: Math.round(max * usedPct / 100), contextMax: max };
       }
       return {};
     }
@@ -205,6 +277,10 @@ export function inferModelFromContent(agent: string, content: string): string | 
 }
 
 const claudeRenameCache = new Map<string, { mtimeMs: number; title?: string }>();
+const codexLogPath = join(homedir(), ".codex", "log", "codex-tui.log");
+let codexOpCache: { mtimeMs: number; latestOps: Map<string, string> } | null = null;
+let codexStateDbPathCache: string | null | undefined;
+const codexTitleCache = new Map<string, { dbPath: string; mtimeMs: number; title?: string }>();
 
 export function extractClaudeRenameTitleFromTranscript(lines: string[]): string | undefined {
   let renamedTitle: string | undefined;
@@ -246,12 +322,550 @@ function getClaudeRenamedTitle(cwdRaw?: string, externalSessionId?: string): str
   }
 }
 
+function codexStateDbPath(): string | undefined {
+  if (codexStateDbPathCache !== undefined) return codexStateDbPathCache || undefined;
+
+  const codexDir = join(homedir(), ".codex");
+  const candidates: Array<{ path: string; version: number }> = [];
+  try {
+    for (const entry of readdirSync(codexDir)) {
+      const match = entry.match(/^state_(\d+)\.sqlite$/);
+      if (!match) continue;
+      candidates.push({ path: join(codexDir, entry), version: Number.parseInt(match[1], 10) || 0 });
+    }
+  } catch {}
+
+  candidates.sort((a, b) => b.version - a.version);
+  const preferred = candidates[0]?.path;
+  const fallback = join(codexDir, "state.db");
+  codexStateDbPathCache = preferred || (existsSync(fallback) ? fallback : null);
+  return codexStateDbPathCache || undefined;
+}
+
+function getCodexThreadTitle(externalSessionId?: string): string | undefined {
+  if (!externalSessionId) return undefined;
+  const dbPath = codexStateDbPath();
+  if (!dbPath || !existsSync(dbPath)) return undefined;
+
+  try {
+    const mtimeMs = statSync(dbPath).mtimeMs;
+    const cached = codexTitleCache.get(externalSessionId);
+    if (cached?.dbPath === dbPath && cached.mtimeMs === mtimeMs) return cached.title;
+
+    const sqlId = externalSessionId.replace(/'/g, "''");
+    const title = exec(`sqlite3 ${JSON.stringify(dbPath)} ${JSON.stringify(`select title from threads where id='${sqlId}' limit 1;`)}`) || undefined;
+    codexTitleCache.set(externalSessionId, { dbPath, mtimeMs, title });
+    return title;
+  } catch {
+    return undefined;
+  }
+}
+
+function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
+  const dbPath = codexStateDbPath();
+  if (!dbPath || !existsSync(dbPath)) return [];
+
+  try {
+    const sqlCwd = cwdRaw.replace(/'/g, "''");
+    const sql = `select id, title, model, updated_at from threads where cwd='${sqlCwd}' order by updated_at desc limit ${limit};`;
+    const raw = exec(`sqlite3 -json ${JSON.stringify(dbPath)} ${JSON.stringify(sql)}`);
+    if (!raw) return [];
+    const rows = JSON.parse(raw) as Array<{ id?: string; title?: string; model?: string; updated_at?: number }>;
+    return rows
+      .filter((row) => !!row.id)
+      .map((row) => ({
+        sessionId: row.id!,
+        title: row.title || row.id!,
+        titleSource: row.title ? "stored_title" : "fallback",
+        ...(row.model ? { model: row.model } : {}),
+        updatedAt: row.updated_at || 0,
+        ...(currentSessionId && row.id === currentSessionId ? { current: true } : {}),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function expandHomePath(pathLike?: string): string | undefined {
+  if (!pathLike) return undefined;
+  return pathLike.startsWith("~/") ? join(homedir(), pathLike.slice(2)) : pathLike;
+}
+
+function summarizeText(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const lines = raw
+    .replace(/<[^>]+>/g, " ")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^<[^>]+>$/.test(line));
+  const first = lines.find((line) => line !== "[object Object]");
+  if (!first) return undefined;
+  return first.replace(/\s+/g, " ").slice(0, 160);
+}
+
+function encodeClaudeProjectDir(cwdRaw: string): string {
+  return cwdRaw.replace(/\//g, "-");
+}
+
+function encodePiSessionDir(cwdRaw: string): string {
+  return `--${cwdRaw.replace(/^\/+|\/+$/g, "").replace(/\//g, "-")}--`;
+}
+
+function encodeCursorProjectDir(cwdRaw: string): string {
+  return cwdRaw.replace(/^\/+|\/+$/g, "").replace(/\//g, "-");
+}
+
+type ClaudeSessionsIndexEntry = {
+  summary?: string;
+  firstPrompt?: string;
+  modifiedAt?: number;
+  transcriptPath?: string;
+};
+
+function readClaudeSessionsIndex(cwdRaw: string): Map<string, ClaudeSessionsIndexEntry> {
+  const indexPath = join(homedir(), ".claude", "projects", encodeClaudeProjectDir(cwdRaw), "sessions-index.json");
+  if (!existsSync(indexPath)) return new Map();
+  try {
+    const parsed = JSON.parse(readFileSync(indexPath, "utf-8")) as {
+      entries?: Array<{ sessionId?: string; summary?: string; firstPrompt?: string; modified?: string; fileMtime?: number; fullPath?: string }>;
+    };
+    const entries = new Map<string, ClaudeSessionsIndexEntry>();
+    for (const entry of parsed.entries || []) {
+      if (!entry.sessionId) continue;
+      const modifiedAt = entry.modified ? Math.round(Date.parse(entry.modified) / 1000) : entry.fileMtime ? Math.round(entry.fileMtime / 1000) : undefined;
+      entries.set(entry.sessionId, {
+        ...(entry.summary ? { summary: entry.summary } : {}),
+        ...(entry.firstPrompt ? { firstPrompt: entry.firstPrompt } : {}),
+        ...(modifiedAt ? { modifiedAt } : {}),
+        ...(entry.fullPath ? { transcriptPath: entry.fullPath } : {}),
+      });
+    }
+    return entries;
+  } catch {
+    return new Map();
+  }
+}
+
+function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, indexEntry?: ClaudeSessionsIndexEntry): AgentSessionHistoryItem | null {
+  try {
+    const lines = readFileSync(filePath, "utf-8").split("\n");
+    const sessionId = basename(filePath, ".jsonl");
+    const renamedTitle = extractClaudeRenameTitleFromTranscript(lines);
+    let firstUserTitle: string | undefined;
+    let model: string | undefined;
+
+    for (const line of lines) {
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line) as any;
+        const messageContent = typeof entry?.message?.content === "string"
+          ? entry.message.content
+          : Array.isArray(entry?.message?.content)
+            ? entry.message.content.map((part: any) => typeof part?.text === "string" ? part.text : "").join("\n")
+            : typeof entry?.content === "string"
+              ? entry.content
+              : undefined;
+        if (!firstUserTitle && entry?.type === "user") {
+          const candidate = summarizeText(messageContent);
+          if (candidate
+            && !String(messageContent || "").includes("<local-command-caveat>")
+            && !candidate.startsWith("Caveat:")
+            && !candidate.startsWith("/")
+            && !candidate.includes("<command-name>/")) {
+            firstUserTitle = candidate;
+          }
+        }
+        if (!model && typeof entry?.message?.model === "string") model = entry.message.model;
+      } catch {}
+    }
+
+    const mtimeMs = statSync(filePath).mtimeMs;
+    const resolvedTitle = renamedTitle || indexEntry?.summary || firstUserTitle || summarizeText(indexEntry?.firstPrompt) || sessionId;
+    const titleSource = renamedTitle ? "rename"
+      : indexEntry?.summary ? "summary"
+      : (firstUserTitle || summarizeText(indexEntry?.firstPrompt)) ? "first_prompt"
+      : "fallback";
+    return {
+      sessionId,
+      title: resolvedTitle,
+      titleSource,
+      ...(model ? { model } : {}),
+      updatedAt: indexEntry?.modifiedAt || Math.round(mtimeMs / 1000),
+      ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function listClaudeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
+  const dir = join(homedir(), ".claude", "projects", encodeClaudeProjectDir(cwdRaw));
+  if (!existsSync(dir)) return [];
+  try {
+    const indexEntries = readClaudeSessionsIndex(cwdRaw);
+    if (indexEntries.size > 0) {
+      return [...indexEntries.entries()]
+        .sort((a, b) => (b[1].modifiedAt || 0) - (a[1].modifiedAt || 0))
+        .slice(0, limit)
+        .map(([sessionId, entry]): AgentSessionHistoryItem | null => {
+          const transcriptPath = entry.transcriptPath || join(dir, `${sessionId}.jsonl`);
+          if (existsSync(transcriptPath)) return parseClaudeHistoryEntry(transcriptPath, currentSessionId, entry);
+          return {
+            sessionId,
+            title: entry.summary || summarizeText(entry.firstPrompt) || sessionId,
+            titleSource: entry.summary ? "summary" : entry.firstPrompt ? "first_prompt" : "fallback",
+            updatedAt: entry.modifiedAt || 0,
+            ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+          };
+        })
+        .filter((item): item is AgentSessionHistoryItem => item !== null);
+    }
+
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".jsonl"))
+      .map((name) => join(dir, name))
+      .map((filePath) => parseClaudeHistoryEntry(filePath, currentSessionId))
+      .filter((item): item is AgentSessionHistoryItem => item !== null)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+function parsePiHistoryEntry(filePath: string, currentSessionId?: string): AgentSessionHistoryItem | null {
+  try {
+    const lines = readFileSync(filePath, "utf-8").split("\n");
+    let sessionId = basename(filePath, ".jsonl").split("_").at(-1) || basename(filePath, ".jsonl");
+    let firstPromptTitle: string | undefined;
+    let sessionInfoTitle: string | undefined;
+    let model: string | undefined;
+    let ts = Math.round(statSync(filePath).mtimeMs / 1000);
+
+    for (const line of lines) {
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line) as any;
+        if (entry?.type === "session") {
+          if (typeof entry.id === "string") sessionId = entry.id;
+          if (typeof entry.timestamp === "string") {
+            const parsed = Date.parse(entry.timestamp);
+            if (!Number.isNaN(parsed)) ts = Math.round(parsed / 1000);
+          }
+        }
+        if (entry?.type === "model_change" && typeof entry.modelId === "string") model = entry.modelId;
+        if (entry?.type === "session_info" && typeof entry.name === "string" && entry.name.trim()) {
+          sessionInfoTitle = entry.name.trim();
+        }
+        if (!firstPromptTitle && entry?.type === "message" && entry?.message?.role === "user") {
+          const text = Array.isArray(entry.message.content)
+            ? entry.message.content.map((part: any) => typeof part?.text === "string" ? part.text : "").join("\n")
+            : typeof entry.message.content === "string"
+              ? entry.message.content
+              : undefined;
+          const candidate = summarizeText(text);
+          if (candidate && !candidate.includes("Daily Memory")) firstPromptTitle = candidate;
+        }
+      } catch {}
+    }
+
+    const title = sessionInfoTitle || firstPromptTitle || sessionId;
+    return {
+      sessionId,
+      title,
+      titleSource: sessionInfoTitle ? "session_info" : firstPromptTitle ? "first_prompt" : "fallback",
+      ...(model ? { model } : {}),
+      updatedAt: ts,
+      ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function listPiHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
+  const dir = join(homedir(), ".pi", "agent", "sessions", encodePiSessionDir(cwdRaw));
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".jsonl"))
+      .map((name) => join(dir, name))
+      .map((filePath) => parsePiHistoryEntry(filePath, currentSessionId))
+      .filter((item): item is AgentSessionHistoryItem => item !== null)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+function parseCopilotWorkspaceYaml(filePath: string): { cwd?: string; summary?: string; createdAt?: number; updatedAt?: number } {
+  try {
+    const content = readFileSync(filePath, "utf-8");
+    const cwd = content.match(/^cwd:\s*(.+)$/m)?.[1]?.trim();
+    const summary = content.match(/^summary:\s*(.+)$/m)?.[1]?.trim();
+    const createdAtRaw = content.match(/^created_at:\s*(.+)$/m)?.[1]?.trim();
+    const updatedAtRaw = content.match(/^updated_at:\s*(.+)$/m)?.[1]?.trim();
+    const createdAt = createdAtRaw ? Math.round(Date.parse(createdAtRaw) / 1000) : undefined;
+    const updatedAt = updatedAtRaw ? Math.round(Date.parse(updatedAtRaw) / 1000) : undefined;
+    return { cwd, summary, createdAt, updatedAt };
+  } catch {
+    return {};
+  }
+}
+
+function parseCopilotHistoryEntry(sessionDir: string, currentSessionId?: string): AgentSessionHistoryItem | null {
+  try {
+    const sessionId = basename(sessionDir);
+    const workspaceMeta = parseCopilotWorkspaceYaml(join(sessionDir, "workspace.yaml"));
+    let title = summarizeText(workspaceMeta.summary);
+    if (!title) {
+      const eventsPath = join(sessionDir, "events.jsonl");
+      if (existsSync(eventsPath)) {
+        for (const line of readFileSync(eventsPath, "utf-8").split("\n")) {
+          if (!line) continue;
+          try {
+            const entry = JSON.parse(line) as any;
+            if (entry?.type === "user.message") {
+              title = summarizeText(entry?.data?.content || entry?.data?.transformedContent);
+              if (title) break;
+            }
+          } catch {}
+        }
+      }
+    }
+    const updatedAt = workspaceMeta.updatedAt || Math.round(statSync(sessionDir).mtimeMs / 1000);
+    return {
+      sessionId,
+      title: title || sessionId,
+      titleSource: title ? "summary" : "fallback",
+      updatedAt,
+      ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function listCopilotHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
+  const root = join(homedir(), ".copilot", "session-state");
+  if (!existsSync(root)) return [];
+  try {
+    const items = readdirSync(root)
+      .map((name) => join(root, name))
+      .filter((dir) => existsSync(join(dir, "workspace.yaml")))
+      .map((dir) => ({ dir, meta: parseCopilotWorkspaceYaml(join(dir, "workspace.yaml")) }))
+      .filter(({ meta }) => meta.cwd === cwdRaw)
+      .sort((a, b) => (b.meta.updatedAt || statSync(b.dir).mtimeMs / 1000) - (a.meta.updatedAt || statSync(a.dir).mtimeMs / 1000))
+      .slice(0, limit)
+      .map(({ dir }) => parseCopilotHistoryEntry(dir, currentSessionId))
+      .filter((item): item is AgentSessionHistoryItem => item !== null);
+    return items;
+  } catch {
+    return [];
+  }
+}
+
+function listOpenCodeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
+  const dbPath = join(homedir(), ".local", "share", "opencode", "opencode.db");
+  if (!existsSync(dbPath)) return [];
+  try {
+    const sqlCwd = cwdRaw.replace(/'/g, "''");
+    const sql = `select s.id, s.title, s.time_updated from session s join project p on p.id=s.project_id where p.worktree='${sqlCwd}' order by s.time_updated desc limit ${limit};`;
+    const raw = exec(`sqlite3 -json ${JSON.stringify(dbPath)} ${JSON.stringify(sql)}`);
+    if (!raw) return [];
+    const rows = JSON.parse(raw) as Array<{ id?: string; title?: string; time_updated?: number }>;
+    return rows
+      .filter((row) => !!row.id)
+      .map((row) => ({
+        sessionId: row.id!,
+        title: row.title || row.id!,
+        titleSource: row.title ? "stored_title" : "fallback",
+        updatedAt: Math.round((row.time_updated || 0) / 1000),
+        ...(currentSessionId && row.id === currentSessionId ? { current: true } : {}),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function listCursorHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
+  const dir = join(homedir(), ".cursor", "projects", encodeCursorProjectDir(cwdRaw), "agent-transcripts");
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => join(dir, name))
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+      .slice(0, limit)
+      .map((filePath): AgentSessionHistoryItem | null => {
+        try {
+          const transcript = JSON.parse(readFileSync(filePath, "utf-8")) as any[];
+          const title = summarizeText(transcript.find((entry) => entry?.role === "user")?.text);
+          const sessionId = basename(filePath, ".json");
+          return {
+            sessionId,
+            title: title || sessionId,
+            titleSource: title ? "first_prompt" : "fallback",
+            updatedAt: Math.round(statSync(filePath).mtimeMs / 1000),
+            ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((item): item is AgentSessionHistoryItem => item !== null);
+  } catch {
+    return [];
+  }
+}
+
+type HistoryTarget = { cwdRaw: string; pane?: string; tmuxPaneId?: string; currentSessionId?: string };
+
+function collectHistoryTargets(agentFilter?: string, cwdOverride?: string): Map<string, HistoryTarget[]> {
+  const agents = ["claude", "codex", "copilot", "opencode", "pi", "cursor"];
+  const wantedAgents = agentFilter ? agents.filter((agent) => agent === agentFilter) : agents;
+  const targets = new Map<string, HistoryTarget[]>();
+
+  const addTarget = (agent: string, target: HistoryTarget) => {
+    if (!wantedAgents.includes(agent)) return;
+    const list = targets.get(agent) || [];
+    if (!list.some((existing) => existing.cwdRaw === target.cwdRaw)) list.push(target);
+    targets.set(agent, list);
+  };
+
+  if (cwdOverride) {
+    const cwdRaw = expandHomePath(cwdOverride) || cwdOverride;
+    for (const agent of wantedAgents) addTarget(agent, { cwdRaw });
+    return targets;
+  }
+
+  for (const pane of scan()) {
+    const agent = pane.agent.toLowerCase();
+    const cwdRaw = stateWorkspaceCwd(agent, pane.tmuxPaneId) || expandHomePath(pane.cwd);
+    if (!cwdRaw) continue;
+    addTarget(agent, {
+      cwdRaw,
+      pane: pane.pane,
+      tmuxPaneId: pane.tmuxPaneId,
+      currentSessionId: stateExternalSessionId(agent, pane.tmuxPaneId),
+    });
+  }
+
+  if (targets.size === 0) {
+    const cwdRaw = process.cwd();
+    for (const agent of wantedAgents) addTarget(agent, { cwdRaw });
+  }
+
+  return targets;
+}
+
+export function getSessionHistory(opts: { agent?: string; cwd?: string; limit?: number } = {}): AgentSessionHistoryGroup[] {
+  const limit = Math.max(1, Math.min(100, opts.limit ?? 5));
+  const agentFilter = opts.agent?.toLowerCase();
+  const groups: AgentSessionHistoryGroup[] = [];
+  const targets = collectHistoryTargets(agentFilter, opts.cwd);
+
+  const loaders: Record<string, (cwdRaw: string, limit: number, currentSessionId?: string) => AgentSessionHistoryItem[]> = {
+    claude: listClaudeHistoryForCwd,
+    codex: listCodexHistoryForCwd,
+    copilot: listCopilotHistoryForCwd,
+    opencode: listOpenCodeHistoryForCwd,
+    pi: listPiHistoryForCwd,
+    cursor: listCursorHistoryForCwd,
+  };
+
+  for (const [agent, agentTargets] of targets.entries()) {
+    const load = loaders[agent];
+    if (!load) continue;
+    for (const target of agentTargets) {
+      const sessions = load(target.cwdRaw, limit, target.currentSessionId);
+      if (sessions.length === 0) continue;
+      groups.push({
+        agent,
+        cwd: target.cwdRaw,
+        ...(target.pane ? { pane: target.pane } : {}),
+        ...(target.tmuxPaneId ? { tmuxPaneId: target.tmuxPaneId } : {}),
+        ...(target.currentSessionId ? { currentSessionId: target.currentSessionId } : {}),
+        sessions,
+      });
+    }
+  }
+
+  return groups.sort((a, b) => a.agent.localeCompare(b.agent) || a.cwd.localeCompare(b.cwd));
+}
+
+export function extractLatestCodexOpsFromLogLines(lines: string[]): Map<string, string> {
+  const latestOps = new Map<string, string>();
+  for (const line of lines) {
+    if (!line) continue;
+    const threadMatch = line.match(/thread_id=([0-9a-f-]+)/i) || line.match(/thread\.id=([0-9a-f-]+)/i);
+    const opMatch = line.match(/codex\.op="([^"]+)"/i);
+    if (!threadMatch || !opMatch) continue;
+    latestOps.set(threadMatch[1], opMatch[1]);
+  }
+  return latestOps;
+}
+
+function latestCodexOps(): Map<string, string> {
+  if (!existsSync(codexLogPath)) return new Map();
+  try {
+    const mtimeMs = statSync(codexLogPath).mtimeMs;
+    if (codexOpCache?.mtimeMs === mtimeMs) return codexOpCache.latestOps;
+
+    const tail = exec(`tail -n 4000 ${JSON.stringify(codexLogPath)} 2>/dev/null`);
+    const latestOps = extractLatestCodexOpsFromLogLines(tail.split("\n"));
+    codexOpCache = { mtimeMs, latestOps };
+    return latestOps;
+  } catch {
+    return new Map();
+  }
+}
+
+function isCodexApprovalPending(paneId?: string): boolean {
+  const externalSessionId = stateExternalSessionId("codex", paneId);
+  if (!externalSessionId) return false;
+  return latestCodexOps().get(externalSessionId) === "exec_approval";
+}
+
 function makeHookDetector(agentName: string): AgentDetector {
   return {
-    isWorking(_c, _t, paneId) { return getAgentState(agentName, paneId) === "working"; },
-    isIdle(_c, _t, paneId) { const s = getAgentState(agentName, paneId); return s === "idle" || s === "question" || s === null; },
-    isApproval(_c, paneId) { return getAgentState(agentName, paneId) === "approval"; },
-    isQuestion(_content, paneId) { return getAgentState(agentName, paneId) === "question"; },
+    isWorking(_c, _t, paneId) { return paneId ? getAgentState(agentName, paneId) === "working" : false; },
+    isIdle(_c, _t, paneId) {
+      if (!paneId) return true;
+      const s = getAgentState(agentName, paneId);
+      return s === "idle" || s === "question" || s === null;
+    },
+    isApproval(_c, paneId) { return paneId ? getAgentState(agentName, paneId) === "approval" : false; },
+    isQuestion(_content, paneId) { return paneId ? getAgentState(agentName, paneId) === "question" : false; },
+  };
+}
+
+function makeHybridHookDetector(agentName: string): AgentDetector {
+  return {
+    isWorking(content, title, paneId) {
+      const s = paneId ? getAgentState(agentName, paneId) : null;
+      if (s === "working") return true;
+      if (s === "approval" || s === "question" || s === "idle") return false;
+      return genericDetector.isWorking(content, title, paneId);
+    },
+    isIdle(content, title, paneId) {
+      const s = paneId ? getAgentState(agentName, paneId) : null;
+      if (s !== null) return s === "idle" || s === "question";
+      return genericDetector.isIdle(content, title, paneId);
+    },
+    isApproval(content, paneId) {
+      return (paneId ? getAgentState(agentName, paneId) === "approval" : false)
+        || (agentName === "codex" && isCodexApprovalPending(paneId))
+        || genericDetector.isApproval(content, paneId);
+    },
+    isQuestion(content, paneId) {
+      const s = paneId ? getAgentState(agentName, paneId) : null;
+      if (s !== null) return s === "question";
+      if (agentName === "codex") return false;
+      return genericDetector.isQuestion(content, paneId);
+    },
   };
 }
 
@@ -285,10 +899,11 @@ const genericDetector: AgentDetector = {
 export function getDetector(agent: string): AgentDetector {
   switch (agent.toLowerCase()) {
     case "claude":   return claudeDetector;
+    case "codex":    return codexDetector;
     case "copilot":  return copilotDetector;
     case "pi":       return piDetector;
     case "opencode": return opencodeDetector;
-    default:         return genericDetector;  // codex, cursor, etc.
+    default:          return genericDetector;  // cursor, etc.
   }
 }
 
@@ -445,7 +1060,9 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const titleClean = cleanTitle(p.title);
 
     const zellijCwd = p.cwd?.replace(homedir(), "~") || undefined;
-    const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(p.cwd, stateExternalSessionId(agentName, p.id)) : undefined;
+    const externalSessionId = stateExternalSessionId(agentName, p.id);
+    const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(p.cwd, externalSessionId) : undefined;
+    const codexTitle = agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
     const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
@@ -458,7 +1075,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       pane: paneRef,
       paneId: paneRef,
       tmuxPaneId: p.id,
-      title: renamedTitle || titleClean,
+      title: codexTitle || renamedTitle || titleClean,
       agent: friendlyName(agentName),
       status,
       detail: finalDetail,
@@ -595,12 +1212,14 @@ function scanSync(): AgentPane[] {
     const titleClean = cleanTitle(p.title);
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
-    const renamedTitle = p.agentName === "claude" ? getClaudeRenamedTitle(p.cwdRaw, stateExternalSessionId(p.agentName, p.tmuxPaneId)) : undefined;
+    const externalSessionId = stateExternalSessionId(p.agentName, p.tmuxPaneId);
+    const renamedTitle = p.agentName === "claude" ? getClaudeRenamedTitle(p.cwdRaw, externalSessionId) : undefined;
+    const codexTitle = p.agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
     const inferenceContent = exec(`tmux capture-pane -t ${JSON.stringify(p.tmuxPaneId)} -p -S -20 2>/dev/null`);
     const model = stateModel(p.agentName, p.tmuxPaneId) || inferModelFromContent(p.agentName, inferenceContent);
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, inferenceContent);
 
-    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: renamedTitle || titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, model, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId), ...tokenInfo } as AgentPane);
+    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, model, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId), ...tokenInfo } as AgentPane);
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
@@ -712,12 +1331,14 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const titleClean = cleanTitle(resolvedTitle);
     const cwd = cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = cwdRaw ? (await execAsync(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`))?.trim() || undefined : undefined;
-    const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(cwdRaw, stateExternalSessionId(agentName, tmuxPaneId)) : undefined;
+    const externalSessionId = stateExternalSessionId(agentName, tmuxPaneId);
+    const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(cwdRaw, externalSessionId) : undefined;
+    const codexTitle = agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
     const inferenceContent = await execAsync(`tmux capture-pane -t ${JSON.stringify(tmuxPaneId)} -p -S -20 2>/dev/null`);
     const model = stateModel(agentName, tmuxPaneId) || inferModelFromContent(agentName, inferenceContent);
     const tokenInfo = mergedContextTokens(agentName, tmuxPaneId, inferenceContent);
 
-    return { pane: paneShort, paneId, tmuxPaneId, title: renamedTitle || titleClean, agent: friendlyName(agentName), status, detail: finalDetail, model, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...tokenInfo } as AgentPane;
+    return { pane: paneShort, paneId, tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(agentName), status, detail: finalDetail, model, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...tokenInfo } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, getDetector, filterAgents, inferContextFromContent, inferModelFromContent } from "./scanner.js";
+import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent } from "./scanner.js";
 import type { AgentPane } from "./scanner.js";
 
 describe("getDetector", () => {
@@ -13,9 +13,12 @@ describe("getDetector", () => {
     expect(d).toBeDefined();
   });
 
-  it("returns generic detector for unknown agents", () => {
+  it("returns codex detector with generic fallback behavior", () => {
     const d = getDetector("codex");
     expect(d).toBeDefined();
+    expect(d.isWorking("⠋ Working...", "", "%missing-codex")).toBe(true);
+    expect(d.isApproval("Do you want to run this command? (Y/n)", "%missing-codex")).toBe(true);
+    expect(d.isQuestion("Open Questions\n- Should this happen?\n› Summarize recent commits", "%missing-codex")).toBe(false);
   });
 
   it("is case-insensitive", () => {
@@ -92,6 +95,21 @@ describe("extractClaudeRenameTitleFromTranscript", () => {
       JSON.stringify({ type: "system", subtype: "local_command", content: "<command-name>/rename</command-name>\n<command-message>rename</command-message>\n<command-args>Computer Help</command-args>" }),
     ];
     expect(extractClaudeRenameTitleFromTranscript(lines)).toBe("Computer Help");
+  });
+});
+
+describe("extractLatestCodexOpsFromLogLines", () => {
+  it("tracks the latest codex op per thread", () => {
+    const threadA = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const threadB = "019d4430-b34d-7150-bbed-087160df7b56";
+    const lines = [
+      `2026-03-31T14:00:35Z INFO session_loop{thread_id=${threadA}}:submission_dispatch{codex.op="user_input"}: start`,
+      `2026-03-31T14:00:36Z INFO session_loop{thread_id=${threadB}}:submission_dispatch{codex.op="user_input"}: start`,
+      `2026-03-31T14:00:37Z INFO session_loop{thread_id=${threadA}}:submission_dispatch{codex.op="exec_approval"}: start`,
+    ];
+    const latest = extractLatestCodexOpsFromLogLines(lines);
+    expect(latest.get(threadA)).toBe("exec_approval");
+    expect(latest.get(threadB)).toBe("user_input");
   });
 });
 

@@ -118,7 +118,7 @@ const [
 const { Command } = commander;
 const React = reactMod.default;
 const { render } = ink;
-const { scan, inferContextFromContent, inferModelFromContent } = scanner;
+const { scan, getSessionHistory, inferContextFromContent, inferModelFromContent } = scanner;
 const { reportState, reportContext } = state;
 const { setup, uninstall, autoSetupIfNeeded } = setupMod;
 const { createWorkspace } = workspace;
@@ -194,6 +194,41 @@ program
   .description("Print number of running agents")
   .action(() => {
     console.log(scan().length);
+  });
+
+program
+  .command("history")
+  .description("Show persisted session history for supported agents")
+  .option("--agent <name>", "Agent backend to query (currently codex)")
+  .option("--cwd <path>", "Workspace path to query (defaults to live agents, then current directory)")
+  .option("--limit <n>", "Maximum sessions per agent/cwd", (value) => parseInt(value, 10), 5)
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const groups = getSessionHistory({ agent: opts.agent, cwd: opts.cwd, limit: opts.limit });
+    if (opts.json) {
+      console.log(JSON.stringify(groups, null, 2));
+      return;
+    }
+    if (groups.length === 0) {
+      console.log("No persisted session history found.");
+      return;
+    }
+
+    const formatTs = (ts: number) => {
+      const d = new Date(ts * 1000);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+
+    for (const [index, group] of groups.entries()) {
+      if (index > 0) console.log("");
+      console.log(`${group.agent}  ${group.cwd}`);
+      for (const session of group.sessions) {
+        const marker = session.current ? "*" : " ";
+        const model = session.model ? `  ${session.model}` : "";
+        console.log(`${marker} ${formatTs(session.updatedAt)}${model}  ${session.title}`);
+      }
+    }
   });
 
 program

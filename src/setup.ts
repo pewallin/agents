@@ -3,6 +3,7 @@
  *
  * Supports:
  *   - Claude Code: patches ~/.claude/settings.json with hooks
+ *   - Codex CLI: patches ~/.codex/config.toml and ~/.codex/hooks.json
  *   - Copilot CLI: symlinks extension to ~/.copilot/extensions/agents-reporting/
  *   - Pi: symlinks extension to ~/.pi/agent/extensions/agents-reporting/
  *   - OpenCode: symlinks plugin to ~/.config/opencode/node_modules/ and patches config.json
@@ -138,6 +139,187 @@ function uninstallClaude(): SetupResult {
 
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   return { agent: "claude", action: "uninstalled", detail: "removed hooks from ~/.claude/settings.json" };
+}
+
+// ── Codex CLI ───────────────────────────────────────────────────────
+
+const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
+const CODEX_HOOKS_PATH = join(homedir(), ".codex", "hooks.json");
+const CODEX_REPORT_SCRIPT = join(EXTENSIONS_DIR, "codex", "report-state.sh");
+const CODEX_STOP_SCRIPT = join(EXTENSIONS_DIR, "codex", "stop-hook.sh");
+
+function codexHookEntries(): Record<string, any[]> {
+  return {
+    SessionStart: [
+      {
+        matcher: "startup|resume",
+        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} idle` }],
+      },
+    ],
+    UserPromptSubmit: [
+      {
+        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} working` }],
+      },
+    ],
+    PreToolUse: [
+      {
+        matcher: "Bash",
+        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} working` }],
+      },
+    ],
+    PostToolUse: [
+      {
+        matcher: "Bash",
+        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} working` }],
+      },
+    ],
+    Stop: [
+      {
+        hooks: [{ type: "command", command: CODEX_STOP_SCRIPT }],
+      },
+    ],
+  };
+}
+
+function codexHooksConfig(): { hooks: Record<string, any[]> } {
+  return { hooks: codexHookEntries() };
+}
+
+function isOurCodexHook(group: any): boolean {
+  const s = JSON.stringify(group);
+  return s.includes("extensions/codex/") || s.includes("report-state.sh") || s.includes("stop-hook.sh") || s.includes("--agent codex");
+}
+
+function ensureCodexHooksEnabled(configText: string): { text: string; changed: boolean } {
+  if (/^codex_hooks\s*=\s*true\s*$/m.test(configText)) return { text: configText, changed: false };
+
+  if (/^codex_hooks\s*=\s*false\s*$/m.test(configText)) {
+    return { text: configText.replace(/^codex_hooks\s*=\s*false\s*$/m, "codex_hooks = true"), changed: true };
+  }
+
+  if (/^\[features\]\s*$/m.test(configText)) {
+    return {
+      text: configText.replace(/^\[features\]\s*$/m, `[features]\ncodex_hooks = true`),
+      changed: true,
+    };
+  }
+
+  const suffix = configText.endsWith("\n") || configText.length === 0 ? "" : "\n";
+  return { text: `${configText}${suffix}\n[features]\ncodex_hooks = true\n`, changed: true };
+}
+
+function normalizeCodexHooksJson(hooksJson: Record<string, any>): { hooksJson: Record<string, any>; hookRoot: Record<string, any[]>; changed: boolean } {
+  const desiredEvents = Object.keys(codexHookEntries());
+  const legacyRoot = Object.fromEntries(
+    Object.entries(hooksJson).filter(([key, value]) => desiredEvents.includes(key) && Array.isArray(value))
+  ) as Record<string, any[]>;
+  const nestedRoot = hooksJson.hooks && typeof hooksJson.hooks === "object" && !Array.isArray(hooksJson.hooks)
+    ? hooksJson.hooks as Record<string, any[]>
+    : {};
+
+  const changed = JSON.stringify(legacyRoot) !== "{}" || !hooksJson.hooks;
+  const normalized: Record<string, any> = { ...hooksJson, hooks: { ...legacyRoot, ...nestedRoot } };
+  for (const event of desiredEvents) delete normalized[event];
+
+  return { hooksJson: normalized, hookRoot: normalized.hooks as Record<string, any[]>, changed };
+}
+
+function setupCodex(): SetupResult {
+  const codexDir = join(homedir(), ".codex");
+  if (!existsSync(codexDir)) {
+    return { agent: "codex", action: "skipped", detail: "~/.codex/ not found" };
+  }
+
+  for (const source of [CODEX_REPORT_SCRIPT, CODEX_STOP_SCRIPT]) {
+    if (!existsSync(source)) {
+      return { agent: "codex", action: "skipped", detail: `${source} not found in repo` };
+    }
+  }
+
+  let configText = "";
+  try {
+    configText = existsSync(CODEX_CONFIG_PATH) ? readFileSync(CODEX_CONFIG_PATH, "utf-8") : "";
+  } catch {
+    return { agent: "codex", action: "skipped", detail: "could not read ~/.codex/config.toml" };
+  }
+
+  const featureUpdate = ensureCodexHooksEnabled(configText);
+
+  let hooksChanged = false;
+  let hooksJson: Record<string, any> = {};
+  if (existsSync(CODEX_HOOKS_PATH)) {
+    try {
+      hooksJson = JSON.parse(readFileSync(CODEX_HOOKS_PATH, "utf-8"));
+    } catch {
+      return { agent: "codex", action: "skipped", detail: "could not parse ~/.codex/hooks.json" };
+    }
+  }
+
+  const normalized = normalizeCodexHooksJson(hooksJson);
+  hooksJson = normalized.hooksJson;
+  const hookRoot = normalized.hookRoot;
+  hooksChanged = normalized.changed;
+
+  const desiredHooks = codexHookEntries();
+  for (const [event, groups] of Object.entries(desiredHooks)) {
+    const existing = Array.isArray(hookRoot[event]) ? hookRoot[event] : [];
+    const filtered = existing.filter((group) => !isOurCodexHook(group));
+    const next = [...filtered, ...groups];
+    if (JSON.stringify(existing) !== JSON.stringify(next)) hooksChanged = true;
+    hookRoot[event] = next;
+  }
+
+  if (!featureUpdate.changed && !hooksChanged) {
+    return { agent: "codex", action: "installed", detail: "hooks configured" };
+  }
+
+  if (featureUpdate.changed) writeFileSync(CODEX_CONFIG_PATH, featureUpdate.text);
+  if (hooksChanged) writeFileSync(CODEX_HOOKS_PATH, JSON.stringify(hooksJson, null, 2) + "\n");
+
+  return { agent: "codex", action: "installed", detail: "patched ~/.codex/config.toml and ~/.codex/hooks.json" };
+}
+
+function uninstallCodex(): SetupResult {
+  if (!existsSync(CODEX_HOOKS_PATH)) {
+    return { agent: "codex", action: "not-installed" };
+  }
+
+  let hooksJson: Record<string, any>;
+  try {
+    hooksJson = JSON.parse(readFileSync(CODEX_HOOKS_PATH, "utf-8"));
+  } catch {
+    return { agent: "codex", action: "skipped", detail: "could not parse ~/.codex/hooks.json" };
+  }
+
+  const normalized = normalizeCodexHooksJson(hooksJson);
+  hooksJson = normalized.hooksJson;
+  const hookRoot = normalized.hookRoot;
+
+  let removed = normalized.changed;
+  for (const event of Object.keys(codexHookEntries())) {
+    const existing = Array.isArray(hookRoot[event]) ? hookRoot[event] : [];
+    const filtered = existing.filter((group) => !isOurCodexHook(group));
+    if (filtered.length !== existing.length) removed = true;
+    if (filtered.length === 0) {
+      delete hookRoot[event];
+    } else {
+      hookRoot[event] = filtered;
+    }
+  }
+
+  if (!removed) return { agent: "codex", action: "not-installed" };
+
+  if (Object.keys(hookRoot).length === 0) {
+    delete hooksJson.hooks;
+  }
+
+  if (Object.keys(hooksJson).length === 0) {
+    unlinkSync(CODEX_HOOKS_PATH);
+  } else {
+    writeFileSync(CODEX_HOOKS_PATH, JSON.stringify(hooksJson, null, 2) + "\n");
+  }
+
+  return { agent: "codex", action: "uninstalled", detail: "removed hooks from ~/.codex/hooks.json" };
 }
 
 // ── Copilot CLI ─────────────────────────────────────────────────────
@@ -387,13 +569,13 @@ export function setup(quiet: boolean = false): SetupResult[] {
     if (!quiet) console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
   }
 
-  const results = [setupClaude(), setupCopilot(), setupPi(), setupOpencode()];
+  const results = [setupClaude(), setupCodex(), setupCopilot(), setupPi(), setupOpencode()];
   saveSetupHash();
   return results;
 }
 
 export function uninstall(): SetupResult[] {
-  return [uninstallClaude(), uninstallCopilot(), uninstallPi(), uninstallOpencode()];
+  return [uninstallClaude(), uninstallCodex(), uninstallCopilot(), uninstallPi(), uninstallOpencode()];
 }
 
 // ── Auto-setup on CLI start ─────────────────────────────────────────
@@ -404,7 +586,8 @@ const HASH_FILE = join(homedir(), ".agents", ".setup-hash");
 function computeSetupHash(): string {
   const h = createHash("sha256");
   h.update(JSON.stringify(CLAUDE_HOOKS));
-  for (const ext of ["copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs"]) {
+  h.update(JSON.stringify(codexHooksConfig()));
+  for (const ext of ["codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs"]) {
     const p = join(EXTENSIONS_DIR, ext);
     try { h.update(readFileSync(p)); } catch {}
   }
