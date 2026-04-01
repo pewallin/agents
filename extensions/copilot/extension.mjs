@@ -1,8 +1,8 @@
 /**
  * Agents reporting extension for Copilot CLI.
  *
- * Reports copilot state (working/idle/approval) to the agents dashboard
- * via `agents report` so the tmux agent monitor can track status.
+ * Reports copilot state (working/idle/approval) plus structured model metadata
+ * to the agents dashboard via `agents report`.
  *
  * - working: user prompt submitted, or tool executing
  * - approval: ask_user tool is waiting for user input
@@ -26,14 +26,36 @@ const AGENTS_BIN = [
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
 
-// Track context window usage
+// Track context window usage and structured model identity
 let contextTokens = undefined;
 let contextMax = undefined;
-let currentModel = undefined;
+let externalSessionId = undefined;
+let currentProvider = "github-copilot";
+let currentModelId = undefined;
+let currentModelLabel = undefined;
 
-function report(state) {
-  const args = ["report", "--agent", "copilot", "--state", state, "--session", SESSION_ID];
-  if (currentModel) args.push("--model", String(currentModel));
+function applyModelSelection(candidate, providerFallback = currentProvider) {
+  if (typeof candidate !== "string" || !candidate.trim()) return;
+  const trimmed = candidate.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash > 0 && slash < trimmed.length - 1) {
+    currentProvider = trimmed.slice(0, slash);
+    currentModelId = trimmed.slice(slash + 1);
+    currentModelLabel = trimmed.slice(slash + 1);
+    return;
+  }
+  currentProvider = providerFallback || currentProvider;
+  currentModelId = trimmed;
+  currentModelLabel = trimmed;
+}
+
+function report(state, extraArgs = []) {
+  const args = ["report", "--agent", "copilot", "--state", state, "--session", SESSION_ID, ...extraArgs];
+  if (currentProvider) args.push("--provider", String(currentProvider));
+  if (currentModelId) args.push("--model-id", String(currentModelId));
+  if (currentModelLabel) args.push("--model-label", String(currentModelLabel));
+  if (currentProvider || currentModelId || currentModelLabel) args.push("--model-source", "sdk");
+  if (externalSessionId) args.push("--external-session-id", String(externalSessionId));
   if (contextTokens !== undefined) args.push("--context-tokens", String(contextTokens));
   if (contextMax !== undefined) args.push("--context-max", String(contextMax));
   execFile(AGENTS_BIN, args, (err) => {
@@ -55,12 +77,15 @@ const session = await joinSession({
   },
 });
 
+externalSessionId = session.sessionId;
+
 session.on("session.start", (event) => {
-  currentModel = event.data?.selectedModel || currentModel;
+  externalSessionId = event.data?.sessionId || session.sessionId;
+  applyModelSelection(event.data?.selectedModel, "github-copilot");
 });
 
 session.on("session.model_change", (event) => {
-  currentModel = event.data?.newModel || currentModel;
+  applyModelSelection(event.data?.newModel, currentProvider || "github-copilot");
 });
 
 // Context window tracking
@@ -92,9 +117,7 @@ session.on("tool.execution_complete", () => {
 
 // Compaction — report working state with context
 session.on("session.compaction_start", () => {
-  const args = ["report", "--agent", "copilot", "--state", "working", "--context", "compacting", "--session", SESSION_ID];
-  if (currentModel) args.push("--model", String(currentModel));
-  execFile(AGENTS_BIN, args, () => {});
+  report("working", ["--context", "compacting"]);
 });
 
 session.on("session.compaction_complete", () => {

@@ -1,5 +1,9 @@
+import { readFileSync, unlinkSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent } from "./scanner.js";
+import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { getAgentStateEntry, reportState } from "./state.js";
 import type { AgentPane } from "./scanner.js";
 
 describe("getDetector", () => {
@@ -70,6 +74,34 @@ describe("inferModelFromContent", () => {
   });
 });
 
+describe("inferModelMetadataFromContent", () => {
+  it("extracts codex structured model metadata from footer", () => {
+    const content = [
+      "• Done",
+      "",
+      "gpt-5.2-codex high · 69% left · ~/code/agents-app",
+    ].join("\n");
+    expect(inferModelMetadataFromContent("codex", content)).toEqual({
+      modelId: "gpt-5.2-codex",
+      modelSource: "inferred",
+      model: "gpt-5.2-codex",
+    });
+  });
+
+  it("extracts pi structured provider/model metadata from footer", () => {
+    const content = [
+      "~/code · 11 pkgs • ↻...  (sub) · 9.5%/400k · 1h18m",
+      "(github-copilot) GPT-5.4",
+    ].join("\n");
+    expect(inferModelMetadataFromContent("pi", content)).toEqual({
+      provider: "github-copilot",
+      modelLabel: "GPT-5.4",
+      modelSource: "inferred",
+      model: "GPT-5.4",
+    });
+  });
+});
+
 describe("inferContextFromContent", () => {
   it("extracts pi context usage from footer", () => {
     const content = "~/code · 11 pkgs • ↻...  (sub) · 9.5%/400k · 1h18m\n(github-copilot) GPT-5.4";
@@ -110,6 +142,110 @@ describe("extractLatestCodexOpsFromLogLines", () => {
     const latest = extractLatestCodexOpsFromLogLines(lines);
     expect(latest.get(threadA)).toBe("exec_approval");
     expect(latest.get(threadB)).toBe("user_input");
+  });
+});
+
+describe("extractLatestCodexSessionTitlesFromIndexLines", () => {
+  it("keeps the latest thread_name per session id", () => {
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const latest = extractLatestCodexSessionTitlesFromIndexLines([
+      JSON.stringify({ id: thread, thread_name: "Agents App Roadmap" }),
+      JSON.stringify({ id: thread, thread_name: "Agents App dev" }),
+      "{bad json",
+      JSON.stringify({ id: thread, thread_name: "Agents dev" }),
+    ]);
+    expect(latest.get(thread)).toBe("Agents dev");
+  });
+});
+
+describe("shouldTreatCodexWorkingAsIdle", () => {
+  it("treats stale codex working state as idle when the pane shows a prompt", () => {
+    const session = `%vitest-codex-stale-${Date.now()}`;
+    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    reportState("codex", session, "working");
+    try {
+      const entry = JSON.parse(readFileSync(statePath, "utf8")) as { ts: number };
+      writeFileSync(statePath, JSON.stringify({ ...entry, state: "working", ts: entry.ts - 180, agent: "codex", session }));
+      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session)).toBe(true);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
+  it("keeps very fresh codex working state even if the old prompt is still visible", () => {
+    const session = `%vitest-codex-fresh-${Date.now()}`;
+    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    reportState("codex", session, "working");
+    try {
+      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session)).toBe(false);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
+  it("does not treat codex approval prompts as idle", () => {
+    const session = `%vitest-codex-approval-${Date.now()}`;
+    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    reportState("codex", session, "working");
+    try {
+      expect(
+        shouldTreatCodexWorkingAsIdle(
+          "Would you like to run the following command?\n\nPress enter to confirm or esc to cancel",
+          "agents-app",
+          session,
+        ),
+      ).toBe(false);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+});
+
+describe("codex hook-first detection", () => {
+  it("keeps codex working when hook state says working even if a stale prompt is visible", () => {
+    const session = `%vitest-codex-hook-first-${Date.now()}`;
+    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    reportState("codex", session, "working");
+    try {
+      const entry = JSON.parse(readFileSync(statePath, "utf8")) as { ts: number };
+      writeFileSync(statePath, JSON.stringify({ ...entry, state: "working", ts: entry.ts - 180, agent: "codex", session }));
+      const detector = getDetector("codex");
+      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session)).toBe(true);
+      expect(detector.isWorking("› Implement {feature}\n", "agents-app", session)).toBe(true);
+      expect(detector.isIdle("› Implement {feature}\n", "agents-app", session)).toBe(false);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
+  it("converts stale codex working to idle after two unchanged cleanup samples", () => {
+    const session = `%vitest-codex-cleanup-${Date.now()}`;
+    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    const prompt = "› Implement {feature}\n";
+    reportState("codex", session, "working");
+    try {
+      const initial = JSON.parse(readFileSync(statePath, "utf8")) as { ts: number };
+      writeFileSync(statePath, JSON.stringify({ ...initial, state: "working", ts: initial.ts - 180, agent: "codex", session }));
+
+      reconcileStaleCodexWorkingState(prompt, "agents-app", session);
+      expect(getAgentStateEntry("codex", session)?.state).toBe("working");
+
+      const withCleanup = JSON.parse(readFileSync(statePath, "utf8")) as {
+        cleanup?: { observedAt?: number };
+      };
+      writeFileSync(statePath, JSON.stringify({
+        ...withCleanup,
+        cleanup: {
+          ...withCleanup.cleanup,
+          observedAt: (withCleanup.cleanup?.observedAt ?? Math.floor(Date.now() / 1000)) - 31,
+        },
+      }));
+
+      reconcileStaleCodexWorkingState(prompt, "agents-app", session);
+      expect(getAgentStateEntry("codex", session)?.state).toBe("idle");
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
   });
 });
 
@@ -226,6 +362,10 @@ describe("generic detector (screen-scraping)", () => {
 
     it("matches claude Allow once/always/Reject", () => {
       expect(detector.isApproval("Allow once  Allow always  Reject")).toBe(true);
+    });
+
+    it("matches current codex approval prompt wording", () => {
+      expect(detector.isApproval("Would you like to run the following command?\n\nPress enter to confirm or esc to cancel")).toBe(true);
     });
 
     it("does not match normal content", () => {

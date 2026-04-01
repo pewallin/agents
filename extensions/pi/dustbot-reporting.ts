@@ -1,30 +1,23 @@
 /**
  * Pi reporting extension: reports agent state to the agents dashboard.
  *
- * Hooks:
- *   agent_start      — reports "working" state
- *   agent_end        — reports "idle" state
- *   tool_call        — reports "question" for ask_user tools, otherwise "working"
- *   session_shutdown — reports "idle" state (cleanup)
- *
- * Also reports context window usage via getContextUsage().
- *
- * Uses `agents report` CLI to write state files that the tmux agent monitor reads.
+ * Pi exposes a richer lifecycle than the older reporter used. We treat:
+ * - agent_start / agent_end as the outer prompt lifecycle
+ * - message_update as active model thinking/streaming
+ * - tool_execution_* as active tool work
+ * - tool_call ask_user as a user-question state
  *
  * Install: symlink or copy to ~/.pi/agent/extensions/
  */
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
 // Resolve agents binary — may not be on PATH in sandboxed/pi processes.
 // Check common install locations since PATH may be minimal.
-import { readdirSync } from "node:fs";
-
 function findAgentsBin(): string {
-  // Check nvm versions (any installed version)
   try {
     const nvmDir = join(homedir(), ".nvm", "versions", "node");
     const versions = readdirSync(nvmDir).sort().reverse();
@@ -33,7 +26,6 @@ function findAgentsBin(): string {
       if (existsSync(p)) return p;
     }
   } catch {}
-  // Other common locations
   for (const p of [join(homedir(), ".local", "bin", "agents"), "/usr/local/bin/agents"]) {
     if (existsSync(p)) return p;
   }
@@ -44,37 +36,42 @@ const AGENTS_BIN = findAgentsBin();
 
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
+const IDLE_SETTLE_MS = 250;
+const MAX_DETAIL_LENGTH = 60;
+
+type PiState = "working" | "idle" | "question";
 
 function appendModel(args: string[], ctx: any): void {
   try {
     const model = ctx?.model;
-    const label = model?.name || model?.id;
-    if (label) args.push("--model", String(label));
+    if (typeof model?.provider === "string" && model.provider) args.push("--provider", model.provider);
+    if (typeof model?.id === "string" && model.id) args.push("--model-id", model.id);
+    if (typeof model?.name === "string" && model.name) args.push("--model-label", model.name);
+    if (model?.provider || model?.id || model?.name) args.push("--model-source", "hook");
   } catch {}
 }
 
-function report(state: string, ctx: any): void {
+function appendSessionMetadata(args: string[], ctx: any): void {
+  try {
+    const sessionId = ctx?.sessionManager?.getSessionId?.();
+    if (typeof sessionId === "string" && sessionId) {
+      args.push("--external-session-id", sessionId);
+    }
+  } catch {}
+
+  try {
+    const usage = ctx?.getContextUsage?.();
+    if (usage && usage.tokens != null && usage.contextWindow) {
+      args.push("--context-tokens", String(usage.tokens), "--context-max", String(usage.contextWindow));
+    }
+  } catch {}
+}
+
+function report(state: PiState, ctx: any, detail?: string): void {
   const args = ["report", "--agent", "pi", "--state", state, "--session", SESSION_ID];
+  if (detail) args.push("--detail", detail.slice(0, MAX_DETAIL_LENGTH));
   appendModel(args, ctx);
-  // Include context window data if available
-  try {
-    const usage = ctx?.getContextUsage?.();
-    if (usage && usage.tokens != null && usage.contextWindow) {
-      args.push("--context-tokens", String(usage.tokens), "--context-max", String(usage.contextWindow));
-    }
-  } catch {}
-  execFile(AGENTS_BIN, args, () => {});
-}
-
-function reportWithContext(state: string, context: string, ctx: any): void {
-  const args = ["report", "--agent", "pi", "--state", state, "--context", context, "--session", SESSION_ID];
-  appendModel(args, ctx);
-  try {
-    const usage = ctx?.getContextUsage?.();
-    if (usage && usage.tokens != null && usage.contextWindow) {
-      args.push("--context-tokens", String(usage.tokens), "--context-max", String(usage.contextWindow));
-    }
-  } catch {}
+  appendSessionMetadata(args, ctx);
   execFile(AGENTS_BIN, args, () => {});
 }
 
@@ -83,7 +80,6 @@ function endsWithQuestion(message: any): boolean {
   try {
     const content = message?.content;
     if (!Array.isArray(content)) return false;
-    // Extract text from content blocks
     const text = content
       .filter((c: any) => c?.type === "text" && c?.text)
       .map((c: any) => c.text)
@@ -97,48 +93,125 @@ function endsWithQuestion(message: any): boolean {
   }
 }
 
+function lastAssistantMessage(messages: any[]): any | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role === "assistant") return message;
+  }
+  return undefined;
+}
+
+function normalizeToolName(toolName: unknown): string | undefined {
+  if (typeof toolName !== "string") return undefined;
+  const trimmed = toolName.trim();
+  return trimmed ? trimmed.slice(0, MAX_DETAIL_LENGTH) : undefined;
+}
+
 const extension: ExtensionFactory = (pi: ExtensionAPI) => {
+  let activePrompt = false;
+  let lastState: PiState | undefined;
+  let lastDetail: string | undefined;
+  let idleTimer: NodeJS.Timeout | undefined;
+
+  function clearIdleTimer(): void {
+    if (!idleTimer) return;
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
+  }
+
+  function setState(state: PiState, ctx: any, detail?: string, force = false): void {
+    if (!force && lastState === state && lastDetail === detail) return;
+    report(state, ctx, detail);
+    lastState = state;
+    lastDetail = detail;
+  }
+
+  function setWorking(ctx: any, detail?: string): void {
+    clearIdleTimer();
+    setState("working", ctx, detail);
+  }
+
+  function settleIdle(ctx: any): void {
+    clearIdleTimer();
+    idleTimer = setTimeout(() => {
+      activePrompt = false;
+      setState("idle", ctx, undefined, true);
+    }, IDLE_SETTLE_MS);
+  }
+
   pi.on("agent_start", async (_event: any, ctx: any) => {
-    report("working", ctx);
+    activePrompt = true;
+    setWorking(ctx, "starting");
   });
 
   pi.on("agent_end", async (event: any, ctx: any) => {
-    // Check if the last assistant message ends with a question
-    const messages = event?.messages;
-    if (Array.isArray(messages) && messages.length > 0) {
-      const last = messages[messages.length - 1];
-      if (endsWithQuestion(last)) {
-        report("question", ctx);
-        return;
-      }
+    const messages = Array.isArray(event?.messages) ? event.messages : [];
+    const last = lastAssistantMessage(messages);
+    if (last && endsWithQuestion(last)) {
+      activePrompt = false;
+      clearIdleTimer();
+      setState("question", ctx);
+      return;
     }
-    report("idle", ctx);
+    settleIdle(ctx);
+  });
+
+  pi.on("message_update", async (event: any, ctx: any) => {
+    if (!activePrompt) return;
+    if (event?.assistantMessageEvent?.type !== "text_delta") return;
+    setWorking(ctx, "thinking");
   });
 
   pi.on("tool_call", async (event: any, ctx: any) => {
+    clearIdleTimer();
     if (event?.toolName === "AskUserQuestion" || event?.toolName === "ask_user") {
-      report("question", ctx);
-    } else {
-      report("working", ctx);
+      activePrompt = false;
+      setState("question", ctx);
+      return;
     }
+    setWorking(ctx, normalizeToolName(event?.toolName) ?? "tool");
+  });
+
+  pi.on("tool_execution_start", async (event: any, ctx: any) => {
+    if (!activePrompt) activePrompt = true;
+    setWorking(ctx, normalizeToolName(event?.toolName) ?? "tool");
+  });
+
+  pi.on("tool_execution_end", async (event: any, ctx: any) => {
+    if (!activePrompt) return;
+    if (event?.isError) {
+      const toolName = normalizeToolName(event?.toolName) ?? "tool";
+      setWorking(ctx, `${toolName} failed`.slice(0, MAX_DETAIL_LENGTH));
+      return;
+    }
+    setWorking(ctx, "thinking");
   });
 
   pi.on("session_before_compact", async (_event: any, ctx: any) => {
-    reportWithContext("working", "compacting", ctx);
+    activePrompt = true;
+    setWorking(ctx, "compacting");
   });
 
   pi.on("session_compact", async (_event: any, ctx: any) => {
-    // Compaction is an internal step within an active run, not completion.
-    report("working", ctx);
+    if (!activePrompt) return;
+    setWorking(ctx, "thinking");
   });
 
-  pi.on("turn_end", async (_event: any, _ctx: any) => {
-    // A turn can end after an intermediate tool/result cycle.
-    // Only agent_end/session_shutdown should report idle.
+  pi.on("turn_end", async (_event: any, ctx: any) => {
+    if (!activePrompt) return;
+    setWorking(ctx, "thinking");
+  });
+
+  pi.on("session_switch", async (_event: any, ctx: any) => {
+    activePrompt = false;
+    clearIdleTimer();
+    setState("idle", ctx, undefined, true);
   });
 
   pi.on("session_shutdown", async (_event: any, ctx: any) => {
-    report("idle", ctx);
+    activePrompt = false;
+    clearIdleTimer();
+    setState("idle", ctx, undefined, true);
   });
 };
 

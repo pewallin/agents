@@ -8,22 +8,44 @@
  *   - Pi: symlinks extension to ~/.pi/agent/extensions/agents-reporting/
  *   - OpenCode: symlinks plugin to ~/.config/opencode/node_modules/ and patches config.json
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, unlinkSync, lstatSync, readdirSync, rmdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, unlinkSync, lstatSync, readdirSync, rmdirSync, realpathSync } from "fs";
 import { createHash } from "crypto";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync, spawn } from "child_process";
+import {
+  INTEGRATION_SPECS,
+  LIFECYCLE_CAPABILITIES,
+  METADATA_CAPABILITIES,
+  missingLifecycleCapabilities,
+  missingMetadataCapabilities,
+  type AgentIntegrationName,
+  type AgentIntegrationSpec,
+} from "./integrations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // extensions/ lives next to src/ in the repo root
 const REPO_ROOT = join(__dirname, "..");
 const EXTENSIONS_DIR = join(REPO_ROOT, "extensions");
 
-interface SetupResult {
+export interface SetupResult {
   agent: string;
   action: "installed" | "uninstalled" | "skipped" | "not-installed";
   detail?: string;
+}
+
+export interface DoctorResult {
+  agent: AgentIntegrationName;
+  installMethod: AgentIntegrationSpec["installMethod"];
+  status: "installed" | "partial" | "not-installed" | "unavailable" | "broken";
+  detail?: string;
+  expectedEvents: string[];
+  installedEvents: string[];
+  missingLifecycle: ReturnType<typeof missingLifecycleCapabilities>;
+  missingMetadata: ReturnType<typeof missingMetadataCapabilities>;
+  supplemental?: string[];
+  notes?: string[];
 }
 
 // ── Claude Code ─────────────────────────────────────────────────────
@@ -44,6 +66,82 @@ const CLAUDE_HOOKS = {
 
 // Hook events from older versions that should be cleaned up on setup/uninstall
 const LEGACY_EVENTS = ["PermissionRequest"];
+
+function matchesHookDef(candidate: any, expected: any): boolean {
+  return JSON.stringify(candidate) === JSON.stringify(expected);
+}
+
+function detailFromMissingEvents(
+  expectedEvents: string[],
+  installedEvents: string[],
+  unavailableDetail: string,
+): { status: DoctorResult["status"]; detail?: string } {
+  if (installedEvents.length === expectedEvents.length) {
+    return { status: "installed" };
+  }
+  if (installedEvents.length === 0) {
+    return { status: "not-installed", detail: unavailableDetail };
+  }
+  const missing = expectedEvents.filter((event) => !installedEvents.includes(event));
+  return {
+    status: "partial",
+    detail: `missing ${missing.join(", ")}`,
+  };
+}
+
+function contentHash(content: string | Buffer): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 12);
+}
+
+function installedFileVersion(
+  target: string,
+  source: string,
+): { status: "missing" | "current" | "outdated" | "unreadable"; detail?: string } {
+  if (!existsSync(target)) {
+    return { status: "missing" };
+  }
+
+  try {
+    const targetStat = lstatSync(target);
+    if (targetStat.isSymbolicLink()) {
+      const targetRealpath = realpathSync(target);
+      const sourceRealpath = realpathSync(source);
+      if (targetRealpath === sourceRealpath) {
+        return { status: "current", detail: "symlinked to repo source" };
+      }
+    }
+
+    const targetContent = readFileSync(target);
+    const sourceContent = readFileSync(source);
+    const targetHash = contentHash(targetContent);
+    const sourceHash = contentHash(sourceContent);
+    if (targetHash === sourceHash) {
+      return { status: "current", detail: `content hash ${targetHash}` };
+    }
+    return {
+      status: "outdated",
+      detail: `installed hash ${targetHash}, expected ${sourceHash}`,
+    };
+  } catch {
+    return { status: "unreadable" };
+  }
+}
+
+function mergeDetail(primary?: string, secondary?: string): string | undefined {
+  if (primary && secondary) return `${primary}; ${secondary}`;
+  return primary || secondary;
+}
+
+function applyCapabilityOverrides(
+  spec: AgentIntegrationSpec,
+  overrides?: Partial<AgentIntegrationSpec["capabilities"]>,
+): Pick<DoctorResult, "missingLifecycle" | "missingMetadata"> {
+  const capabilities = { ...spec.capabilities, ...overrides };
+  return {
+    missingLifecycle: LIFECYCLE_CAPABILITIES.filter((capability) => !capabilities[capability]),
+    missingMetadata: METADATA_CAPABILITIES.filter((capability) => !capabilities[capability]),
+  };
+}
 
 function setupClaude(): SetupResult {
   const settingsPath = join(homedir(), ".claude", "settings.json");
@@ -150,26 +248,8 @@ const CODEX_STOP_SCRIPT = join(EXTENSIONS_DIR, "codex", "stop-hook.sh");
 
 function codexHookEntries(): Record<string, any[]> {
   return {
-    SessionStart: [
-      {
-        matcher: "startup|resume",
-        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} idle` }],
-      },
-    ],
     UserPromptSubmit: [
       {
-        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} working` }],
-      },
-    ],
-    PreToolUse: [
-      {
-        matcher: "Bash",
-        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} working` }],
-      },
-    ],
-    PostToolUse: [
-      {
-        matcher: "Bash",
         hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} working` }],
       },
     ],
@@ -269,6 +349,18 @@ function setupCodex(): SetupResult {
     hookRoot[event] = next;
   }
 
+  for (const event of Object.keys(hookRoot)) {
+    if (event in desiredHooks) continue;
+    const existing = Array.isArray(hookRoot[event]) ? hookRoot[event] : [];
+    const filtered = existing.filter((group) => !isOurCodexHook(group));
+    if (filtered.length !== existing.length) hooksChanged = true;
+    if (filtered.length === 0) {
+      delete hookRoot[event];
+    } else {
+      hookRoot[event] = filtered;
+    }
+  }
+
   if (!featureUpdate.changed && !hooksChanged) {
     return { agent: "codex", action: "installed", detail: "hooks configured" };
   }
@@ -296,7 +388,7 @@ function uninstallCodex(): SetupResult {
   const hookRoot = normalized.hookRoot;
 
   let removed = normalized.changed;
-  for (const event of Object.keys(codexHookEntries())) {
+  for (const event of Object.keys(hookRoot)) {
     const existing = Array.isArray(hookRoot[event]) ? hookRoot[event] : [];
     const filtered = existing.filter((group) => !isOurCodexHook(group));
     if (filtered.length !== existing.length) removed = true;
@@ -576,6 +668,254 @@ export function setup(quiet: boolean = false): SetupResult[] {
 
 export function uninstall(): SetupResult[] {
   return [uninstallClaude(), uninstallCodex(), uninstallCopilot(), uninstallPi(), uninstallOpencode()];
+}
+
+function doctorClaude(spec: AgentIntegrationSpec): DoctorResult {
+  const claudeDir = join(homedir(), ".claude");
+  if (!existsSync(claudeDir)) {
+    return doctorResult(spec, "unavailable", "~/.claude/ not found", []);
+  }
+
+  const settingsPath = join(claudeDir, "settings.json");
+  if (!existsSync(settingsPath)) {
+    return doctorResult(spec, "not-installed", "~/.claude/settings.json not found", []);
+  }
+
+  let settings: any;
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+  } catch {
+    return doctorResult(spec, "broken", "could not parse ~/.claude/settings.json", []);
+  }
+
+  const hooksRoot = settings.hooks || {};
+  const installedEvents: string[] = [];
+  const exactHooks = [
+    { name: "PreToolUse", event: "PreToolUse", def: CLAUDE_HOOKS.PreToolUse[0] },
+    { name: "UserPromptSubmit", event: "UserPromptSubmit", def: CLAUDE_HOOKS.UserPromptSubmit[0] },
+    { name: "Stop", event: "Stop", def: CLAUDE_HOOKS.Stop[0] },
+    { name: "Notification:idle_prompt", event: "Notification", def: CLAUDE_HOOKS.Notification[0] },
+    { name: "Notification:permission_prompt", event: "Notification", def: CLAUDE_HOOKS.Notification[1] },
+    { name: "Notification:elicitation_dialog", event: "Notification", def: CLAUDE_HOOKS.Notification[2] },
+  ];
+
+  for (const hook of exactHooks) {
+    const existing = Array.isArray(hooksRoot[hook.event]) ? hooksRoot[hook.event] : [];
+    if (existing.some((candidate: any) => matchesHookDef(candidate, hook.def))) {
+      installedEvents.push(hook.name);
+    }
+  }
+
+  const verdict = detailFromMissingEvents(spec.configuredEvents, installedEvents, "no agents hooks found");
+  return doctorResult(spec, verdict.status, verdict.detail, installedEvents);
+}
+
+function doctorCodex(spec: AgentIntegrationSpec): DoctorResult {
+  const codexDir = join(homedir(), ".codex");
+  if (!existsSync(codexDir)) {
+    return doctorResult(spec, "unavailable", "~/.codex/ not found", []);
+  }
+
+  let configText = "";
+  try {
+    configText = existsSync(CODEX_CONFIG_PATH) ? readFileSync(CODEX_CONFIG_PATH, "utf-8") : "";
+  } catch {
+    return doctorResult(spec, "broken", "could not read ~/.codex/config.toml", []);
+  }
+
+  let hooksJson: Record<string, any> = {};
+  if (existsSync(CODEX_HOOKS_PATH)) {
+    try {
+      hooksJson = JSON.parse(readFileSync(CODEX_HOOKS_PATH, "utf-8"));
+    } catch {
+      return doctorResult(spec, "broken", "could not parse ~/.codex/hooks.json", []);
+    }
+  }
+
+  const installedEvents: string[] = [];
+  if (/^codex_hooks\s*=\s*true\s*$/m.test(configText)) {
+    const normalized = normalizeCodexHooksJson(hooksJson);
+    const hookRoot = normalized.hookRoot;
+    const expected = codexHookEntries();
+    for (const event of Object.keys(expected)) {
+      const existing = Array.isArray(hookRoot[event]) ? hookRoot[event] : [];
+      if (expected[event].every((group) => existing.some((candidate: any) => matchesHookDef(candidate, group)))) {
+        installedEvents.push(event);
+      }
+    }
+  }
+
+  if (!/^codex_hooks\s*=\s*true\s*$/m.test(configText) && installedEvents.length === 0) {
+    return doctorResult(spec, "not-installed", "codex_hooks is not enabled", []);
+  }
+
+  const verdict = detailFromMissingEvents(spec.configuredEvents, installedEvents, "Codex hooks are incomplete");
+  return doctorResult(spec, verdict.status, verdict.detail, installedEvents);
+}
+
+function doctorCopilot(spec: AgentIntegrationSpec): DoctorResult {
+  const copilotDir = join(homedir(), ".copilot");
+  if (!existsSync(copilotDir)) {
+    return doctorResult(spec, "unavailable", "~/.copilot/ not found", []);
+  }
+
+  const target = join(copilotDir, "extensions", "agents-reporting", "extension.mjs");
+  const source = join(EXTENSIONS_DIR, "copilot", "extension.mjs");
+  if (!existsSync(target)) {
+    return doctorResult(spec, "not-installed", `${target} not found`, []);
+  }
+
+  const version = installedFileVersion(target, source);
+  if (version.status === "unreadable") {
+    return doctorResult(spec, "broken", "could not read Copilot extension", []);
+  }
+  if (version.status === "outdated") {
+    return doctorResult(spec, "partial", mergeDetail("extension is not current", version.detail), spec.configuredEvents);
+  }
+  if (version.status === "missing") {
+    return doctorResult(spec, "not-installed", `${target} not found`, []);
+  }
+  return doctorResult(spec, "installed", version.detail, spec.configuredEvents);
+}
+
+function doctorPi(spec: AgentIntegrationSpec): DoctorResult {
+  const piDir = join(homedir(), ".pi", "agent");
+  if (!existsSync(piDir)) {
+    return doctorResult(spec, "unavailable", "~/.pi/agent/ not found", []);
+  }
+
+  const target = join(piDir, "extensions", "agents-reporting.ts");
+  const source = join(EXTENSIONS_DIR, "pi", "dustbot-reporting.ts");
+  if (!existsSync(target)) {
+    return doctorResult(spec, "not-installed", `${target} not found`, []);
+  }
+
+  const version = installedFileVersion(target, source);
+  if (version.status === "unreadable") {
+    return doctorResult(spec, "broken", "could not read Pi extension", []);
+  }
+  if (version.status === "outdated") {
+    return doctorResult(spec, "partial", mergeDetail("extension is not current", version.detail), spec.configuredEvents);
+  }
+  if (version.status === "missing") {
+    return doctorResult(spec, "not-installed", `${target} not found`, []);
+  }
+  const dustbotSandbox = join(piDir, "extensions", "dustbot-sandbox.js");
+  const supplemental = existsSync(dustbotSandbox) ? ["dustbot-sandbox approval bridge"] : [];
+  return doctorResult(
+    spec,
+    "installed",
+    mergeDetail(version.detail, supplemental.length ? "approval via dustbot-sandbox" : undefined),
+    spec.configuredEvents,
+    supplemental.length ? { approval: true } : undefined,
+    supplemental,
+  );
+}
+
+function doctorOpencode(spec: AgentIntegrationSpec): DoctorResult {
+  const configDir = join(homedir(), ".config", "opencode");
+  if (!existsSync(configDir)) {
+    return doctorResult(spec, "unavailable", "~/.config/opencode/ not found", []);
+  }
+
+  const target = join(configDir, "node_modules", OPENCODE_PLUGIN_NAME, "index.mjs");
+  const packageTarget = join(configDir, "node_modules", OPENCODE_PLUGIN_NAME, "package.json");
+  const configPath = join(configDir, "config.json");
+  const source = join(EXTENSIONS_DIR, "opencode", "index.mjs");
+  const packageSource = join(EXTENSIONS_DIR, "opencode", "package.json");
+  const installedEvents: string[] = [];
+  let linked = false;
+  let configured = false;
+  let versionDetail: string | undefined;
+
+  if (existsSync(target)) {
+    const indexVersion = installedFileVersion(target, source);
+    if (indexVersion.status === "unreadable") {
+      return doctorResult(spec, "broken", "could not read OpenCode plugin", []);
+    }
+    if (indexVersion.status !== "missing") {
+      linked = indexVersion.status === "current";
+      versionDetail = indexVersion.detail;
+    }
+    if (indexVersion.status === "outdated") {
+      return doctorResult(spec, "partial", mergeDetail("plugin index is not current", indexVersion.detail), []);
+    }
+  }
+
+  if (existsSync(packageTarget)) {
+    const packageVersion = installedFileVersion(packageTarget, packageSource);
+    if (packageVersion.status === "unreadable") {
+      return doctorResult(spec, "broken", "could not read OpenCode plugin package.json", []);
+    }
+    if (packageVersion.status === "outdated") {
+      return doctorResult(spec, "partial", mergeDetail("plugin package.json is not current", packageVersion.detail), []);
+    }
+    versionDetail = mergeDetail(versionDetail, packageVersion.detail);
+  }
+
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      configured = Array.isArray(config.plugin) && config.plugin.includes(OPENCODE_PLUGIN_NAME);
+    } catch {
+      return doctorResult(spec, "broken", "could not parse ~/.config/opencode/config.json", []);
+    }
+  }
+
+  if (linked && configured) {
+    installedEvents.push(...spec.configuredEvents);
+    return doctorResult(spec, "installed", versionDetail, installedEvents);
+  }
+  if (!linked && !configured) {
+    return doctorResult(spec, "not-installed", "plugin package and config entry are missing", []);
+  }
+
+  return doctorResult(
+    spec,
+    "partial",
+    linked ? "plugin linked but config.json is missing the plugin entry" : "config.json references the plugin but the package is missing",
+    [],
+  );
+}
+
+function doctorResult(
+  spec: AgentIntegrationSpec,
+  status: DoctorResult["status"],
+  detail: string | undefined,
+  installedEvents: string[],
+  capabilityOverrides?: Partial<AgentIntegrationSpec["capabilities"]>,
+  supplemental?: string[],
+): DoctorResult {
+  const { missingLifecycle, missingMetadata } = applyCapabilityOverrides(spec, capabilityOverrides);
+  return {
+    agent: spec.agent,
+    installMethod: spec.installMethod,
+    status,
+    ...(detail ? { detail } : {}),
+    expectedEvents: spec.configuredEvents,
+    installedEvents,
+    missingLifecycle,
+    missingMetadata,
+    ...(supplemental && supplemental.length ? { supplemental } : {}),
+    ...(spec.notes ? { notes: spec.notes } : {}),
+  };
+}
+
+export function doctor(): DoctorResult[] {
+  return INTEGRATION_SPECS.map((spec) => {
+    switch (spec.agent) {
+      case "claude":
+        return doctorClaude(spec);
+      case "codex":
+        return doctorCodex(spec);
+      case "copilot":
+        return doctorCopilot(spec);
+      case "pi":
+        return doctorPi(spec);
+      case "opencode":
+        return doctorOpencode(spec);
+    }
+  });
 }
 
 // ── Auto-setup on CLI start ─────────────────────────────────────────

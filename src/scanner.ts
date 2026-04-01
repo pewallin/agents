@@ -1,10 +1,12 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { tmpdir, homedir } from "os";
 import { basename, join } from "path";
+import { createHash } from "crypto";
 import { exec, execAsync } from "./shell.js";
-import { getAgentState, getAgentStateEntry } from "./state.js";
+import { deriveModelDisplay, getAgentState, getAgentStateEntry, recordCleanupObservation, reportState } from "./state.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { BACK_ENV, switchBack } from "./back.js";
+import type { ModelMetadata, ModelSource } from "./state.js";
 import type { MuxPaneInfo } from "./multiplexer.js";
 
 export type AgentStatus = "attention" | "question" | "working" | "stalled" | "idle";
@@ -17,11 +19,24 @@ export interface AgentPane {
   agent: string;
   status: AgentStatus;
   detail?: string;
-  model?: string;      // model currently selected for the agent
+  provider?: string;
+  modelId?: string;
+  modelLabel?: string;
+  modelSource?: ModelSource;
+  model?: string;      // backward-compatible display string for the selected model
   windowId?: string;   // session:window_index for sibling lookup
   cwd?: string;
   branch?: string;     // git branch name for the cwd
   context?: string;    // workspace context description from state file
+  contextTokens?: number;
+  contextMax?: number;
+}
+
+export interface AgentRuntimeState {
+  session: string;
+  status: AgentStatus;
+  detail?: string;
+  context?: string;
   contextTokens?: number;
   contextMax?: number;
 }
@@ -66,10 +81,13 @@ export interface AgentDetector {
   isQuestion(content: string, tmuxPaneId?: string): boolean;
 }
 const claudeDetector = makeHookDetector("claude");
-const codexDetector = makeHybridHookDetector("codex");
+const codexDetector = makeHookFirstDetector("codex");
 const copilotDetector = makeHookDetector("copilot");
 const piDetector = makeHookDetector("pi");
 const opencodeDetector = makeHookDetector("opencode");
+const CODEX_STALE_WORKING_MIN_AGE_SECONDS = 120;
+const CODEX_STALE_WORKING_SAMPLE_INTERVAL_SECONDS = 30;
+const CODEX_STALE_WORKING_REQUIRED_SAMPLES = 2;
 
 // Hook-based detector: reads state from ~/.agents/state/ files
 // written by `agents report` command (called from agent hooks).
@@ -86,6 +104,85 @@ function stateDuration(agent: string, paneId?: string): string | undefined {
   if (!entry) return undefined;
   const age = Math.floor(Date.now() / 1000) - entry.ts;
   return age >= 1 ? formatDuration(age) : undefined;
+}
+
+export function shouldTreatCodexWorkingAsIdle(content: string, title: string, paneId?: string): boolean {
+  if (!paneId) return false;
+  const entry = getAgentStateEntry("codex", paneId);
+  if (entry?.state === "working") {
+    const age = Math.floor(Date.now() / 1000) - entry.ts;
+    if (age < CODEX_STALE_WORKING_MIN_AGE_SECONDS) return false;
+  }
+  if (isCodexApprovalPending(paneId)) return false;
+  if (genericDetector.isApproval(content, paneId)) return false;
+  return genericDetector.isIdle(content, title, paneId);
+}
+
+function normalizeCleanupContent(content: string): string {
+  return content
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function cleanupContentHash(content: string): string {
+  return createHash("sha1").update(content).digest("hex");
+}
+
+export function reconcileStaleCodexWorkingState(content: string, title: string, paneId?: string): void {
+  if (!paneId) return;
+  const entry = getAgentStateEntry("codex", paneId);
+  if (!entry || entry.state !== "working") {
+    recordCleanupObservation("codex", paneId, null);
+    return;
+  }
+
+  if (!shouldTreatCodexWorkingAsIdle(content, title, paneId)) {
+    recordCleanupObservation("codex", paneId, null);
+    return;
+  }
+
+  const normalized = normalizeCleanupContent(content);
+  if (!normalized) {
+    recordCleanupObservation("codex", paneId, null);
+    return;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const nextHash = cleanupContentHash(normalized);
+  const previous = entry.cleanup;
+
+  if (previous?.contentHash === nextHash
+      && previous.observedAt
+      && now - previous.observedAt < CODEX_STALE_WORKING_SAMPLE_INTERVAL_SECONDS) {
+    return;
+  }
+
+  const unchangedSamples = previous?.contentHash === nextHash
+    ? (previous.unchangedSamples ?? 1) + 1
+    : 1;
+
+  if (unchangedSamples >= CODEX_STALE_WORKING_REQUIRED_SAMPLES) {
+    reportState("codex", paneId, "idle", {
+      ...(entry.provider ? { provider: entry.provider } : {}),
+      ...(entry.modelId ? { modelId: entry.modelId } : {}),
+      ...(entry.modelLabel ? { modelLabel: entry.modelLabel } : {}),
+      ...(entry.modelSource ? { modelSource: entry.modelSource } : {}),
+      ...(entry.model ? { model: entry.model } : {}),
+      ...(entry.externalSessionId ? { externalSessionId: entry.externalSessionId } : {}),
+      ...(entry.context ? { context: entry.context } : {}),
+      ...(entry.workspace ? { workspace: entry.workspace } : {}),
+      ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
+      ...(entry.contextMax !== undefined ? { contextMax: entry.contextMax } : {}),
+    });
+    return;
+  }
+
+  recordCleanupObservation("codex", paneId, {
+    contentHash: nextHash,
+    observedAt: now,
+    unchangedSamples,
+  });
 }
 
 function stateDetail(agent: string, paneId?: string): string | undefined {
@@ -129,9 +226,31 @@ function mergedContextTokens(agent: string, paneId: string | undefined, content:
   };
 }
 
-function stateModel(agent: string, paneId?: string): string | undefined {
+function normalizeModelMetadata(meta: ModelMetadata): ModelMetadata {
+  const model = deriveModelDisplay(meta);
+  return {
+    ...(meta.provider ? { provider: meta.provider } : {}),
+    ...(meta.modelId ? { modelId: meta.modelId } : {}),
+    ...(meta.modelLabel ? { modelLabel: meta.modelLabel } : {}),
+    ...(meta.modelSource ? { modelSource: meta.modelSource } : {}),
+    ...(model ? { model } : {}),
+  };
+}
+
+function stateModelInfo(agent: string, paneId?: string): ModelMetadata {
   const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
-  return entry?.model;
+  if (!entry) return {};
+  return normalizeModelMetadata({
+    provider: entry.provider,
+    modelId: entry.modelId,
+    modelLabel: entry.modelLabel,
+    modelSource: entry.modelSource,
+    model: entry.model,
+  });
+}
+
+function hasResolvedModel(meta: ModelMetadata): boolean {
+  return !!deriveModelDisplay(meta);
 }
 
 function stateExternalSessionId(agent: string, paneId?: string): string | undefined {
@@ -245,6 +364,69 @@ export function inferContextFromContent(agent: string, content: string): { conte
   }
 }
 
+function splitProviderModel(candidate?: string): Pick<ModelMetadata, "provider" | "modelId"> {
+  if (!candidate) return {};
+  const trimmed = candidate.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) return {};
+  return {
+    provider: trimmed.slice(0, slash),
+    modelId: trimmed.slice(slash + 1),
+  };
+}
+
+export function inferModelMetadataFromContent(agent: string, content: string): ModelMetadata {
+  const agentName = agent.toLowerCase();
+  const inferred = inferModelFromContent(agentName, content);
+
+  switch (agentName) {
+    case "codex": {
+      if (!inferred) return {};
+      const structured = splitProviderModel(inferred);
+      return normalizeModelMetadata({
+        ...structured,
+        ...(structured.modelId ? {} : { modelId: inferred }),
+        modelSource: "inferred",
+      });
+    }
+    case "pi": {
+      const lines = content.split("\n").map((line) => line.trim()).filter(Boolean).slice(-12).reverse();
+      for (const line of lines) {
+        const match = line.match(/^\(([^)]+)\)\s+(.+)$/);
+        if (!match) continue;
+        const modelLabel = match[2].replace(/\s+·.*$/, "").trim();
+        return normalizeModelMetadata({
+          provider: match[1].trim(),
+          modelLabel,
+          model: modelLabel,
+          modelSource: "inferred",
+        });
+      }
+      return inferred ? normalizeModelMetadata({ model: inferred, modelSource: "inferred" }) : {};
+    }
+    case "claude":
+      return inferred ? normalizeModelMetadata({ modelLabel: inferred, model: inferred, modelSource: "inferred" }) : {};
+    default:
+      return inferred ? normalizeModelMetadata({ model: inferred, modelSource: "inferred" }) : {};
+  }
+}
+
+function resolveModelInfo(agent: string, paneId: string | undefined, content: string): ModelMetadata {
+  const stored = stateModelInfo(agent, paneId);
+  if (hasResolvedModel(stored)) return stored;
+
+  const inferred = inferModelMetadataFromContent(agent, content);
+  if (!hasResolvedModel(inferred) && !stored.provider) return stored;
+
+  return normalizeModelMetadata({
+    provider: stored.provider ?? inferred.provider,
+    modelId: stored.modelId ?? inferred.modelId,
+    modelLabel: stored.modelLabel ?? inferred.modelLabel,
+    modelSource: stored.modelSource ?? inferred.modelSource,
+    model: stored.model ?? inferred.model,
+  });
+}
+
 export function inferModelFromContent(agent: string, content: string): string | undefined {
   const lines = content.split("\n").map((line) => line.trim()).filter(Boolean).slice(-12).reverse();
   switch (agent.toLowerCase()) {
@@ -278,9 +460,21 @@ export function inferModelFromContent(agent: string, content: string): string | 
 
 const claudeRenameCache = new Map<string, { mtimeMs: number; title?: string }>();
 const codexLogPath = join(homedir(), ".codex", "log", "codex-tui.log");
+const codexSessionIndexPath = join(homedir(), ".codex", "session_index.jsonl");
 let codexOpCache: { mtimeMs: number; latestOps: Map<string, string> } | null = null;
+let codexSessionIndexCache: { mtimeMs: number; entries: Map<string, string> } | null = null;
 let codexStateDbPathCache: string | null | undefined;
-const codexTitleCache = new Map<string, { dbPath: string; mtimeMs: number; title?: string }>();
+const codexTitleCache = new Map<string, { dbPath?: string; dbMtimeMs?: number; sessionIndexMtimeMs?: number; title?: string }>();
+
+function sqliteMtimeMs(dbPath: string): number {
+  let latest = 0;
+  for (const candidate of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      if (existsSync(candidate)) latest = Math.max(latest, statSync(candidate).mtimeMs);
+    } catch {}
+  }
+  return latest;
+}
 
 export function extractClaudeRenameTitleFromTranscript(lines: string[]): string | undefined {
   let renamedTitle: string | undefined;
@@ -342,23 +536,59 @@ function codexStateDbPath(): string | undefined {
   return codexStateDbPathCache || undefined;
 }
 
+export function extractLatestCodexSessionTitlesFromIndexLines(lines: string[]): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as { id?: string; thread_name?: string };
+      if (entry.id && entry.thread_name) entries.set(entry.id, entry.thread_name);
+    } catch {
+      // Ignore partial lines while Codex is appending.
+    }
+  }
+  return entries;
+}
+
+function readCodexSessionIndex(): Map<string, string> {
+  if (!existsSync(codexSessionIndexPath)) return new Map();
+  try {
+    const mtimeMs = statSync(codexSessionIndexPath).mtimeMs;
+    if (codexSessionIndexCache?.mtimeMs === mtimeMs) return codexSessionIndexCache.entries;
+
+    const entries = extractLatestCodexSessionTitlesFromIndexLines(readFileSync(codexSessionIndexPath, "utf-8").split("\n"));
+    codexSessionIndexCache = { mtimeMs, entries };
+    return entries;
+  } catch {
+    return new Map();
+  }
+}
+
 function getCodexThreadTitle(externalSessionId?: string): string | undefined {
   if (!externalSessionId) return undefined;
+
+  const sessionIndexTitle = readCodexSessionIndex().get(externalSessionId);
+  const sessionIndexMtimeMs = codexSessionIndexCache?.mtimeMs;
   const dbPath = codexStateDbPath();
-  if (!dbPath || !existsSync(dbPath)) return undefined;
+  const dbMtimeMs = dbPath && existsSync(dbPath) ? sqliteMtimeMs(dbPath) : undefined;
 
-  try {
-    const mtimeMs = statSync(dbPath).mtimeMs;
-    const cached = codexTitleCache.get(externalSessionId);
-    if (cached?.dbPath === dbPath && cached.mtimeMs === mtimeMs) return cached.title;
-
-    const sqlId = externalSessionId.replace(/'/g, "''");
-    const title = exec(`sqlite3 ${JSON.stringify(dbPath)} ${JSON.stringify(`select title from threads where id='${sqlId}' limit 1;`)}`) || undefined;
-    codexTitleCache.set(externalSessionId, { dbPath, mtimeMs, title });
-    return title;
-  } catch {
-    return undefined;
+  const cached = codexTitleCache.get(externalSessionId);
+  if (cached && cached.dbPath === dbPath && cached.dbMtimeMs === dbMtimeMs && cached.sessionIndexMtimeMs === sessionIndexMtimeMs) {
+    return cached.title;
   }
+
+  let title = sessionIndexTitle;
+  if (!title && dbPath && existsSync(dbPath)) {
+    try {
+      const sqlId = externalSessionId.replace(/'/g, "''");
+      title = exec(`sqlite3 ${JSON.stringify(dbPath)} ${JSON.stringify(`select title from threads where id='${sqlId}' limit 1;`)}`) || undefined;
+    } catch {
+      title = undefined;
+    }
+  }
+
+  codexTitleCache.set(externalSessionId, { dbPath, dbMtimeMs, sessionIndexMtimeMs, title });
+  return title;
 }
 
 function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
@@ -371,16 +601,21 @@ function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?
     const raw = exec(`sqlite3 -json ${JSON.stringify(dbPath)} ${JSON.stringify(sql)}`);
     if (!raw) return [];
     const rows = JSON.parse(raw) as Array<{ id?: string; title?: string; model?: string; updated_at?: number }>;
+    const sessionIndex = readCodexSessionIndex();
     return rows
       .filter((row) => !!row.id)
-      .map((row) => ({
-        sessionId: row.id!,
-        title: row.title || row.id!,
-        titleSource: row.title ? "stored_title" : "fallback",
-        ...(row.model ? { model: row.model } : {}),
-        updatedAt: row.updated_at || 0,
-        ...(currentSessionId && row.id === currentSessionId ? { current: true } : {}),
-      }));
+      .map((row) => {
+        const indexedTitle = sessionIndex.get(row.id!);
+        const isCurrent = !!currentSessionId && row.id === currentSessionId;
+        return {
+          sessionId: row.id!,
+          title: indexedTitle || row.title || row.id!,
+          titleSource: indexedTitle ? "rename" : row.title ? "stored_title" : "fallback",
+          ...(row.model ? { model: row.model } : {}),
+          updatedAt: row.updated_at || 0,
+          ...(isCurrent ? { current: true } : {}),
+        };
+      });
   } catch {
     return [];
   }
@@ -842,17 +1077,19 @@ function makeHookDetector(agentName: string): AgentDetector {
   };
 }
 
-function makeHybridHookDetector(agentName: string): AgentDetector {
+function makeHookFirstDetector(agentName: string): AgentDetector {
   return {
-    isWorking(content, title, paneId) {
+    isWorking(_content, _title, paneId) {
       const s = paneId ? getAgentState(agentName, paneId) : null;
       if (s === "working") return true;
       if (s === "approval" || s === "question" || s === "idle") return false;
-      return genericDetector.isWorking(content, title, paneId);
+      return genericDetector.isWorking(_content, _title, paneId);
     },
     isIdle(content, title, paneId) {
       const s = paneId ? getAgentState(agentName, paneId) : null;
-      if (s !== null) return s === "idle" || s === "question";
+      if (s !== null) {
+        return s === "idle" || s === "question";
+      }
       return genericDetector.isIdle(content, title, paneId);
     },
     isApproval(content, paneId) {
@@ -886,7 +1123,7 @@ const genericDetector: AgentDetector = {
     return /❯|›|➜|\$\s*$|>\s*$|press enter|waiting|tab agents.*ctrl\+p/i.test(bottom);
   },
   isApproval(content) {
-    return /needs-approval|Allow .*—|Do you want to run|Allow this action|\(Y\/n\)|\(y\/N\)|↑↓ to select|↑↓ to navigate|△ Permission required|Allow once.*Allow always.*Reject/.test(content);
+    return /needs-approval|Allow .*—|Do you want to run|Would you like to run the following command\?|Allow this action|\(Y\/n\)|\(y\/N\)|↑↓ to select|↑↓ to navigate|△ Permission required|Allow once.*Allow always.*Reject|Press enter to confirm or esc to cancel/i.test(content);
   },
   isQuestion(content) {
     // Check if the last visible block of agent output contains a question
@@ -968,18 +1205,20 @@ async function detectStatus(
   tmuxPaneId?: string
 ): Promise<{ status: AgentStatus; detail?: string }> {
   const detector = getDetector(agent);
+  const captureTarget = tmuxPaneId || paneRef;
 
   const rawLines = await execAsync(
-    `tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`
+    `tmux capture-pane -t ${JSON.stringify(captureTarget)} -p -S -20 2>/dev/null`
   );
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
+  if (agent.toLowerCase() === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId);
 
   const dur = stateDuration(agent, tmuxPaneId);
 
   if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
 
-  // Check idle first — if the screen shows a prompt, the agent stopped
-  // (even if the hook state is stale from a missed Stop event, e.g. Ctrl-C).
+  // Hook-first detectors may still reach idle here after a separate stale-state
+  // cleanup pass converts a long-lived working hook into idle.
   if (detector.isIdle(content, title, tmuxPaneId)) {
     if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
     return { status: "idle" };
@@ -988,7 +1227,7 @@ async function detectStatus(
   if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
 
   const fullPane = await execAsync(
-    `tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`
+    `tmux capture-pane -t ${JSON.stringify(captureTarget)} -p 2>/dev/null`
   );
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
   if (isEmpty) return { status: "idle" };
@@ -1007,6 +1246,20 @@ export function scan(): AgentPane[] {
     return processZellijPanes(getMux().listPanes());
   }
   return scanSync();
+}
+
+export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
+  const filter = paneIds?.length ? new Set(paneIds) : null;
+  return scan()
+    .filter((agent) => !filter || filter.has(agent.tmuxPaneId))
+    .map((agent) => ({
+      session: agent.tmuxPaneId,
+      status: agent.status,
+      ...(agent.detail ? { detail: agent.detail } : {}),
+      ...(agent.context ? { context: agent.context } : {}),
+      ...(agent.contextTokens !== undefined ? { contextTokens: agent.contextTokens } : {}),
+      ...(agent.contextMax !== undefined ? { contextMax: agent.contextMax } : {}),
+    }));
 }
 
 // ── Zellij scan path ────────────────────────────────────────────────
@@ -1068,7 +1321,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
     const richDetail = stateDetail(agentName, p.id);
     const finalDetail = richDetail || detail;
-    const model = stateModel(agentName, p.id) || inferModelFromContent(agentName, content);
+    const modelInfo = resolveModelInfo(agentName, p.id, content);
     const tokenInfo = mergedContextTokens(agentName, p.id, content);
 
     results.push({
@@ -1079,7 +1332,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       agent: friendlyName(agentName),
       status,
       detail: finalDetail,
-      model,
+      ...modelInfo,
       windowId: paneRef,
       cwd: zellijCwd,
       branch: zellijBranch,
@@ -1216,10 +1469,10 @@ function scanSync(): AgentPane[] {
     const renamedTitle = p.agentName === "claude" ? getClaudeRenamedTitle(p.cwdRaw, externalSessionId) : undefined;
     const codexTitle = p.agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
     const inferenceContent = exec(`tmux capture-pane -t ${JSON.stringify(p.tmuxPaneId)} -p -S -20 2>/dev/null`);
-    const model = stateModel(p.agentName, p.tmuxPaneId) || inferModelFromContent(p.agentName, inferenceContent);
+    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, inferenceContent);
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, inferenceContent);
 
-    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, model, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId), ...tokenInfo } as AgentPane);
+    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, ...modelInfo, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId), ...tokenInfo } as AgentPane);
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
@@ -1250,25 +1503,32 @@ function findAgentOnTtySync(tty: string): string | null {
 }
 
 /** Agents with hook-based state reporting — detectors read state files, not pane content. */
-const HOOK_AGENTS = new Set(["claude", "copilot", "pi", "opencode"]);
+const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode"]);
 
 function detectStatusSync(paneRef: string, title: string, windowActivity: number, agent: string, tmuxPaneId?: string): { status: AgentStatus; detail?: string } {
   const detector = getDetector(agent);
   const dur = stateDuration(agent, tmuxPaneId);
+  const captureTarget = tmuxPaneId || paneRef;
 
-  // Hook-based agents: state comes from files, skip expensive capture-pane
+  // Hook-based agents trust reported state for live status. Codex still samples
+  // pane content here, but only for slow stale-working cleanup.
   if (HOOK_AGENTS.has(agent.toLowerCase())) {
-    if (detector.isApproval("", tmuxPaneId)) return { status: "attention", detail: dur };
-    if (detector.isIdle("", title, tmuxPaneId)) {
-      if (detector.isQuestion("", tmuxPaneId)) return { status: "question", detail: dur };
+    const needsContentCheck = agent.toLowerCase() === "codex";
+    const rawLines = needsContentCheck ? exec(`tmux capture-pane -t ${JSON.stringify(captureTarget)} -p -S -20 2>/dev/null`) : "";
+    const content = rawLines.replace(/\n{3,}/g, "\n\n");
+    if (agent.toLowerCase() === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId);
+
+    if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
+    if (detector.isIdle(content, title, tmuxPaneId)) {
+      if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
       return { status: "idle" };
     }
-    if (detector.isWorking("", title, tmuxPaneId)) return { status: "working", detail: dur };
+    if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
     return { status: "idle" };
   }
 
   // Generic (screen-scrape) agents: need pane content
-  const rawLines = exec(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p -S -20 2>/dev/null`);
+  const rawLines = exec(`tmux capture-pane -t ${JSON.stringify(captureTarget)} -p -S -20 2>/dev/null`);
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
 
   if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
@@ -1281,7 +1541,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
   if (detector.isWorking(content, title, tmuxPaneId)) return { status: "working", detail: dur };
 
   // Fallback: check if pane has any content at all
-  const fullPane = exec(`tmux capture-pane -t ${JSON.stringify(paneRef)} -p 2>/dev/null`);
+  const fullPane = exec(`tmux capture-pane -t ${JSON.stringify(captureTarget)} -p 2>/dev/null`);
   const isEmpty = fullPane.replace(/\s/g, "").length === 0;
   if (isEmpty) return { status: "idle" };
 
@@ -1335,10 +1595,10 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(cwdRaw, externalSessionId) : undefined;
     const codexTitle = agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
     const inferenceContent = await execAsync(`tmux capture-pane -t ${JSON.stringify(tmuxPaneId)} -p -S -20 2>/dev/null`);
-    const model = stateModel(agentName, tmuxPaneId) || inferModelFromContent(agentName, inferenceContent);
+    const modelInfo = resolveModelInfo(agentName, tmuxPaneId, inferenceContent);
     const tokenInfo = mergedContextTokens(agentName, tmuxPaneId, inferenceContent);
 
-    return { pane: paneShort, paneId, tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(agentName), status, detail: finalDetail, model, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...tokenInfo } as AgentPane;
+    return { pane: paneShort, paneId, tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(agentName), status, detail: finalDetail, ...modelInfo, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...tokenInfo } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);

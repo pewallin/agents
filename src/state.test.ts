@@ -10,6 +10,7 @@ import { tmpdir } from "os";
 // Since state.ts uses a hardcoded STATE_DIR, we test the exported
 // priority/filtering logic by constructing StateEntry arrays directly.
 
+import { clearContributorState, deriveModelDisplay, getAgentStateEntry, reportContributorState, reportState } from "./state.js";
 import type { StateEntry, ReportedState } from "./state.js";
 
 // Replicate the priority logic from getAgentState for unit testing
@@ -27,6 +28,23 @@ function filterBySession(entries: StateEntry[], session?: string): StateEntry[] 
   if (session) filtered = filtered.filter((e) => e.session === session);
   return filtered;
 }
+
+describe("deriveModelDisplay", () => {
+  it("prefers provider/modelId over label and legacy model", () => {
+    expect(deriveModelDisplay({
+      provider: "github-copilot",
+      modelId: "gpt-5.4",
+      modelLabel: "GPT-5.4",
+      model: "GPT-5.4",
+    })).toBe("github-copilot/gpt-5.4");
+  });
+
+  it("falls back from label to modelId to legacy model", () => {
+    expect(deriveModelDisplay({ modelLabel: "Claude Opus 4.6", modelId: "claude-opus-4-6", model: "Opus 4.6" })).toBe("Claude Opus 4.6");
+    expect(deriveModelDisplay({ modelId: "gpt-5-codex" })).toBe("gpt-5-codex");
+    expect(deriveModelDisplay({ model: "GPT-5.4" })).toBe("GPT-5.4");
+  });
+});
 
 describe("state priority logic", () => {
   const now = Math.floor(Date.now() / 1000);
@@ -97,5 +115,32 @@ describe("session filtering", () => {
     // Session %1 is working, even though aggregate has approval from %2
     const session1 = filterBySession(entries, "%1");
     expect(getStatePriority(session1)).toBe("working");
+  });
+});
+
+describe("contributor state overlays", () => {
+  const session = `%vitest-contrib-${Date.now()}`;
+
+  afterEach(() => {
+    clearContributorState("pi", session, "dustbot-sandbox");
+  });
+
+  it("elevates a primary state when a contributor reports approval", () => {
+    reportState("pi", session, "working");
+    reportContributorState("pi", session, "dustbot-sandbox", "approval", { detail: "sandbox approval" });
+
+    const entry = getAgentStateEntry("pi", session);
+    expect(entry?.state).toBe("approval");
+    expect(entry?.detail).toBe("sandbox approval");
+    expect(entry?.contextTokens).toBeUndefined();
+  });
+
+  it("clears contributor state when reporter returns to idle", () => {
+    reportState("pi", session, "working");
+    reportContributorState("pi", session, "dustbot-sandbox", "approval");
+    reportContributorState("pi", session, "dustbot-sandbox", "idle");
+
+    const entry = getAgentStateEntry("pi", session);
+    expect(entry?.state).toBe("working");
   });
 });

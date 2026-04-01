@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execSync } from "child_process";
+import type { ModelSource } from "./state.js";
 import { switchBack } from "./back.js";
 import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
 
@@ -118,9 +119,9 @@ const [
 const { Command } = commander;
 const React = reactMod.default;
 const { render } = ink;
-const { scan, getSessionHistory, inferContextFromContent, inferModelFromContent } = scanner;
-const { reportState, reportContext } = state;
-const { setup, uninstall, autoSetupIfNeeded } = setupMod;
+const { scan, runtimeStates, getSessionHistory, inferContextFromContent, inferModelMetadataFromContent } = scanner;
+const { reportState, reportContext, reportContributorState } = state;
+const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { Dashboard } = dashboardMod;
@@ -197,6 +198,24 @@ program
   });
 
 program
+  .command("runtime")
+  .description("Show reconciled runtime status for existing panes")
+  .option("--json", "Output as JSON")
+  .option("--pane <id>", "tmux pane ID to query", (value, prev: string[] = []) => [...prev, value], [])
+  .action((opts) => {
+    const states = runtimeStates(opts.pane);
+    if (opts.json || !process.stdout.isTTY) {
+      console.log(JSON.stringify(states, null, 2));
+      return;
+    }
+
+    for (const state of states) {
+      const detail = state.detail ? ` ${state.detail}` : "";
+      console.log(`${state.session} ${state.status}${detail}`);
+    }
+  });
+
+program
   .command("history")
   .description("Show persisted session history for supported agents")
   .option("--agent <name>", "Agent backend to query (currently codex)")
@@ -243,14 +262,20 @@ program
 program
   .command("report")
   .description("Report agent state (called by agent hooks)")
-  .requiredOption("--agent <name>", "Agent name (claude, copilot, pi)")
+  .requiredOption("--agent <name>", "Agent name (claude, copilot, pi, opencode, codex)")
   .option("--state <state>", "State: working, idle, approval, question")
   .option("--detail <text>", "Current activity detail (tool name, filename, etc.)")
-  .option("--model <name>", "Model currently selected for the agent")
+  .option("--model <name>", "Backward-compatible model display string")
+  .option("--provider <id>", "Model provider ID")
+  .option("--model-id <id>", "Canonical model ID")
+  .option("--model-label <label>", "Presentation label for the selected model")
+  .option("--model-source <source>", "Model source: hook, sdk, transcript, session-log, inferred")
   .option("--external-session-id <id>", "Underlying agent session ID, if different from the pane ID")
   .option("--context <text>", "Context description for this workspace")
   .option("--context-tokens <n>", "Current token usage in conversation", parseInt)
   .option("--context-max <n>", "Context window limit for the model", parseInt)
+  .option("--reporter <id>", "Auxiliary reporter identity for contributor state")
+  .option("--auxiliary", "Write an auxiliary contributor state instead of the primary session state")
   .option("--session <id>", "Session ID (reads from stdin if not provided)")
   .action(async (opts) => {
     let session = opts.session;
@@ -288,27 +313,59 @@ program
 
     const externalSessionId = opts.externalSessionId as string | undefined;
     let model = opts.model as string | undefined;
+    let provider = opts.provider as string | undefined;
+    let modelId = opts.modelId as string | undefined;
+    let modelLabel = opts.modelLabel as string | undefined;
+    let modelSource = opts.modelSource as string | undefined;
     let ctxTokens = isNaN(opts.contextTokens) ? undefined : opts.contextTokens;
     let ctxMax = isNaN(opts.contextMax) ? undefined : opts.contextMax;
-    if (muxKind === "tmux" && session?.startsWith("%") && (!model || ctxTokens === undefined || ctxMax === undefined)) {
+    if (muxKind === "tmux" && session?.startsWith("%") && (!model || !provider || !modelId || !modelLabel || ctxTokens === undefined || ctxMax === undefined)) {
       try {
         const paneTail = execSync(
           `tmux capture-pane -t ${session} -p -S -20 2>/dev/null`,
           { encoding: "utf-8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"] }
         ).trim();
-        if (!model) model = inferModelFromContent(opts.agent, paneTail);
+        const inferredModel = inferModelMetadataFromContent(opts.agent, paneTail);
+        if (!model) model = inferredModel.model;
+        if (!provider) provider = inferredModel.provider;
+        if (!modelId) modelId = inferredModel.modelId;
+        if (!modelLabel) modelLabel = inferredModel.modelLabel;
+        if (!modelSource) modelSource = inferredModel.modelSource;
         const inferredContext = inferContextFromContent(opts.agent, paneTail);
         if (ctxTokens === undefined) ctxTokens = inferredContext.contextTokens;
         if (ctxMax === undefined) ctxMax = inferredContext.contextMax;
       } catch {}
     }
+    if (opts.auxiliary && !opts.reporter) {
+      console.error("--auxiliary requires --reporter");
+      process.exit(1);
+    }
+
     if (opts.context && !opts.state) {
       // Context-only update — preserve existing state
-      reportContext(opts.agent, session, opts.context, wsSnapshot, ctxTokens, ctxMax, model, externalSessionId);
+      reportContext(opts.agent, session, opts.context, {
+        workspace: wsSnapshot,
+        contextTokens: ctxTokens,
+        contextMax: ctxMax,
+        model,
+        provider,
+        modelId,
+        modelLabel,
+        modelSource: modelSource as ModelSource | undefined,
+        externalSessionId,
+      });
+    } else if (opts.state && opts.auxiliary) {
+      reportContributorState(opts.agent, session, opts.reporter, opts.state, {
+        ...(opts.detail ? { detail: opts.detail } : {}),
+      });
     } else if (opts.state) {
       reportState(opts.agent, session, opts.state, {
         detail: opts.detail,
         model,
+        provider,
+        modelId,
+        modelLabel,
+        modelSource: modelSource as ModelSource | undefined,
         externalSessionId,
         context: opts.context,
         workspace: wsSnapshot,
@@ -360,7 +417,7 @@ program
 
 program
   .command("setup")
-  .description("Install agent hooks for Claude, Copilot, and Pi")
+  .description("Install or update supported agent integrations")
   .option("--quiet", "Suppress output (used by auto-setup)")
   .action((opts) => {
     const results = setup(opts.quiet);
@@ -382,6 +439,26 @@ program
       const icon = r.action === "uninstalled" ? "✓" : "–";
       const detail = r.detail ? ` (${r.detail})` : "";
       console.log(`  ${icon} ${r.agent}: ${r.action}${detail}`);
+    }
+  });
+
+program
+  .command("doctor")
+  .description("Inspect integration coverage and installation status for supported agents")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const results = doctor();
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+
+    for (const result of results) {
+      const detail = result.detail ? ` (${result.detail})` : "";
+      console.log(`${result.agent}  ${result.status}  ${result.installMethod}${detail}`);
+      console.log(`  events: ${result.installedEvents.length ? result.installedEvents.join(", ") : "none"}`);
+      console.log(`  missing lifecycle: ${result.missingLifecycle.length ? result.missingLifecycle.join(", ") : "none"}`);
+      console.log(`  missing metadata: ${result.missingMetadata.length ? result.missingMetadata.join(", ") : "none"}`);
     }
   });
 
