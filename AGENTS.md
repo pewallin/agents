@@ -2,6 +2,16 @@
 
 A CLI tool that monitors AI agent panes across tmux (and soon zellij) sessions, providing a live dashboard with status tracking, preview, grid view, and workspace management.
 
+## Active Workstreams
+
+This repo may be worked on in parallel with `/Users/peter/code/agents-app`.
+
+For current cross-repo workstream ownership, tmux pane mapping, and temporary write boundaries, see:
+- `/Users/peter/code/agents-app/WORKSTREAMS.md`
+
+Treat that file as temporary execution coordination only.
+Treat this file and each repo's roadmap/docs as the longer-lived guidance for the codebase itself.
+
 ## Quick start
 
 ```bash

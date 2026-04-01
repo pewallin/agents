@@ -3,10 +3,10 @@ import { tmpdir, homedir } from "os";
 import { basename, join } from "path";
 import { createHash } from "crypto";
 import { exec, execAsync } from "./shell.js";
-import { deriveModelDisplay, getAgentState, getAgentStateEntry, recordCleanupObservation, reportState } from "./state.js";
+import { deriveModelDisplay, getAgentState, getAgentStateEntry, getAgentStateProvenance, readStateSnapshot, recordCleanupObservation, reportState, upsertStateSnapshotEntry } from "./state.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { BACK_ENV, switchBack } from "./back.js";
-import type { ModelMetadata, ModelSource } from "./state.js";
+import type { ModelMetadata, ModelSource, StateSnapshot } from "./state.js";
 import type { MuxPaneInfo } from "./multiplexer.js";
 
 export type AgentStatus = "attention" | "question" | "working" | "stalled" | "idle";
@@ -30,15 +30,26 @@ export interface AgentPane {
   context?: string;    // workspace context description from state file
   contextTokens?: number;
   contextMax?: number;
+  stateSource?: "primary" | "contributor";
+  primaryState?: string;
+  auxiliaryReporters?: string[];
 }
 
 export interface AgentRuntimeState {
   session: string;
   status: AgentStatus;
   detail?: string;
+  provider?: string;
+  modelId?: string;
+  modelLabel?: string;
+  modelSource?: ModelSource;
+  model?: string;
   context?: string;
   contextTokens?: number;
   contextMax?: number;
+  stateSource?: "primary" | "contributor";
+  primaryState?: string;
+  auxiliaryReporters?: string[];
 }
 
 export interface AgentSessionHistoryItem {
@@ -99,16 +110,16 @@ function formatDuration(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h${Math.floor((seconds % 3600) / 60)}m`;
 }
 
-function stateDuration(agent: string, paneId?: string): string | undefined {
-  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+function stateDuration(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   if (!entry) return undefined;
   const age = Math.floor(Date.now() / 1000) - entry.ts;
   return age >= 1 ? formatDuration(age) : undefined;
 }
 
-export function shouldTreatCodexWorkingAsIdle(content: string, title: string, paneId?: string): boolean {
+export function shouldTreatCodexWorkingAsIdle(content: string, title: string, paneId?: string, snapshot?: StateSnapshot): boolean {
   if (!paneId) return false;
-  const entry = getAgentStateEntry("codex", paneId);
+  const entry = getAgentStateEntry("codex", paneId, snapshot);
   if (entry?.state === "working") {
     const age = Math.floor(Date.now() / 1000) - entry.ts;
     if (age < CODEX_STALE_WORKING_MIN_AGE_SECONDS) return false;
@@ -129,22 +140,25 @@ function cleanupContentHash(content: string): string {
   return createHash("sha1").update(content).digest("hex");
 }
 
-export function reconcileStaleCodexWorkingState(content: string, title: string, paneId?: string): void {
+export function reconcileStaleCodexWorkingState(content: string, title: string, paneId?: string, snapshot?: StateSnapshot): void {
   if (!paneId) return;
-  const entry = getAgentStateEntry("codex", paneId);
+  const entry = getAgentStateEntry("codex", paneId, snapshot);
   if (!entry || entry.state !== "working") {
-    recordCleanupObservation("codex", paneId, null);
+    const updated = recordCleanupObservation("codex", paneId, null);
+    if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
     return;
   }
 
-  if (!shouldTreatCodexWorkingAsIdle(content, title, paneId)) {
-    recordCleanupObservation("codex", paneId, null);
+  if (!shouldTreatCodexWorkingAsIdle(content, title, paneId, snapshot)) {
+    const updated = recordCleanupObservation("codex", paneId, null);
+    if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
     return;
   }
 
   const normalized = normalizeCleanupContent(content);
   if (!normalized) {
-    recordCleanupObservation("codex", paneId, null);
+    const updated = recordCleanupObservation("codex", paneId, null);
+    if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
     return;
   }
 
@@ -163,7 +177,7 @@ export function reconcileStaleCodexWorkingState(content: string, title: string, 
     : 1;
 
   if (unchangedSamples >= CODEX_STALE_WORKING_REQUIRED_SAMPLES) {
-    reportState("codex", paneId, "idle", {
+    const updated = reportState("codex", paneId, "idle", {
       ...(entry.provider ? { provider: entry.provider } : {}),
       ...(entry.modelId ? { modelId: entry.modelId } : {}),
       ...(entry.modelLabel ? { modelLabel: entry.modelLabel } : {}),
@@ -175,33 +189,35 @@ export function reconcileStaleCodexWorkingState(content: string, title: string, 
       ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
       ...(entry.contextMax !== undefined ? { contextMax: entry.contextMax } : {}),
     });
+    if (snapshot) upsertStateSnapshotEntry(snapshot, updated);
     return;
   }
 
-  recordCleanupObservation("codex", paneId, {
+  const updated = recordCleanupObservation("codex", paneId, {
     contentHash: nextHash,
     observedAt: now,
     unchangedSamples,
   });
+  if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
 }
 
-function stateDetail(agent: string, paneId?: string): string | undefined {
-  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+function stateDetail(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   return entry?.detail;
 }
 
-function stateContext(agent: string, paneId?: string): string | undefined {
-  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+function stateContext(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   return entry?.context;
 }
 
-function stateWorkspaceCwd(agent: string, paneId?: string): string | undefined {
-  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+function stateWorkspaceCwd(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   return entry?.workspace?.cwd;
 }
 
-function stateTokens(agent: string, paneId?: string): { contextTokens?: number; contextMax?: number } {
-  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+function stateTokens(agent: string, paneId?: string, snapshot?: StateSnapshot): { contextTokens?: number; contextMax?: number } {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   if (!entry) return {};
   return {
     ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
@@ -209,8 +225,8 @@ function stateTokens(agent: string, paneId?: string): { contextTokens?: number; 
   };
 }
 
-function mergedContextTokens(agent: string, paneId: string | undefined, content: string): { contextTokens?: number; contextMax?: number } {
-  const stored = stateTokens(agent, paneId);
+function mergedContextTokens(agent: string, paneId: string | undefined, content: string, snapshot?: StateSnapshot): { contextTokens?: number; contextMax?: number } {
+  const stored = stateTokens(agent, paneId, snapshot);
   const inferred = inferContextFromContent(agent, content);
 
   if (agent.toLowerCase() === "codex") {
@@ -237,8 +253,8 @@ function normalizeModelMetadata(meta: ModelMetadata): ModelMetadata {
   };
 }
 
-function stateModelInfo(agent: string, paneId?: string): ModelMetadata {
-  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+function stateModelInfo(agent: string, paneId?: string, snapshot?: StateSnapshot): ModelMetadata {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   if (!entry) return {};
   return normalizeModelMetadata({
     provider: entry.provider,
@@ -253,9 +269,20 @@ function hasResolvedModel(meta: ModelMetadata): boolean {
   return !!deriveModelDisplay(meta);
 }
 
-function stateExternalSessionId(agent: string, paneId?: string): string | undefined {
-  const entry = paneId ? getAgentStateEntry(agent, paneId) : null;
+function stateExternalSessionId(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   return entry?.externalSessionId;
+}
+
+function stateProvenance(agent: string, paneId?: string, snapshot?: StateSnapshot): Pick<AgentRuntimeState, "stateSource" | "primaryState" | "auxiliaryReporters"> {
+  if (!paneId) return {};
+  const provenance = getAgentStateProvenance(agent, paneId, snapshot);
+  if (!provenance) return {};
+  return {
+    stateSource: provenance.source,
+    ...(provenance.source === "contributor" && provenance.primary ? { primaryState: provenance.primary.state } : {}),
+    ...(provenance.contributors.length ? { auxiliaryReporters: provenance.contributors.map((entry) => entry.reporter) } : {}),
+  };
 }
 
 function normalizeProcessToken(token: string): string {
@@ -411,8 +438,8 @@ export function inferModelMetadataFromContent(agent: string, content: string): M
   }
 }
 
-function resolveModelInfo(agent: string, paneId: string | undefined, content: string): ModelMetadata {
-  const stored = stateModelInfo(agent, paneId);
+function resolveModelInfo(agent: string, paneId: string | undefined, content: string, snapshot?: StateSnapshot): ModelMetadata {
+  const stored = stateModelInfo(agent, paneId, snapshot);
   if (hasResolvedModel(stored)) return stored;
 
   const inferred = inferModelMetadataFromContent(agent, content);
@@ -425,6 +452,25 @@ function resolveModelInfo(agent: string, paneId: string | undefined, content: st
     modelSource: stored.modelSource ?? inferred.modelSource,
     model: stored.model ?? inferred.model,
   });
+}
+
+function runtimeStateFromAgent(agent: AgentPane): AgentRuntimeState {
+  return {
+    session: agent.tmuxPaneId,
+    status: agent.status,
+    ...(agent.detail ? { detail: agent.detail } : {}),
+    ...(agent.provider ? { provider: agent.provider } : {}),
+    ...(agent.modelId ? { modelId: agent.modelId } : {}),
+    ...(agent.modelLabel ? { modelLabel: agent.modelLabel } : {}),
+    ...(agent.modelSource ? { modelSource: agent.modelSource } : {}),
+    ...(agent.model ? { model: agent.model } : {}),
+    ...(agent.context ? { context: agent.context } : {}),
+    ...(agent.contextTokens !== undefined ? { contextTokens: agent.contextTokens } : {}),
+    ...(agent.contextMax !== undefined ? { contextMax: agent.contextMax } : {}),
+    ...(agent.stateSource ? { stateSource: agent.stateSource } : {}),
+    ...(agent.primaryState ? { primaryState: agent.primaryState } : {}),
+    ...(agent.auxiliaryReporters?.length ? { auxiliaryReporters: agent.auxiliaryReporters } : {}),
+  };
 }
 
 export function inferModelFromContent(agent: string, content: string): string | undefined {
@@ -962,6 +1008,7 @@ function collectHistoryTargets(agentFilter?: string, cwdOverride?: string): Map<
   const agents = ["claude", "codex", "copilot", "opencode", "pi", "cursor"];
   const wantedAgents = agentFilter ? agents.filter((agent) => agent === agentFilter) : agents;
   const targets = new Map<string, HistoryTarget[]>();
+  const stateSnapshot = readStateSnapshot();
 
   const addTarget = (agent: string, target: HistoryTarget) => {
     if (!wantedAgents.includes(agent)) return;
@@ -978,13 +1025,13 @@ function collectHistoryTargets(agentFilter?: string, cwdOverride?: string): Map<
 
   for (const pane of scan()) {
     const agent = pane.agent.toLowerCase();
-    const cwdRaw = stateWorkspaceCwd(agent, pane.tmuxPaneId) || expandHomePath(pane.cwd);
+    const cwdRaw = stateWorkspaceCwd(agent, pane.tmuxPaneId, stateSnapshot) || expandHomePath(pane.cwd);
     if (!cwdRaw) continue;
     addTarget(agent, {
       cwdRaw,
       pane: pane.pane,
       tmuxPaneId: pane.tmuxPaneId,
-      currentSessionId: stateExternalSessionId(agent, pane.tmuxPaneId),
+      currentSessionId: stateExternalSessionId(agent, pane.tmuxPaneId, stateSnapshot),
     });
   }
 
@@ -1064,41 +1111,41 @@ function isCodexApprovalPending(paneId?: string): boolean {
   return latestCodexOps().get(externalSessionId) === "exec_approval";
 }
 
-function makeHookDetector(agentName: string): AgentDetector {
+function makeHookDetector(agentName: string, snapshot?: StateSnapshot): AgentDetector {
   return {
-    isWorking(_c, _t, paneId) { return paneId ? getAgentState(agentName, paneId) === "working" : false; },
+    isWorking(_c, _t, paneId) { return paneId ? getAgentState(agentName, paneId, snapshot) === "working" : false; },
     isIdle(_c, _t, paneId) {
       if (!paneId) return true;
-      const s = getAgentState(agentName, paneId);
+      const s = getAgentState(agentName, paneId, snapshot);
       return s === "idle" || s === "question" || s === null;
     },
-    isApproval(_c, paneId) { return paneId ? getAgentState(agentName, paneId) === "approval" : false; },
-    isQuestion(_content, paneId) { return paneId ? getAgentState(agentName, paneId) === "question" : false; },
+    isApproval(_c, paneId) { return paneId ? getAgentState(agentName, paneId, snapshot) === "approval" : false; },
+    isQuestion(_content, paneId) { return paneId ? getAgentState(agentName, paneId, snapshot) === "question" : false; },
   };
 }
 
-function makeHookFirstDetector(agentName: string): AgentDetector {
+function makeHookFirstDetector(agentName: string, snapshot?: StateSnapshot): AgentDetector {
   return {
     isWorking(_content, _title, paneId) {
-      const s = paneId ? getAgentState(agentName, paneId) : null;
+      const s = paneId ? getAgentState(agentName, paneId, snapshot) : null;
       if (s === "working") return true;
       if (s === "approval" || s === "question" || s === "idle") return false;
       return genericDetector.isWorking(_content, _title, paneId);
     },
     isIdle(content, title, paneId) {
-      const s = paneId ? getAgentState(agentName, paneId) : null;
+      const s = paneId ? getAgentState(agentName, paneId, snapshot) : null;
       if (s !== null) {
         return s === "idle" || s === "question";
       }
       return genericDetector.isIdle(content, title, paneId);
     },
     isApproval(content, paneId) {
-      return (paneId ? getAgentState(agentName, paneId) === "approval" : false)
+      return (paneId ? getAgentState(agentName, paneId, snapshot) === "approval" : false)
         || (agentName === "codex" && isCodexApprovalPending(paneId))
         || genericDetector.isApproval(content, paneId);
     },
     isQuestion(content, paneId) {
-      const s = paneId ? getAgentState(agentName, paneId) : null;
+      const s = paneId ? getAgentState(agentName, paneId, snapshot) : null;
       if (s !== null) return s === "question";
       if (agentName === "codex") return false;
       return genericDetector.isQuestion(content, paneId);
@@ -1133,13 +1180,13 @@ const genericDetector: AgentDetector = {
   },
 };
 
-export function getDetector(agent: string): AgentDetector {
+export function getDetector(agent: string, snapshot?: StateSnapshot): AgentDetector {
   switch (agent.toLowerCase()) {
-    case "claude":   return claudeDetector;
-    case "codex":    return codexDetector;
-    case "copilot":  return copilotDetector;
-    case "pi":       return piDetector;
-    case "opencode": return opencodeDetector;
+    case "claude":   return snapshot ? makeHookDetector("claude", snapshot) : claudeDetector;
+    case "codex":    return snapshot ? makeHookFirstDetector("codex", snapshot) : codexDetector;
+    case "copilot":  return snapshot ? makeHookDetector("copilot", snapshot) : copilotDetector;
+    case "pi":       return snapshot ? makeHookDetector("pi", snapshot) : piDetector;
+    case "opencode": return snapshot ? makeHookDetector("opencode", snapshot) : opencodeDetector;
     default:          return genericDetector;  // cursor, etc.
   }
 }
@@ -1172,48 +1219,24 @@ function friendlyName(name: string): string {
   return FRIENDLY_NAMES[name] ?? name;
 }
 
-async function findLeafProcess(pid: string): Promise<string> {
-  let leaf = pid;
-  for (;;) {
-    const child = await execAsync(`pgrep -P ${leaf} 2>/dev/null | head -1`);
-    if (!child) break;
-    // Check if current child is an agent before walking deeper —
-    // agents like claude spawn sub-processes (e.g. pi) that would
-    // incorrectly win if we always walk to the true leaf.
-    const agent = detectAgentProcess("", await execAsync(`ps -p ${child} -o args= 2>/dev/null`));
-    if (agent) return agent;
-    leaf = child;
-  }
-  return detectAgentProcess("", await execAsync(`ps -p ${leaf} -o args= 2>/dev/null`)) || "";
-}
-
-async function findAgentOnTty(tty: string): Promise<string | null> {
-  const ttyShort = tty.replace(/^\/dev\//, "");
-  const procs = await execAsync(`ps -o args= -t ${ttyShort} 2>/dev/null`);
-  for (const line of procs.split("\n")) {
-    const agent = detectAgentProcess("", line);
-    if (agent) return agent;
-  }
-  return null;
-}
-
 async function detectStatus(
   paneRef: string,
   title: string,
   windowActivity: number,
   agent: string,
-  tmuxPaneId?: string
+  tmuxPaneId?: string,
+  snapshot?: StateSnapshot,
 ): Promise<{ status: AgentStatus; detail?: string }> {
-  const detector = getDetector(agent);
+  const detector = getDetector(agent, snapshot);
   const captureTarget = tmuxPaneId || paneRef;
 
   const rawLines = await execAsync(
     `tmux capture-pane -t ${JSON.stringify(captureTarget)} -p -S -20 2>/dev/null`
   );
   const content = rawLines.replace(/\n{3,}/g, "\n\n");
-  if (agent.toLowerCase() === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId);
+  if (agent.toLowerCase() === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId, snapshot);
 
-  const dur = stateDuration(agent, tmuxPaneId);
+  const dur = stateDuration(agent, tmuxPaneId, snapshot);
 
   if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
 
@@ -1249,17 +1272,76 @@ export function scan(): AgentPane[] {
 }
 
 export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
-  const filter = paneIds?.length ? new Set(paneIds) : null;
-  return scan()
-    .filter((agent) => !filter || filter.has(agent.tmuxPaneId))
-    .map((agent) => ({
-      session: agent.tmuxPaneId,
-      status: agent.status,
-      ...(agent.detail ? { detail: agent.detail } : {}),
-      ...(agent.context ? { context: agent.context } : {}),
-      ...(agent.contextTokens !== undefined ? { contextTokens: agent.contextTokens } : {}),
-      ...(agent.contextMax !== undefined ? { contextMax: agent.contextMax } : {}),
-    }));
+  if (!paneIds?.length) {
+    return scan().map(runtimeStateFromAgent);
+  }
+
+  if (detectMultiplexer() === "zellij") {
+    const filter = new Set(paneIds);
+    return processZellijPanes(getMux().listPanes())
+      .filter((agent) => filter.has(agent.tmuxPaneId))
+      .map(runtimeStateFromAgent);
+  }
+
+  const raw = exec(
+    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
+  );
+  if (!raw) return [];
+
+  const paneSet = new Set(paneIds);
+  const paneOrder = new Map(paneIds.map((paneId, index) => [paneId, index]));
+  const tree = buildProcessTree();
+  const stateSnapshot = readStateSnapshot();
+  const results: AgentRuntimeState[] = [];
+
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, _paneId, tmuxPaneId] = line.split("§");
+    if (!paneSet.has(tmuxPaneId)) continue;
+
+    const session = pane.split(":")[0];
+    if (session.startsWith("_agents_")) continue;
+
+    const pidNum = parseInt(pid, 10) || 0;
+    const leafCmd = findLeafInTree(pidNum, tree);
+    let agentName: string | null = leafCmd || null;
+    if (!agentName && tty) {
+      agentName = findAgentOnTtyInTree(tty, tree);
+    }
+    if (!agentName) continue;
+
+    const resolvedTitle = isTitleUseful(title) ? title : winname || title;
+    const wact = parseInt(wactStr, 10) || 0;
+    const { status, detail } = detectStatusSync(pane, resolvedTitle, wact, agentName, tmuxPaneId, stateSnapshot);
+    const richDetail = stateDetail(agentName, tmuxPaneId, stateSnapshot);
+    const context = stateContext(agentName, tmuxPaneId, stateSnapshot);
+    const provenance = stateProvenance(agentName, tmuxPaneId, stateSnapshot);
+    const storedTokens = stateTokens(agentName, tmuxPaneId, stateSnapshot);
+    const inferenceContent = exec(`tmux capture-pane -t ${JSON.stringify(tmuxPaneId)} -p -S -20 2>/dev/null`);
+    const modelInfo = resolveModelInfo(agentName, tmuxPaneId, inferenceContent, stateSnapshot);
+    const tokenInfo = storedTokens.contextTokens !== undefined || storedTokens.contextMax !== undefined
+      ? storedTokens
+      : mergedContextTokens(
+        agentName,
+        tmuxPaneId,
+        inferenceContent,
+        stateSnapshot,
+      );
+
+    results.push({
+      session: tmuxPaneId,
+      status,
+      ...(richDetail || detail ? { detail: richDetail || detail } : {}),
+      ...modelInfo,
+      ...(context ? { context } : {}),
+      ...(tokenInfo.contextTokens !== undefined ? { contextTokens: tokenInfo.contextTokens } : {}),
+      ...(tokenInfo.contextMax !== undefined ? { contextMax: tokenInfo.contextMax } : {}),
+      ...provenance,
+    });
+  }
+
+  results.sort((a, b) => (paneOrder.get(a.session) ?? Number.MAX_SAFE_INTEGER) - (paneOrder.get(b.session) ?? Number.MAX_SAFE_INTEGER));
+  return results;
 }
 
 // ── Zellij scan path ────────────────────────────────────────────────
@@ -1268,6 +1350,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
 function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
   const mux = getMux();
   const results: AgentPane[] = [];
+  const stateSnapshot = readStateSnapshot();
 
   for (const p of panes) {
     let agentName: string | null = null;
@@ -1291,8 +1374,8 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     if (!agentName) continue;
 
     const content = mux.getPaneContent(p.id, 20);
-    const detector = getDetector(agentName);
-    const dur = stateDuration(agentName, p.id);
+    const detector = getDetector(agentName, stateSnapshot);
+    const dur = stateDuration(agentName, p.id, stateSnapshot);
 
     let status: AgentStatus;
     let detail: string | undefined = dur;
@@ -1313,16 +1396,17 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const titleClean = cleanTitle(p.title);
 
     const zellijCwd = p.cwd?.replace(homedir(), "~") || undefined;
-    const externalSessionId = stateExternalSessionId(agentName, p.id);
+    const externalSessionId = stateExternalSessionId(agentName, p.id, stateSnapshot);
     const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(p.cwd, externalSessionId) : undefined;
     const codexTitle = agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
     const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
-    const richDetail = stateDetail(agentName, p.id);
+    const richDetail = stateDetail(agentName, p.id, stateSnapshot);
     const finalDetail = richDetail || detail;
-    const modelInfo = resolveModelInfo(agentName, p.id, content);
-    const tokenInfo = mergedContextTokens(agentName, p.id, content);
+    const modelInfo = resolveModelInfo(agentName, p.id, content, stateSnapshot);
+    const tokenInfo = mergedContextTokens(agentName, p.id, content, stateSnapshot);
+    const provenance = stateProvenance(agentName, p.id, stateSnapshot);
 
     results.push({
       pane: paneRef,
@@ -1336,8 +1420,9 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       windowId: paneRef,
       cwd: zellijCwd,
       branch: zellijBranch,
-      context: stateContext(agentName, p.id),
+      context: stateContext(agentName, p.id, stateSnapshot),
       ...tokenInfo,
+      ...provenance,
     });
   }
 
@@ -1353,6 +1438,37 @@ interface ProcEntry { pid: number; ppid: number; comm: string; tty: string; args
 
 function buildProcessTree(): { byPid: Map<number, ProcEntry>; children: Map<number, number[]>; byTty: Map<string, ProcEntry[]> } {
   const raw = exec("ps -eo pid=,ppid=,comm=,tty=,args= 2>/dev/null");
+  const byPid = new Map<number, ProcEntry>();
+  const children = new Map<number, number[]>();
+  const byTty = new Map<string, ProcEntry[]>();
+
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/);
+    if (!match) continue;
+    const entry: ProcEntry = {
+      pid: parseInt(match[1]),
+      ppid: parseInt(match[2]),
+      comm: match[3].replace(/.*\//, ""),
+      tty: match[4],
+      args: match[5] || "",
+    };
+    byPid.set(entry.pid, entry);
+    const siblings = children.get(entry.ppid);
+    if (siblings) siblings.push(entry.pid);
+    else children.set(entry.ppid, [entry.pid]);
+    if (entry.tty !== "??" && entry.tty !== "?") {
+      const list = byTty.get(entry.tty);
+      if (list) list.push(entry);
+      else byTty.set(entry.tty, [entry]);
+    }
+  }
+  return { byPid, children, byTty };
+}
+
+async function buildProcessTreeAsync(): Promise<{ byPid: Map<number, ProcEntry>; children: Map<number, number[]>; byTty: Map<string, ProcEntry[]> }> {
+  const raw = await execAsync("ps -eo pid=,ppid=,comm=,tty=,args= 2>/dev/null");
   const byPid = new Map<number, ProcEntry>();
   const children = new Map<number, number[]>();
   const byTty = new Map<string, ProcEntry[]>();
@@ -1408,6 +1524,32 @@ function findAgentOnTtyInTree(tty: string, tree: { byTty: Map<string, ProcEntry[
   return null;
 }
 
+function buildBranchCache(uniqueCwds: Set<string>): Map<string, string | undefined> {
+  const branchCache = new Map<string, string | undefined>();
+  if (uniqueCwds.size === 0) return branchCache;
+
+  const cwdArr = [...uniqueCwds];
+  const script = cwdArr.map(d => `git -C ${JSON.stringify(d)} rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""`).join("\n");
+  const branches = exec(`bash -c ${JSON.stringify(script)}`).split("\n");
+  for (let i = 0; i < cwdArr.length; i++) {
+    branchCache.set(cwdArr[i], branches[i] || undefined);
+  }
+  return branchCache;
+}
+
+async function buildBranchCacheAsync(uniqueCwds: Set<string>): Promise<Map<string, string | undefined>> {
+  const branchCache = new Map<string, string | undefined>();
+  if (uniqueCwds.size === 0) return branchCache;
+
+  const cwdArr = [...uniqueCwds];
+  const script = cwdArr.map(d => `git -C ${JSON.stringify(d)} rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""`).join("\n");
+  const branches = (await execAsync(`bash -c ${JSON.stringify(script)}`)).split("\n");
+  for (let i = 0; i < cwdArr.length; i++) {
+    branchCache.set(cwdArr[i], branches[i] || undefined);
+  }
+  return branchCache;
+}
+
 function scanSync(): AgentPane[] {
   const raw = exec(
     `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
@@ -1416,6 +1558,7 @@ function scanSync(): AgentPane[] {
 
   // Build process tree once — replaces per-pane pgrep/ps calls
   const tree = buildProcessTree();
+  const stateSnapshot = readStateSnapshot();
   // Pass 1: identify agent panes and collect unique cwds
   type ParsedPane = { pane: string; pid: string; title: string; wactStr: string; tty: string; paneId: string; tmuxPaneId: string; cwdRaw: string; agentName: string };
   const agentPanes: ParsedPane[] = [];
@@ -1444,42 +1587,35 @@ function scanSync(): AgentPane[] {
   }
 
   // Batch git branch lookup — single shell invocation for all unique cwds
-  const branchCache = new Map<string, string | undefined>();
-  if (uniqueCwds.size > 0) {
-    const cwdArr = [...uniqueCwds];
-    const script = cwdArr.map(d => `git -C ${JSON.stringify(d)} rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""`).join("\n");
-    const branches = exec(`bash -c ${JSON.stringify(script)}`).split("\n");
-    for (let i = 0; i < cwdArr.length; i++) {
-      branchCache.set(cwdArr[i], branches[i] || undefined);
-    }
-  }
+  const branchCache = buildBranchCache(uniqueCwds);
 
   // Pass 2: detect status and build results
   const results: AgentPane[] = [];
   for (const p of agentPanes) {
     const wact = parseInt(p.wactStr, 10) || 0;
-    const { status, detail } = detectStatusSync(p.pane, p.title, wact, p.agentName, p.tmuxPaneId);
-    const richDetail = stateDetail(p.agentName, p.tmuxPaneId);
+    const { status, detail } = detectStatusSync(p.pane, p.title, wact, p.agentName, p.tmuxPaneId, stateSnapshot);
+    const richDetail = stateDetail(p.agentName, p.tmuxPaneId, stateSnapshot);
     const finalDetail = richDetail || detail;
     const paneShort = p.pane.replace(/\.\d+$/, "");
     const titleClean = cleanTitle(p.title);
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
-    const externalSessionId = stateExternalSessionId(p.agentName, p.tmuxPaneId);
+    const externalSessionId = stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
     const renamedTitle = p.agentName === "claude" ? getClaudeRenamedTitle(p.cwdRaw, externalSessionId) : undefined;
     const codexTitle = p.agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
     const inferenceContent = exec(`tmux capture-pane -t ${JSON.stringify(p.tmuxPaneId)} -p -S -20 2>/dev/null`);
-    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, inferenceContent);
-    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, inferenceContent);
+    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, inferenceContent, stateSnapshot);
+    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, inferenceContent, stateSnapshot);
+    const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
 
-    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, ...modelInfo, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId), ...tokenInfo } as AgentPane);
+    results.push({ pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, ...modelInfo, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId, stateSnapshot), ...tokenInfo, ...provenance } as AgentPane);
   }
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
   return results;
 }
 
-// Legacy per-process helpers — kept for async scan path
+// Legacy per-process helpers — retained for non-batched fallback paths
 function findLeafProcessSync(pid: string): string {
   let leaf = pid;
   for (;;) {
@@ -1492,22 +1628,12 @@ function findLeafProcessSync(pid: string): string {
   return detectAgentProcess("", exec(`ps -p ${leaf} -o args= 2>/dev/null`)) || "";
 }
 
-function findAgentOnTtySync(tty: string): string | null {
-  const ttyShort = tty.replace(/^\/dev\//, "");
-  const procs = exec(`ps -o args= -t ${ttyShort} 2>/dev/null`);
-  for (const line of procs.split("\n")) {
-    const agent = detectAgentProcess("", line);
-    if (agent) return agent;
-  }
-  return null;
-}
-
 /** Agents with hook-based state reporting — detectors read state files, not pane content. */
 const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode"]);
 
-function detectStatusSync(paneRef: string, title: string, windowActivity: number, agent: string, tmuxPaneId?: string): { status: AgentStatus; detail?: string } {
-  const detector = getDetector(agent);
-  const dur = stateDuration(agent, tmuxPaneId);
+function detectStatusSync(paneRef: string, title: string, windowActivity: number, agent: string, tmuxPaneId?: string, snapshot?: StateSnapshot): { status: AgentStatus; detail?: string } {
+  const detector = getDetector(agent, snapshot);
+  const dur = stateDuration(agent, tmuxPaneId, snapshot);
   const captureTarget = tmuxPaneId || paneRef;
 
   // Hook-based agents trust reported state for live status. Codex still samples
@@ -1516,7 +1642,7 @@ function detectStatusSync(paneRef: string, title: string, windowActivity: number
     const needsContentCheck = agent.toLowerCase() === "codex";
     const rawLines = needsContentCheck ? exec(`tmux capture-pane -t ${JSON.stringify(captureTarget)} -p -S -20 2>/dev/null`) : "";
     const content = rawLines.replace(/\n{3,}/g, "\n\n");
-    if (agent.toLowerCase() === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId);
+    if (agent.toLowerCase() === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId, snapshot);
 
     if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
     if (detector.isIdle(content, title, tmuxPaneId)) {
@@ -1565,40 +1691,50 @@ export async function scanAsync(): Promise<AgentPane[]> {
   if (!raw) return [];
 
   const lines = raw.split("\n").filter(Boolean);
+  const tree = await buildProcessTreeAsync();
+  const stateSnapshot = readStateSnapshot();
+  type ParsedPane = { pane: string; title: string; wactStr: string; paneId: string; tmuxPaneId: string; cwdRaw: string; agentName: string };
+  const agentPanes: ParsedPane[] = [];
+  const uniqueCwds = new Set<string>();
 
-  // Process all panes concurrently (skip Agents app linked sessions)
-  const promises = lines.filter(line => {
-    const session = line.split("§")[0].split(":")[0];
-    return !session.startsWith("_agents_");
-  }).map(async (line) => {
+  for (const line of lines) {
     const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
+    const session = pane.split(":")[0];
+    if (session.startsWith("_agents_")) continue;
 
-    const leafCmd = await findLeafProcess(pid);
+    const pidNum = parseInt(pid, 10) || 0;
+    const leafCmd = findLeafInTree(pidNum, tree);
     let agentName: string | null = leafCmd || null;
     if (!agentName && tty) {
-      agentName = await findAgentOnTty(tty);
+      agentName = findAgentOnTtyInTree(tty, tree);
     }
-    if (!agentName) return null;
+    if (!agentName) continue;
 
-    // Use window_name as fallback when pane_title is unhelpful
     const resolvedTitle = isTitleUseful(title) ? title : winname || title;
-    const wact = parseInt(wactStr, 10) || 0;
-    const { status, detail } = await detectStatus(pane, resolvedTitle, wact, agentName, tmuxPaneId);
-    // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
-    const richDetail = stateDetail(agentName, tmuxPaneId);
-    const finalDetail = richDetail || detail;
-    const paneShort = pane.replace(/\.\d+$/, "");
-    const titleClean = cleanTitle(resolvedTitle);
-    const cwd = cwdRaw?.replace(homedir(), "~") || undefined;
-    const branch = cwdRaw ? (await execAsync(`git -C ${JSON.stringify(cwdRaw)} rev-parse --abbrev-ref HEAD 2>/dev/null`))?.trim() || undefined : undefined;
-    const externalSessionId = stateExternalSessionId(agentName, tmuxPaneId);
-    const renamedTitle = agentName === "claude" ? getClaudeRenamedTitle(cwdRaw, externalSessionId) : undefined;
-    const codexTitle = agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
-    const inferenceContent = await execAsync(`tmux capture-pane -t ${JSON.stringify(tmuxPaneId)} -p -S -20 2>/dev/null`);
-    const modelInfo = resolveModelInfo(agentName, tmuxPaneId, inferenceContent);
-    const tokenInfo = mergedContextTokens(agentName, tmuxPaneId, inferenceContent);
+    agentPanes.push({ pane, title: resolvedTitle, wactStr, paneId, tmuxPaneId, cwdRaw, agentName });
+    if (cwdRaw) uniqueCwds.add(cwdRaw);
+  }
 
-    return { pane: paneShort, paneId, tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(agentName), status, detail: finalDetail, ...modelInfo, windowId: paneId, cwd, branch, context: stateContext(agentName, tmuxPaneId), ...tokenInfo } as AgentPane;
+  const branchCache = await buildBranchCacheAsync(uniqueCwds);
+
+  const promises = agentPanes.map(async (p) => {
+    const wact = parseInt(p.wactStr, 10) || 0;
+    const { status, detail } = await detectStatus(p.pane, p.title, wact, p.agentName, p.tmuxPaneId, stateSnapshot);
+    const richDetail = stateDetail(p.agentName, p.tmuxPaneId, stateSnapshot);
+    const finalDetail = richDetail || detail;
+    const paneShort = p.pane.replace(/\.\d+$/, "");
+    const titleClean = cleanTitle(p.title);
+    const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
+    const branch = branchCache.get(p.cwdRaw);
+    const externalSessionId = stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
+    const renamedTitle = p.agentName === "claude" ? getClaudeRenamedTitle(p.cwdRaw, externalSessionId) : undefined;
+    const codexTitle = p.agentName === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
+    const inferenceContent = await execAsync(`tmux capture-pane -t ${JSON.stringify(p.tmuxPaneId)} -p -S -20 2>/dev/null`);
+    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, inferenceContent, stateSnapshot);
+    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, inferenceContent, stateSnapshot);
+    const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
+
+    return { pane: paneShort, paneId: p.paneId, tmuxPaneId: p.tmuxPaneId, title: codexTitle || renamedTitle || titleClean, agent: friendlyName(p.agentName), status, detail: finalDetail, ...modelInfo, windowId: p.paneId, cwd, branch, context: stateContext(p.agentName, p.tmuxPaneId, stateSnapshot), ...tokenInfo, ...provenance } as AgentPane;
   });
 
   const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);

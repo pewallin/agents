@@ -250,11 +250,13 @@ function codexHookEntries(): Record<string, any[]> {
   return {
     UserPromptSubmit: [
       {
+        suppressOutput: true,
         hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} working` }],
       },
     ],
     Stop: [
       {
+        suppressOutput: true,
         hooks: [{ type: "command", command: CODEX_STOP_SCRIPT }],
       },
     ],

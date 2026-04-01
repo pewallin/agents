@@ -95,6 +95,7 @@ const [
   reactMod,
   ink,
   scanner,
+  bundleMod,
   state,
   setupMod,
   workspace,
@@ -107,6 +108,7 @@ const [
   import("react"),
   import("ink"),
   import("./scanner.js"),
+  import("./bundle.js"),
   import("./state.js"),
   import("./setup.js"),
   import("./workspace.js"),
@@ -120,6 +122,7 @@ const { Command } = commander;
 const React = reactMod.default;
 const { render } = ink;
 const { scan, runtimeStates, getSessionHistory, inferContextFromContent, inferModelMetadataFromContent } = scanner;
+const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
@@ -212,6 +215,26 @@ program
     for (const state of states) {
       const detail = state.detail ? ` ${state.detail}` : "";
       console.log(`${state.session} ${state.status}${detail}`);
+    }
+  });
+
+program
+  .command("bundle")
+  .description("Create an app-installable bundle directory for managed installs")
+  .argument("<outDir>", "Output directory (must be empty or not yet exist)")
+  .option("--json", "Output bundle metadata as JSON")
+  .action((outDir, opts) => {
+    try {
+      const metadata = createAppBundle(outDir);
+      if (opts.json) {
+        console.log(JSON.stringify(metadata, null, 2));
+        return;
+      }
+      console.log(`Wrote agents bundle to ${metadata.outputDir}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(message);
+      process.exit(1);
     }
   });
 

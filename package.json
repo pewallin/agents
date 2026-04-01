@@ -7,6 +7,9 @@
   "bin": {
     "agents": "dist/cli.js"
   },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",

@@ -52,6 +52,22 @@ export interface ContributorStateEntry {
   detail?: string;
 }
 
+export interface StateProvenance {
+  source: "primary" | "contributor";
+  primary?: StateEntry;
+  contributors: ContributorStateEntry[];
+  effectiveReporter?: string;
+}
+
+export interface StateSnapshot {
+  primaryByKey: Map<string, StateEntry>;
+  contributorsByKey: Map<string, ContributorStateEntry[]>;
+  mergedEntries: StateEntry[];
+  mergedByKey: Map<string, StateEntry>;
+  mergedByAgent: Map<string, StateEntry[]>;
+  provenanceByKey: Map<string, StateProvenance>;
+}
+
 function ensureDir() {
   mkdirSync(STATE_DIR, { recursive: true });
   mkdirSync(CONTRIBUTOR_STATE_DIR, { recursive: true });
@@ -139,6 +155,138 @@ function mergeStateEntries(primary: StateEntry | null, contributors: Contributor
   };
 }
 
+function stateSnapshotKey(agent: string, session: string): string {
+  return `${agent}\u0000${session}`;
+}
+
+function mergeSnapshotKey(
+  primary: StateEntry | undefined,
+  contributors: ContributorStateEntry[] | undefined,
+): { merged?: StateEntry; provenance?: StateProvenance } {
+  const contributorList = contributors ? [...contributors] : [];
+  const merged = mergeStateEntries(primary ?? null, contributorList);
+  if (!merged) return {};
+
+  if (!primary) {
+    const topContributor = [...contributorList].sort((a, b) => {
+      const priorityDiff = contributorStatePriority(b.state) - contributorStatePriority(a.state);
+      if (priorityDiff !== 0) return priorityDiff;
+      return b.ts - a.ts;
+    })[0];
+    return {
+      merged,
+      provenance: {
+        source: "contributor",
+        contributors: contributorList,
+        ...(topContributor?.reporter ? { effectiveReporter: topContributor.reporter } : {}),
+      },
+    };
+  }
+
+  if (contributorList.length === 0) {
+    return {
+      merged,
+      provenance: {
+        source: "primary",
+        primary,
+        contributors: [],
+      },
+    };
+  }
+
+  const topContributor = [...contributorList].sort((a, b) => {
+    const priorityDiff = contributorStatePriority(b.state) - contributorStatePriority(a.state);
+    if (priorityDiff !== 0) return priorityDiff;
+    return b.ts - a.ts;
+  })[0];
+  const source = contributorStatePriority(topContributor.state) > contributorStatePriority(primary.state)
+    ? "contributor"
+    : "primary";
+
+  return {
+    merged,
+    provenance: {
+      source,
+      primary,
+      contributors: contributorList,
+      ...(source === "contributor" && topContributor?.reporter ? { effectiveReporter: topContributor.reporter } : {}),
+    },
+  };
+}
+
+function buildStateSnapshot(
+  primaryByKey: Map<string, StateEntry>,
+  contributorsByKey: Map<string, ContributorStateEntry[]>,
+): StateSnapshot {
+  const mergedByKey = new Map<string, StateEntry>();
+  const mergedByAgent = new Map<string, StateEntry[]>();
+  const provenanceByKey = new Map<string, StateProvenance>();
+  const mergedEntries: StateEntry[] = [];
+  const keys = new Set<string>([
+    ...primaryByKey.keys(),
+    ...contributorsByKey.keys(),
+  ]);
+
+  for (const key of keys) {
+    const { merged, provenance } = mergeSnapshotKey(
+      primaryByKey.get(key),
+      contributorsByKey.get(key),
+    );
+    if (!merged || !provenance) continue;
+    mergedEntries.push(merged);
+    mergedByKey.set(key, merged);
+    provenanceByKey.set(key, provenance);
+    const existing = mergedByAgent.get(merged.agent);
+    if (existing) existing.push(merged);
+    else mergedByAgent.set(merged.agent, [merged]);
+  }
+
+  return {
+    primaryByKey,
+    contributorsByKey,
+    mergedEntries,
+    mergedByKey,
+    mergedByAgent,
+    provenanceByKey,
+  };
+}
+
+export function createStateSnapshot(
+  primaryEntries: StateEntry[],
+  contributorEntries: ContributorStateEntry[],
+): StateSnapshot {
+  const primaryByKey = new Map<string, StateEntry>();
+  const contributorsByKey = new Map<string, ContributorStateEntry[]>();
+
+  for (const entry of primaryEntries) {
+    primaryByKey.set(stateSnapshotKey(entry.agent, entry.session), entry);
+  }
+
+  for (const entry of contributorEntries) {
+    const key = stateSnapshotKey(entry.agent, entry.session);
+    const existing = contributorsByKey.get(key);
+    if (existing) existing.push(entry);
+    else contributorsByKey.set(key, [entry]);
+  }
+
+  return buildStateSnapshot(primaryByKey, contributorsByKey);
+}
+
+export function readStateSnapshot(maxAge: number = 86400): StateSnapshot {
+  return createStateSnapshot(readStates(maxAge), readContributorStates(maxAge));
+}
+
+export function upsertStateSnapshotEntry(snapshot: StateSnapshot, entry: StateEntry): void {
+  snapshot.primaryByKey.set(stateSnapshotKey(entry.agent, entry.session), entry);
+  const rebuilt = buildStateSnapshot(snapshot.primaryByKey, snapshot.contributorsByKey);
+  snapshot.primaryByKey = rebuilt.primaryByKey;
+  snapshot.contributorsByKey = rebuilt.contributorsByKey;
+  snapshot.mergedEntries = rebuilt.mergedEntries;
+  snapshot.mergedByKey = rebuilt.mergedByKey;
+  snapshot.mergedByAgent = rebuilt.mergedByAgent;
+  snapshot.provenanceByKey = rebuilt.provenanceByKey;
+}
+
 export function deriveModelDisplay(meta?: ModelMetadata): string | undefined {
   if (!meta) return undefined;
   if (meta.provider && meta.modelId) return `${meta.provider}/${meta.modelId}`;
@@ -196,7 +344,7 @@ export interface ContributorReportOptions {
 }
 
 /** Write state for an agent session. Called by hook integrations. */
-export function reportState(agent: string, session: string, state: ReportedState, optsOrContext?: ReportOptions | string, workspace?: WorkspaceSnapshot, contextTokens?: number, contextMax?: number, model?: string, externalSessionId?: string): void {
+export function reportState(agent: string, session: string, state: ReportedState, optsOrContext?: ReportOptions | string, workspace?: WorkspaceSnapshot, contextTokens?: number, contextMax?: number, model?: string, externalSessionId?: string): StateEntry {
   // Support both new options-object style and legacy positional args
   const opts: ReportOptions = isReportOptions(optsOrContext)
     ? optsOrContext
@@ -231,10 +379,11 @@ export function reportState(agent: string, session: string, state: ReportedState
     ...(ws ? { workspace: ws } : {}),
   };
   writeStateFile(agent, session, entry);
+  return entry;
 }
 
 /** Update only the context field for an agent session, preserving state. */
-export function reportContext(agent: string, session: string, context: string, optsOrWorkspace?: ReportOptions | WorkspaceSnapshot, contextTokens?: number, contextMax?: number, model?: string, externalSessionId?: string): void {
+export function reportContext(agent: string, session: string, context: string, optsOrWorkspace?: ReportOptions | WorkspaceSnapshot, contextTokens?: number, contextMax?: number, model?: string, externalSessionId?: string): StateEntry {
   const opts: ReportOptions = isReportOptions(optsOrWorkspace)
     ? { ...optsOrWorkspace, context }
     : { context, workspace: optsOrWorkspace as WorkspaceSnapshot | undefined, contextTokens, contextMax, model, externalSessionId };
@@ -270,6 +419,7 @@ export function reportContext(agent: string, session: string, context: string, o
     };
   }
   writeStateFile(agent, session, entry);
+  return entry;
 }
 
 export function reportContributorState(
@@ -376,55 +526,37 @@ export function readContributorStates(maxAge: number = 86400): ContributorStateE
  *  Otherwise → idle (or null if no data). */
 
 /** Get the state entry (with timestamp) for a specific agent session. */
-export function getAgentStateEntry(agent: string, session?: string): StateEntry | null {
-  const primaryEntries = readStates().filter((e) => e.agent === agent);
-  const contributorEntries = readContributorStates().filter((e) => e.agent === agent);
-
-  const sessionIds = new Set<string>();
-  for (const entry of primaryEntries) sessionIds.add(entry.session);
-  for (const entry of contributorEntries) sessionIds.add(entry.session);
+export function getAgentStateEntry(agent: string, session?: string, snapshot?: StateSnapshot): StateEntry | null {
+  const resolvedSnapshot = snapshot ?? readStateSnapshot();
   if (session) {
-    if (!sessionIds.has(session)) return null;
-    sessionIds.clear();
-    sessionIds.add(session);
+    return resolvedSnapshot.mergedByKey.get(stateSnapshotKey(agent, session)) ?? null;
   }
 
-  const entries = [...sessionIds].map((sessionId) => {
-    const primary = primaryEntries.find((entry) => entry.session === sessionId) ?? null;
-    const contributors = contributorEntries.filter((entry) => entry.session === sessionId);
-    return mergeStateEntries(primary, contributors);
-  }).filter((entry): entry is StateEntry => entry !== null);
-
+  const entries = resolvedSnapshot.mergedByAgent.get(agent) ?? [];
   if (entries.length === 0) return null;
-  // Priority: approval > working > question > idle
   return entries.find((e) => e.state === "approval")
     || entries.find((e) => e.state === "working")
     || entries.find((e) => e.state === "question")
     || entries[0];
 }
 
-export function getAgentState(agent: string, session?: string): ReportedState | null {
-  const primaryEntries = readStates().filter((e) => e.agent === agent);
-  const contributorEntries = readContributorStates().filter((e) => e.agent === agent);
-
-  const sessionIds = new Set<string>();
-  for (const entry of primaryEntries) sessionIds.add(entry.session);
-  for (const entry of contributorEntries) sessionIds.add(entry.session);
-  if (session) {
-    if (!sessionIds.has(session)) return null;
-    sessionIds.clear();
-    sessionIds.add(session);
-  }
-
-  const entries = [...sessionIds].map((sessionId) => {
-    const primary = primaryEntries.find((entry) => entry.session === sessionId) ?? null;
-    const contributors = contributorEntries.filter((entry) => entry.session === sessionId);
-    return mergeStateEntries(primary, contributors);
-  }).filter((entry): entry is StateEntry => entry !== null);
+export function getAgentState(agent: string, session?: string, snapshot?: StateSnapshot): ReportedState | null {
+  const resolvedSnapshot = snapshot ?? readStateSnapshot();
+  const entries = session
+    ? (() => {
+        const entry = resolvedSnapshot.mergedByKey.get(stateSnapshotKey(agent, session));
+        return entry ? [entry] : [];
+      })()
+    : (resolvedSnapshot.mergedByAgent.get(agent) ?? []);
 
   if (entries.length === 0) return null;
   if (entries.some((e) => e.state === "approval")) return "approval";
   if (entries.some((e) => e.state === "working")) return "working";
   if (entries.some((e) => e.state === "question")) return "question";
   return "idle";
+}
+
+export function getAgentStateProvenance(agent: string, session: string, snapshot?: StateSnapshot): StateProvenance | null {
+  const resolvedSnapshot = snapshot ?? readStateSnapshot();
+  return resolvedSnapshot.provenanceByKey.get(stateSnapshotKey(agent, session)) ?? null;
 }
