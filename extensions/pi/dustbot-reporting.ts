@@ -40,6 +40,52 @@ const IDLE_SETTLE_MS = 250;
 const MAX_DETAIL_LENGTH = 60;
 
 type PiState = "working" | "idle" | "question";
+type AssistantStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+function isAssistantStopReason(value: unknown): value is AssistantStopReason {
+  return (
+    value === "stop" ||
+    value === "length" ||
+    value === "toolUse" ||
+    value === "error" ||
+    value === "aborted"
+  );
+}
+
+export function getAssistantStopReason(message: any): AssistantStopReason | undefined {
+  const stopReason = message?.stopReason;
+  return isAssistantStopReason(stopReason) ? stopReason : undefined;
+}
+
+function hasPendingMessages(ctx: any): boolean {
+  try {
+    return Boolean(ctx?.hasPendingMessages?.());
+  } catch {
+    return false;
+  }
+}
+
+function isIdle(ctx: any): boolean {
+  try {
+    return Boolean(ctx?.isIdle?.());
+  } catch {
+    return false;
+  }
+}
+
+export function shouldSettleIdleAfterAgentEnd(opts: {
+  activePrompt: boolean;
+  pendingToolExecutions: number;
+  hasPendingMessages: boolean;
+  isIdle: boolean;
+  lastAssistantStopReason?: string;
+}): boolean {
+  if (!opts.activePrompt) return false;
+  if (opts.pendingToolExecutions > 0) return false;
+  if (!opts.isIdle) return false;
+  if (opts.hasPendingMessages) return false;
+  return opts.lastAssistantStopReason === "stop" || opts.lastAssistantStopReason === "length";
+}
 
 function appendModel(args: string[], ctx: any): void {
   try {
@@ -112,6 +158,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   let lastState: PiState | undefined;
   let lastDetail: string | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
+  const pendingToolExecutions = new Set<string>();
 
   function clearIdleTimer(): void {
     if (!idleTimer) return;
@@ -141,6 +188,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
 
   pi.on("agent_start", async (_event: any, ctx: any) => {
     activePrompt = true;
+    pendingToolExecutions.clear();
     setWorking(ctx, "starting");
   });
 
@@ -151,6 +199,17 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
       activePrompt = false;
       clearIdleTimer();
       setState("question", ctx);
+      return;
+    }
+    if (
+      !shouldSettleIdleAfterAgentEnd({
+        activePrompt,
+        pendingToolExecutions: pendingToolExecutions.size,
+        hasPendingMessages: hasPendingMessages(ctx),
+        isIdle: isIdle(ctx),
+        lastAssistantStopReason: getAssistantStopReason(last),
+      })
+    ) {
       return;
     }
     settleIdle(ctx);
@@ -174,10 +233,16 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
 
   pi.on("tool_execution_start", async (event: any, ctx: any) => {
     if (!activePrompt) activePrompt = true;
+    if (typeof event?.toolCallId === "string" && event.toolCallId) {
+      pendingToolExecutions.add(event.toolCallId);
+    }
     setWorking(ctx, normalizeToolName(event?.toolName) ?? "tool");
   });
 
   pi.on("tool_execution_end", async (event: any, ctx: any) => {
+    if (typeof event?.toolCallId === "string" && event.toolCallId) {
+      pendingToolExecutions.delete(event.toolCallId);
+    }
     if (!activePrompt) return;
     if (event?.isError) {
       const toolName = normalizeToolName(event?.toolName) ?? "tool";
@@ -204,12 +269,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
 
   pi.on("session_switch", async (_event: any, ctx: any) => {
     activePrompt = false;
+    pendingToolExecutions.clear();
     clearIdleTimer();
     setState("idle", ctx, undefined, true);
   });
 
   pi.on("session_shutdown", async (_event: any, ctx: any) => {
     activePrompt = false;
+    pendingToolExecutions.clear();
     clearIdleTimer();
     setState("idle", ctx, undefined, true);
   });
