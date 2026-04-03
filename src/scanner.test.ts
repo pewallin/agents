@@ -1,9 +1,9 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { getAgentStateEntry, reportState } from "./state.js";
+import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
 
 describe("getDetector", () => {
@@ -161,7 +161,7 @@ describe("extractLatestCodexSessionTitlesFromIndexLines", () => {
 describe("shouldTreatCodexWorkingAsIdle", () => {
   it("treats stale codex working state as idle when the pane shows a prompt", () => {
     const session = `%vitest-codex-stale-${Date.now()}`;
-    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    const statePath = join(getStateDir(), `codex-${session}.json`);
     reportState("codex", session, "working");
     try {
       const entry = JSON.parse(readFileSync(statePath, "utf8")) as { ts: number };
@@ -174,7 +174,7 @@ describe("shouldTreatCodexWorkingAsIdle", () => {
 
   it("keeps very fresh codex working state even if the old prompt is still visible", () => {
     const session = `%vitest-codex-fresh-${Date.now()}`;
-    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    const statePath = join(getStateDir(), `codex-${session}.json`);
     reportState("codex", session, "working");
     try {
       expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session)).toBe(false);
@@ -185,7 +185,7 @@ describe("shouldTreatCodexWorkingAsIdle", () => {
 
   it("does not treat codex approval prompts as idle", () => {
     const session = `%vitest-codex-approval-${Date.now()}`;
-    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    const statePath = join(getStateDir(), `codex-${session}.json`);
     reportState("codex", session, "working");
     try {
       expect(
@@ -204,7 +204,7 @@ describe("shouldTreatCodexWorkingAsIdle", () => {
 describe("codex hook-first detection", () => {
   it("keeps codex working when hook state says working even if a stale prompt is visible", () => {
     const session = `%vitest-codex-hook-first-${Date.now()}`;
-    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    const statePath = join(getStateDir(), `codex-${session}.json`);
     reportState("codex", session, "working");
     try {
       const entry = JSON.parse(readFileSync(statePath, "utf8")) as { ts: number };
@@ -220,7 +220,7 @@ describe("codex hook-first detection", () => {
 
   it("converts stale codex working to idle after two unchanged cleanup samples", () => {
     const session = `%vitest-codex-cleanup-${Date.now()}`;
-    const statePath = join(homedir(), ".agents", "state", `codex-${session}.json`);
+    const statePath = join(getStateDir(), `codex-${session}.json`);
     const prompt = "› Implement {feature}\n";
     reportState("codex", session, "working");
     try {

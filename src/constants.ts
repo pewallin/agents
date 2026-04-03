@@ -31,9 +31,8 @@ export const STATE_MAX_AGE = 300;
 export const STALE_HOOK_WORKING_RECHECK_SEC = 300;
 
 /** File where the tmux focus hook writes the currently focused pane ID. */
-import { join } from "path";
-import { homedir } from "os";
-export const GRID_FOCUS_FILE = join(homedir(), ".agents", "state", "grid-focus");
+import { getGridFocusFile } from "./paths.js";
+export const GRID_FOCUS_FILE = getGridFocusFile();
 
 /** Agent name → display color. Single source of truth for Dashboard + AgentTable. */
 export const AGENT_COLORS: Record<string, string> = {

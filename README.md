@@ -22,8 +22,9 @@ agents                # live dashboard
 ```
 agents                  Live dashboard (default)
 agents ls               One-shot agent list
-agents ws               Create workspace using default profile
+agents ws               Create workspace using configured default profile
 agents ws claude        Create workspace using named profile
+agents ws --list-profiles  List available launch profiles
 agents count            Number of running agents
 agents back             Jump back after enter-from-dashboard
 agents setup            Install hooks/extensions
@@ -100,7 +101,7 @@ Add `bind -n M-b run-shell "node ~/code/agents/dist/cli.js back 2>/dev/null || t
 }
 ```
 
-Profiles define agent launch commands. Each profile can set a `workspace` layout, window `name`, and `env`. `defaultCommand` still works as a fallback.
+Profiles define agent launch commands. Each profile can set a `workspace` layout, window `name`, and `env`. Profile `env` is exported in the launched agent shell before the profile command runs. `defaultCommand` still works as a fallback.
 
 ## Status Detection
 

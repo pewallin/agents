@@ -92,44 +92,46 @@ if (!insideMux) {
 
 const [
   commander,
-  reactMod,
-  ink,
   scanner,
   bundleMod,
   state,
   setupMod,
   workspace,
   config,
-  dashboardMod,
-  selectMod,
-  agentTableMod,
 ] = await Promise.all([
   import("commander"),
-  import("react"),
-  import("ink"),
   import("./scanner.js"),
   import("./bundle.js"),
   import("./state.js"),
   import("./setup.js"),
   import("./workspace.js"),
   import("./config.js"),
-  import("./components/Dashboard.js"),
-  import("./components/Select.js"),
-  import("./components/AgentTable.js"),
 ]);
 
 const { Command } = commander;
-const React = reactMod.default;
-const { render } = ink;
 const { scan, runtimeStates, getSessionHistory, inferContextFromContent, inferModelMetadataFromContent } = scanner;
 const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
-const { Dashboard } = dashboardMod;
-const { Select } = selectMod;
-const { AgentTable } = agentTableMod;
+
+async function loadUiModules() {
+  const [reactMod, ink, dashboardMod, selectMod, agentTableMod] = await Promise.all([
+    import("react"),
+    import("ink"),
+    import("./components/Dashboard.js"),
+    import("./components/Select.js"),
+    import("./components/AgentTable.js"),
+  ]);
+  return {
+    React: reactMod.default,
+    render: ink.render,
+    Dashboard: dashboardMod.Dashboard,
+    Select: selectMod.Select,
+    AgentTable: agentTableMod.AgentTable,
+  };
+}
 
 // Initialize multiplexer (async import of the correct backend)
 await initMux();
@@ -150,12 +152,13 @@ program
   .description("Show agent status with interactive selection")
   .option("--no-interactive", "Print status without interactive selection")
   .option("--json", "Output as JSON")
-  .action((opts) => {
+  .action(async (opts) => {
     const agents = scan();
     if (opts.json) {
       console.log(JSON.stringify(agents, null, 2));
       return;
     }
+    const { React, render, Select, AgentTable } = await loadUiModules();
     if (!opts.interactive || !process.stdin.isTTY) {
       const { unmount, waitUntilExit } = render(
         React.createElement(AgentTable, { agents })
@@ -176,12 +179,13 @@ program
   .alias("w")
   .description("Live dashboard with auto-refresh")
   .argument("[seconds]", "Refresh interval", "2")
-  .action((seconds) => {
+  .action(async (seconds) => {
     const interval = parseInt(seconds, 10) || 2;
     // Set tmux pane title
     process.stdout.write("\x1b]2;Agent Dashboard\x1b\\");
     // Clear screen for clean start (no alternate screen — conflicts with pane splits)
     process.stdout.write("\x1b[2J\x1b[H");
+    const { React, render, Dashboard } = await loadUiModules();
     const { waitUntilExit } = render(
       React.createElement(Dashboard, { interval }),
       { exitOnCtrlC: false }
@@ -402,15 +406,16 @@ program
   .command("workspace")
   .alias("ws")
   .description("Create a new agent workspace in the current directory")
-  .argument("[profile]", "Profile name (omit to list available profiles)")
+  .argument("[profile]", "Profile name (omit to use the configured default profile)")
   .argument("[overrides...]", "Override agent command (appended after profile command)")
   .option("-n, --name <name>", "Window name override")
   .option("-l, --layout <layout>", "Layout name (default, small, or custom)")
+  .option("--list-profiles", "List available profiles and exit")
   .option("--agent-only", "Skip helper pane creation (app creates them on demand)")
   .allowUnknownOption()
   .action((profile, overrides, opts) => {
     const profiles = getProfileNames();
-    if (!profile) {
+    if (opts.listProfiles) {
       console.log("Available profiles:");
       for (const name of profiles) {
         const p = resolveProfile(name);
@@ -418,13 +423,14 @@ program
       }
       process.exit(0);
     }
-    if (!profiles.includes(profile)) {
+    const selectedProfile = profile || undefined;
+    if (selectedProfile && !profiles.includes(selectedProfile)) {
       console.error(`Unknown profile "${profile}". Available: ${profiles.join(", ")}`);
       process.exit(1);
     }
-    const resolved = resolveProfile(profile);
+    const resolved = resolveProfile(selectedProfile);
     const cmd = overrides.length ? `${resolved.command} ${overrides.join(" ")}` : undefined;
-    createWorkspace(cmd, opts.name, opts.layout, { profile, cwd: process.cwd(), agentOnly: opts.agentOnly });
+    createWorkspace(cmd, opts.name, opts.layout, { profile: selectedProfile, cwd: process.cwd(), agentOnly: opts.agentOnly });
     // New pane shell startups trigger iTerm2/terminal DA queries whose responses
     // leak back to this pane's input buffer. Drain them before exiting.
     if (process.stdin.isTTY) {

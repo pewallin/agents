@@ -14,6 +14,7 @@ import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync, spawn } from "child_process";
+import { getAgentsHome, getSetupHashPath } from "./paths.js";
 import {
   INTEGRATION_SPECS,
   LIFECYCLE_CAPABILITIES,
@@ -922,7 +923,7 @@ export function doctor(): DoctorResult[] {
 
 // ── Auto-setup on CLI start ─────────────────────────────────────────
 
-const HASH_FILE = join(homedir(), ".agents", ".setup-hash");
+const HASH_FILE = getSetupHashPath();
 
 /** Compute a hash of all setup-relevant config (hook defs + extension files). */
 function computeSetupHash(): string {
@@ -957,7 +958,7 @@ export function autoSetupIfNeeded(): void {
 /** Write the current setup hash to disk (called after successful setup). */
 function saveSetupHash(): void {
   try {
-    mkdirSync(join(homedir(), ".agents"), { recursive: true });
+    mkdirSync(getAgentsHome(), { recursive: true });
     writeFileSync(HASH_FILE, computeSetupHash());
   } catch {}
 }

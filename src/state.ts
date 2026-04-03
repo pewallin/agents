@@ -1,6 +1,6 @@
-import { mkdirSync, writeFileSync, readdirSync, readFileSync, unlinkSync } from "fs";
-import { homedir } from "os";
+import { writeFileSync, readdirSync, readFileSync, unlinkSync } from "fs";
 import { join } from "path";
+import { ensureAgentsDirs, getContributorStateDir, getStateDir } from "./paths.js";
 
 export type ReportedState = "working" | "idle" | "approval" | "question";
 export type ModelSource = "hook" | "sdk" | "transcript" | "session-log" | "inferred";
@@ -40,9 +40,6 @@ export interface CleanupState {
   unchangedSamples?: number;
 }
 
-const STATE_DIR = join(homedir(), ".agents", "state");
-const CONTRIBUTOR_STATE_DIR = join(homedir(), ".agents", "state-contrib");
-
 export interface ContributorStateEntry {
   agent: string;
   session: string;
@@ -69,12 +66,11 @@ export interface StateSnapshot {
 }
 
 function ensureDir() {
-  mkdirSync(STATE_DIR, { recursive: true });
-  mkdirSync(CONTRIBUTOR_STATE_DIR, { recursive: true });
+  ensureAgentsDirs();
 }
 
 function stateFilePath(agent: string, session: string): string {
-  return join(STATE_DIR, `${agent}-${session}.json`);
+  return join(getStateDir(), `${agent}-${session}.json`);
 }
 
 function readStateFile(agent: string, session: string): StateEntry | null {
@@ -92,7 +88,7 @@ function writeStateFile(agent: string, session: string, entry: StateEntry): void
 }
 
 function contributorStateFilePath(agent: string, session: string, reporter: string): string {
-  return join(CONTRIBUTOR_STATE_DIR, `${agent}-${session}-${reporter}.json`);
+  return join(getContributorStateDir(), `${agent}-${session}-${reporter}.json`);
 }
 
 function readContributorStateFile(agent: string, session: string, reporter: string): ContributorStateEntry | null {
@@ -482,14 +478,15 @@ export function readStates(maxAge: number = 86400): StateEntry[] {
   ensureDir();
   const now = Math.floor(Date.now() / 1000);
   const entries: StateEntry[] = [];
+  const stateDir = getStateDir();
   try {
-    for (const f of readdirSync(STATE_DIR)) {
+    for (const f of readdirSync(stateDir)) {
       if (!f.endsWith(".json")) continue;
       try {
-        const data: StateEntry = JSON.parse(readFileSync(join(STATE_DIR, f), "utf-8"));
+        const data: StateEntry = JSON.parse(readFileSync(join(stateDir, f), "utf-8"));
         if (now - data.ts > maxAge) {
           // Clean up stale files
-          try { unlinkSync(join(STATE_DIR, f)); } catch {}
+          try { unlinkSync(join(stateDir, f)); } catch {}
           continue;
         }
         entries.push(data);
@@ -503,13 +500,14 @@ export function readContributorStates(maxAge: number = 86400): ContributorStateE
   ensureDir();
   const now = Math.floor(Date.now() / 1000);
   const entries: ContributorStateEntry[] = [];
+  const contributorStateDir = getContributorStateDir();
   try {
-    for (const f of readdirSync(CONTRIBUTOR_STATE_DIR)) {
+    for (const f of readdirSync(contributorStateDir)) {
       if (!f.endsWith(".json")) continue;
       try {
-        const data: ContributorStateEntry = JSON.parse(readFileSync(join(CONTRIBUTOR_STATE_DIR, f), "utf-8"));
+        const data: ContributorStateEntry = JSON.parse(readFileSync(join(contributorStateDir, f), "utf-8"));
         if (now - data.ts > maxAge) {
-          try { unlinkSync(join(CONTRIBUTOR_STATE_DIR, f)); } catch {}
+          try { unlinkSync(join(contributorStateDir, f)); } catch {}
           continue;
         }
         entries.push(data);

@@ -1,6 +1,5 @@
 import { readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { getConfigPath } from "./paths.js";
 
 export interface HelperDef {
   process: string;           // match against pane_current_command
@@ -30,8 +29,6 @@ export interface Config {
   profiles: Record<string, LaunchProfile>;
   defaultProfile: string;
 }
-
-const CONFIG_PATH = join(homedir(), ".agents", "config.json");
 
 let _cached: Config | null = null;
 
@@ -92,7 +89,7 @@ function parseProfiles(raw: any): { profiles: Record<string, LaunchProfile>; def
 export function loadConfig(): Config {
   if (_cached) return _cached;
   try {
-    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+    const raw = JSON.parse(readFileSync(getConfigPath(), "utf-8"));
     const ws = raw.workspace;
     const { profiles, defaultProfile } = parseProfiles(raw);
     _cached = {

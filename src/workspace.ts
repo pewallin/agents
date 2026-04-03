@@ -43,6 +43,15 @@ export interface CreateWorkspaceOpts {
   agentOnly?: boolean;   // skip helper pane creation (app creates them on demand)
 }
 
+export interface ResolvedWorkspaceLaunch {
+  command: string;
+  agentCommand: string;
+  layout?: string;
+  name?: string;
+  profileName?: string;
+  profileEnv?: Record<string, string>;
+}
+
 export interface RestorableWorkspace {
   key: string;
   agent: string;
@@ -115,19 +124,57 @@ export function getRestorableWorkspaces(): RestorableWorkspace[] {
   return getRestorableWorkspacesFromStates(readStates());
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function applyProfileEnv(command: string, env?: Record<string, string>): string {
+  if (!env || Object.keys(env).length === 0) return command;
+  const exports = Object.entries(env).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error(`Invalid environment variable name in profile: ${key}`);
+    }
+    return `export ${key}=${shellQuote(String(value))}`;
+  });
+  return `${exports.join("; ")}; ${command}`;
+}
+
+export function resolveWorkspaceLaunch(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): ResolvedWorkspaceLaunch {
+  const config = loadConfig();
+  const profileName = opts?.profile;
+  const shouldUseProfile = !!profileName || !agentCmd;
+  const profile = shouldUseProfile ? resolveProfile(profileName) : undefined;
+  const baseCommand = agentCmd || profile?.command || config.defaultCommand;
+  if (!baseCommand) {
+    throw new Error("No command specified and no defaultCommand in config");
+  }
+  const layoutName = layout || profile?.workspace;
+  const displayName = name || profile?.name || profileName;
+
+  return {
+    command: applyProfileEnv(baseCommand, profile?.env),
+    agentCommand: baseCommand,
+    ...(layoutName ? { layout: layoutName } : {}),
+    ...(displayName ? { name: displayName } : {}),
+    ...(profileName ? { profileName } : {}),
+    ...(profile?.env ? { profileEnv: profile.env } : {}),
+  };
+}
+
 export function createWorkspace(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): void {
   const config = loadConfig();
-
-  // Resolve command: explicit arg > profile > defaultCommand
-  let cmd = agentCmd;
-  let layoutName = layout;
-  if (!cmd && opts?.profile) {
-    const profile = resolveProfile(opts.profile);
-    cmd = profile.command;
-    layoutName = layoutName || profile.workspace;
-    if (!name) name = profile.name || opts.profile;
+  let resolved: ResolvedWorkspaceLaunch;
+  try {
+    resolved = resolveWorkspaceLaunch(agentCmd, name, layout, opts);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(message);
+    process.exit(1);
   }
-  cmd = cmd || config.defaultCommand;
+  const cmd = resolved.command;
+  const metadataCommand = resolved.agentCommand;
+  const layoutName = resolved.layout;
+  const resolvedName = resolved.name;
 
   if (!cmd) {
     console.error("No command specified and no defaultCommand in config");
@@ -140,7 +187,7 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
   }
 
   const defs = opts?.agentOnly ? [] : resolveLayout(config, layoutName);
-  const baseName = name || cmd.split(/\s+/)[0];
+  const baseName = resolvedName || metadataCommand.split(/\s+/)[0];
   const cwdBase = (opts?.cwd || process.cwd()).split("/").pop() || "";
   const windowName = cwdBase ? `${baseName}:${cwdBase}` : baseName;
 
@@ -155,17 +202,17 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
   };
 
   if (muxKind === "zellij") {
-    createWorkspaceZellij(cmd, windowName, defs, opts, wsSnapshot);
+    createWorkspaceZellij(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
   } else {
-    createWorkspaceTmux(cmd, windowName, defs, opts, wsSnapshot);
+    createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
   }
 }
 
 /** Seed the state file with workspace metadata right after pane creation.
  *  This captures the authoritative session/cwd before preview swaps can muddy it. */
-function seedWorkspaceState(agentPaneId: string, cmd: string, snapshot: WorkspaceSnapshot): void {
+function seedWorkspaceState(agentPaneId: string, agentCommand: string, snapshot: WorkspaceSnapshot): void {
   // Infer agent name from command (e.g. "claude --dangerously-skip-permissions" → "claude")
-  const agent = cmd.split(/\s+/)[0].replace(/.*\//, "").toLowerCase();
+  const agent = agentCommand.split(/\s+/)[0].replace(/.*\//, "").toLowerCase();
   // For tmux, also capture session name from the actual pane if not already set
   if (!snapshot.sessionName && agentPaneId.startsWith("%")) {
     try {
@@ -175,7 +222,7 @@ function seedWorkspaceState(agentPaneId: string, cmd: string, snapshot: Workspac
   reportState(agent, agentPaneId, "idle", undefined, snapshot);
 }
 
-function createWorkspaceZellij(cmd: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): void {
+function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): void {
   const mux = getMux();
 
   // Create tab — getMux().createTab returns the tab name, not pane ID
@@ -193,7 +240,7 @@ function createWorkspaceZellij(cmd: string, windowName: string, defs: WorkspaceD
     return;
   }
 
-  if (wsSnapshot) seedWorkspaceState(agentPaneId, cmd, wsSnapshot);
+  if (wsSnapshot) seedWorkspaceState(agentPaneId, agentCommand, wsSnapshot);
 
   const paneMap: Record<string, string> = { agent: agentPaneId };
 
@@ -233,7 +280,7 @@ function createWorkspaceZellij(cmd: string, windowName: string, defs: WorkspaceD
   mux.focusPane(agentPaneId);
 }
 
-function createWorkspaceTmux(cmd: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): void {
+function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): void {
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
   if (opts?.tmuxSession) {
@@ -254,7 +301,7 @@ function createWorkspaceTmux(cmd: string, windowName: string, defs: WorkspaceDef
   exec(`tmux set-option -t ${agentPaneId} -w automatic-rename off`);
   exec(`tmux set-option -t ${agentPaneId} -w allow-rename off`);
   exec(`tmux rename-window -t ${agentPaneId} ${JSON.stringify(windowName)}`);
-  if (wsSnapshot) seedWorkspaceState(agentPaneId, cmd, wsSnapshot);
+  if (wsSnapshot) seedWorkspaceState(agentPaneId, agentCommand, wsSnapshot);
   exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);
 
   const paneMap: Record<string, string> = { agent: agentPaneId };

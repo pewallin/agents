@@ -5,10 +5,10 @@
  * On restart, loads and validates the saved state (checks that key panes still exist).
  */
 import { writeFileSync, readFileSync, unlinkSync } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
 import { paneExists, ownPaneId } from "./scanner.js";
 import type { HelperZone } from "./zones.js";
+import { getRuntimeTempDir } from "./paths.js";
 
 export interface PreviewState {
   splitPaneId: string;        // placeholder sitting in agent's original position
@@ -29,7 +29,7 @@ let _stateFile: string | null = null;
 function stateFile(): string {
   if (!_stateFile) {
     const selfPane = ownPaneId();
-    _stateFile = join(tmpdir(), `agents-preview-${selfPane.replace("%", "")}.json`);
+    _stateFile = join(getRuntimeTempDir(), `agents-preview-${selfPane.replace("%", "")}.json`);
   }
   return _stateFile;
 }
