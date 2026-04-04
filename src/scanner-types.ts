@@ -9,6 +9,8 @@ export interface AgentPane {
   title: string;
   agent: string;
   status: AgentStatus;
+  cpuPercent: number;
+  memoryMB: number;
   detail?: string;
   provider?: string;
   modelId?: string;
@@ -29,6 +31,8 @@ export interface AgentPane {
 export interface AgentRuntimeState {
   session: string;
   status: AgentStatus;
+  cpuPercent: number;
+  memoryMB: number;
   detail?: string;
   provider?: string;
   modelId?: string;

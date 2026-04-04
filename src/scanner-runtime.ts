@@ -177,6 +177,8 @@ export function runtimeStateFromAgent(agent: AgentPane): AgentRuntimeState {
   return {
     session: agent.tmuxPaneId,
     status: agent.status,
+    cpuPercent: agent.cpuPercent,
+    memoryMB: agent.memoryMB,
     ...(agent.detail ? { detail: agent.detail } : {}),
     ...(agent.provider ? { provider: agent.provider } : {}),
     ...(agent.modelId ? { modelId: agent.modelId } : {}),
