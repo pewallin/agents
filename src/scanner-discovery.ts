@@ -1,7 +1,26 @@
 import { basename } from "path";
 import { exec, execAsync } from "./shell.js";
 
-interface ProcEntry { pid: number; ppid: number; comm: string; tty: string; args: string }
+const PROCESS_TREE_PS_COMMAND = "ps -eo pid=,ppid=,comm=,tty=,%cpu=,rss=,args= 2>/dev/null";
+
+export interface ProcEntry {
+  pid: number;
+  ppid: number;
+  comm: string;
+  tty: string;
+  cpuPercent: number;
+  memoryMB: number;
+  args: string;
+}
+
+export interface AgentLeafProcess {
+  agentName: string;
+  process: ProcEntry | null;
+}
+
+interface AgentProcessMatch extends AgentLeafProcess {
+  depth: number;
+}
 
 const AGENT_PROC_NAMES = ["claude", "copilot", "opencode", "codex", "cursor", "pi"] as const;
 const AGENT_PROCS = new RegExp(`^(${AGENT_PROC_NAMES.join("|")})$`, "i");
@@ -40,8 +59,32 @@ export interface ProcessTree {
   byTty: Map<string, ProcEntry[]>;
 }
 
-export function buildProcessTree(): ProcessTree {
-  const raw = exec("ps -eo pid=,ppid=,comm=,tty=,args= 2>/dev/null");
+function preferredAgentProcess(a: AgentProcessMatch | null, b: AgentProcessMatch | null): AgentProcessMatch | null {
+  if (!a) return b;
+  if (!b) return a;
+  if (a.depth !== b.depth) return a.depth > b.depth ? a : b;
+  const aMemory = a.process?.memoryMB ?? -1;
+  const bMemory = b.process?.memoryMB ?? -1;
+  if (aMemory !== bMemory) return aMemory > bMemory ? a : b;
+  const aCpu = a.process?.cpuPercent ?? -1;
+  const bCpu = b.process?.cpuPercent ?? -1;
+  if (aCpu !== bCpu) return aCpu > bCpu ? a : b;
+  return a;
+}
+
+function findBestAgentProcessInTree(pid: number, tree: ProcessTree, depth = 0): AgentProcessMatch | null {
+  const entry = tree.byPid.get(pid);
+  const agentName = entry ? detectAgentProcess(entry.comm, entry.args) : null;
+  let best: AgentProcessMatch | null = agentName ? { agentName, process: entry ?? null, depth } : null;
+
+  for (const child of tree.children.get(pid) || []) {
+    best = preferredAgentProcess(best, findBestAgentProcessInTree(child, tree, depth + 1));
+  }
+
+  return best;
+}
+
+function parseProcessTree(raw: string): ProcessTree {
   const byPid = new Map<number, ProcEntry>();
   const children = new Map<number, number[]>();
   const byTty = new Map<string, ProcEntry[]>();
@@ -49,15 +92,20 @@ export function buildProcessTree(): ProcessTree {
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/);
+    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+([-\d.,]+)\s+(\d+)\s*(.*)$/);
     if (!match) continue;
+
+    const rssKB = parseInt(match[6], 10) || 0;
     const entry: ProcEntry = {
-      pid: parseInt(match[1]),
-      ppid: parseInt(match[2]),
+      pid: parseInt(match[1], 10),
+      ppid: parseInt(match[2], 10),
       comm: match[3].replace(/.*\//, ""),
       tty: match[4],
-      args: match[5] || "",
+      cpuPercent: parseFloat(match[5].replace(",", ".")) || 0,
+      memoryMB: Math.round(rssKB / 1024),
+      args: match[7] || "",
     };
+
     byPid.set(entry.pid, entry);
     const siblings = children.get(entry.ppid);
     if (siblings) siblings.push(entry.pid);
@@ -68,64 +116,46 @@ export function buildProcessTree(): ProcessTree {
       else byTty.set(entry.tty, [entry]);
     }
   }
+
   return { byPid, children, byTty };
+}
+
+export function buildProcessTree(): ProcessTree {
+  return parseProcessTree(exec(PROCESS_TREE_PS_COMMAND));
 }
 
 export async function buildProcessTreeAsync(): Promise<ProcessTree> {
-  const raw = await execAsync("ps -eo pid=,ppid=,comm=,tty=,args= 2>/dev/null");
-  const byPid = new Map<number, ProcEntry>();
-  const children = new Map<number, number[]>();
-  const byTty = new Map<string, ProcEntry[]>();
+  return parseProcessTree(await execAsync(PROCESS_TREE_PS_COMMAND));
+}
 
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/);
-    if (!match) continue;
-    const entry: ProcEntry = {
-      pid: parseInt(match[1]),
-      ppid: parseInt(match[2]),
-      comm: match[3].replace(/.*\//, ""),
-      tty: match[4],
-      args: match[5] || "",
-    };
-    byPid.set(entry.pid, entry);
-    const siblings = children.get(entry.ppid);
-    if (siblings) siblings.push(entry.pid);
-    else children.set(entry.ppid, [entry.pid]);
-    if (entry.tty !== "??" && entry.tty !== "?") {
-      const list = byTty.get(entry.tty);
-      if (list) list.push(entry);
-      else byTty.set(entry.tty, [entry]);
-    }
-  }
-  return { byPid, children, byTty };
+export function findAgentLeafInTree(pid: number, tree: ProcessTree): AgentLeafProcess | null {
+  const best = findBestAgentProcessInTree(pid, tree);
+  return best ? { agentName: best.agentName, process: best.process } : null;
 }
 
 export function findLeafInTree(pid: number, tree: ProcessTree): string {
-  let current = pid;
-  for (;;) {
-    const kids = tree.children.get(current);
-    if (!kids || kids.length === 0) break;
-    const child = kids[0];
-    const entry = tree.byPid.get(child);
-    const agent = entry ? detectAgentProcess(entry.comm, entry.args) : null;
-    if (agent) return agent;
-    current = child;
-  }
-  const entry = tree.byPid.get(current);
-  return entry ? (detectAgentProcess(entry.comm, entry.args) || "") : "";
+  return findAgentLeafInTree(pid, tree)?.agentName || "";
 }
 
-export function findAgentOnTtyInTree(tty: string, tree: ProcessTree): string | null {
+export function findAgentOnTtyProcessInTree(tty: string, tree: ProcessTree): AgentLeafProcess | null {
   const ttyShort = tty.replace(/^\/dev\//, "");
   const procs = tree.byTty.get(ttyShort);
   if (!procs) return null;
+  let best: AgentProcessMatch | null = null;
   for (const p of procs) {
     const agent = detectAgentProcess(p.comm, p.args);
-    if (agent) return agent;
+    if (!agent) continue;
+    let depth = 0;
+    for (let parent = tree.byPid.get(p.ppid); parent && parent.tty === p.tty; parent = tree.byPid.get(parent.ppid)) {
+      depth += 1;
+    }
+    best = preferredAgentProcess(best, { agentName: agent, process: p, depth });
   }
-  return null;
+  return best ? { agentName: best.agentName, process: best.process } : null;
+}
+
+export function findAgentOnTtyInTree(tty: string, tree: ProcessTree): string | null {
+  return findAgentOnTtyProcessInTree(tty, tree)?.agentName || null;
 }
 
 export function buildBranchCache(uniqueCwds: Set<string>): Map<string, string | undefined> {
