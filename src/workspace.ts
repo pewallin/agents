@@ -50,6 +50,7 @@ export interface ResolvedWorkspaceLaunch {
   name?: string;
   profileName?: string;
   profileEnv?: Record<string, string>;
+  alternateScreen?: boolean;
 }
 
 export interface RestorableWorkspace {
@@ -158,6 +159,7 @@ export function resolveWorkspaceLaunch(agentCmd?: string, name?: string, layout?
     ...(displayName ? { name: displayName } : {}),
     ...(profileName ? { profileName } : {}),
     ...(profile?.env ? { profileEnv: profile.env } : {}),
+    ...(profile?.alternate_screen !== undefined ? { alternateScreen: profile.alternate_screen } : {}),
   };
 }
 
@@ -204,7 +206,7 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
   if (muxKind === "zellij") {
     createWorkspaceZellij(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
   } else {
-    createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
+    createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen);
   }
 }
 
@@ -280,7 +282,7 @@ function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: st
   mux.focusPane(agentPaneId);
 }
 
-function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): void {
+function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean): void {
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
   if (opts?.tmuxSession) {
@@ -301,6 +303,9 @@ function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: stri
   exec(`tmux set-option -t ${agentPaneId} -w automatic-rename off`);
   exec(`tmux set-option -t ${agentPaneId} -w allow-rename off`);
   exec(`tmux rename-window -t ${agentPaneId} ${JSON.stringify(windowName)}`);
+  if (alternateScreen === false) {
+    exec(`tmux set-option -p -t ${agentPaneId} alternate-screen off`);
+  }
   if (wsSnapshot) seedWorkspaceState(agentPaneId, agentCommand, wsSnapshot);
   exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);
 

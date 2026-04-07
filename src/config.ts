@@ -20,6 +20,8 @@ export interface LaunchProfile {
   workspace?: string;          // workspace layout name (default: "default")
   name?: string;               // display name for tmux window
   env?: Record<string, string>; // extra environment variables
+  alternate_screen?: boolean;  // set false to disable tmux alternate screen (default: true)
+  resume_args?: string;        // args to append when resuming (e.g. "--resume", "-c")
 }
 
 export interface Config {
