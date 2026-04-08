@@ -36,57 +36,9 @@ const AGENTS_BIN = findAgentsBin();
 
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
-const IDLE_SETTLE_MS = 250;
 const MAX_DETAIL_LENGTH = 60;
 
 type PiState = "working" | "idle" | "question";
-type AssistantStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
-
-function isAssistantStopReason(value: unknown): value is AssistantStopReason {
-  return (
-    value === "stop" ||
-    value === "length" ||
-    value === "toolUse" ||
-    value === "error" ||
-    value === "aborted"
-  );
-}
-
-export function getAssistantStopReason(message: any): AssistantStopReason | undefined {
-  const stopReason = message?.stopReason;
-  return isAssistantStopReason(stopReason) ? stopReason : undefined;
-}
-
-function hasPendingMessages(ctx: any): boolean {
-  try {
-    return Boolean(ctx?.hasPendingMessages?.());
-  } catch {
-    return false;
-  }
-}
-
-function isIdle(ctx: any): boolean {
-  try {
-    return Boolean(ctx?.isIdle?.());
-  } catch {
-    return false;
-  }
-}
-
-export function shouldSettleIdleAfterAgentEnd(opts: {
-  activePrompt: boolean;
-  pendingToolExecutions: number;
-  hasPendingMessages: boolean;
-  isIdle: boolean;
-  lastAssistantStopReason?: string;
-}): boolean {
-  if (!opts.activePrompt) return false;
-  if (opts.pendingToolExecutions > 0) return false;
-  if (!opts.isIdle) return false;
-  if (opts.hasPendingMessages) return false;
-  return opts.lastAssistantStopReason === "stop" || opts.lastAssistantStopReason === "length";
-}
-
 function appendModel(args: string[], ctx: any): void {
   try {
     const model = ctx?.model;
@@ -157,14 +109,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   let activePrompt = false;
   let lastState: PiState | undefined;
   let lastDetail: string | undefined;
-  let idleTimer: NodeJS.Timeout | undefined;
   const pendingToolExecutions = new Set<string>();
-
-  function clearIdleTimer(): void {
-    if (!idleTimer) return;
-    clearTimeout(idleTimer);
-    idleTimer = undefined;
-  }
 
   function setState(state: PiState, ctx: any, detail?: string, force = false): void {
     if (!force && lastState === state && lastDetail === detail) return;
@@ -174,16 +119,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   }
 
   function setWorking(ctx: any, detail?: string): void {
-    clearIdleTimer();
     setState("working", ctx, detail);
-  }
-
-  function settleIdle(ctx: any): void {
-    clearIdleTimer();
-    idleTimer = setTimeout(() => {
-      activePrompt = false;
-      setState("idle", ctx, undefined, true);
-    }, IDLE_SETTLE_MS);
   }
 
   pi.on("agent_start", async (_event: any, ctx: any) => {
@@ -195,24 +131,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   pi.on("agent_end", async (event: any, ctx: any) => {
     const messages = Array.isArray(event?.messages) ? event.messages : [];
     const last = lastAssistantMessage(messages);
+    activePrompt = false;
+    pendingToolExecutions.clear();
     if (last && endsWithQuestion(last)) {
-      activePrompt = false;
-      clearIdleTimer();
       setState("question", ctx);
-      return;
+    } else {
+      setState("idle", ctx, undefined, true);
     }
-    if (
-      !shouldSettleIdleAfterAgentEnd({
-        activePrompt,
-        pendingToolExecutions: pendingToolExecutions.size,
-        hasPendingMessages: hasPendingMessages(ctx),
-        isIdle: isIdle(ctx),
-        lastAssistantStopReason: getAssistantStopReason(last),
-      })
-    ) {
-      return;
-    }
-    settleIdle(ctx);
   });
 
   pi.on("message_update", async (event: any, ctx: any) => {
@@ -222,7 +147,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   });
 
   pi.on("tool_call", async (event: any, ctx: any) => {
-    clearIdleTimer();
     if (event?.toolName === "AskUserQuestion" || event?.toolName === "ask_user") {
       activePrompt = false;
       setState("question", ctx);
@@ -270,14 +194,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   pi.on("session_switch", async (_event: any, ctx: any) => {
     activePrompt = false;
     pendingToolExecutions.clear();
-    clearIdleTimer();
     setState("idle", ctx, undefined, true);
   });
 
   pi.on("session_shutdown", async (_event: any, ctx: any) => {
     activePrompt = false;
     pendingToolExecutions.clear();
-    clearIdleTimer();
     setState("idle", ctx, undefined, true);
   });
 };
