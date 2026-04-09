@@ -8,7 +8,7 @@ import { BACK_ENV, switchBack } from "./back.js";
 import type { ModelMetadata, ModelSource, StateSnapshot } from "./state.js";
 import type { MuxPaneInfo } from "./multiplexer.js";
 import { inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, runtimeStateFromAgent } from "./scanner-runtime.js";
-import { mergedContextTokens, resolveModelInfo, stateContext, stateDetail, stateDuration, stateExternalSessionId, stateProvenance, stateTokens, stateWorkspaceCwd } from "./scanner-state-runtime.js";
+import { isHookAuthoritativeAgent, mergedContextTokens, resolveModelInfo, stateContext, stateDetail, stateDuration, stateExternalSessionId, stateProvenance, stateTokens, stateWorkspaceCwd } from "./scanner-state-runtime.js";
 import { extractLatestCodexOpsFromLogLines, getDetector, reconcileStaleCodexWorkingState, resolveStatusFromContent, shouldTreatCodexWorkingAsIdle } from "./scanner-detection.js";
 import { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
 import type { SiblingPane, WindowSnapshot } from "./pane-ops.js";
@@ -216,8 +216,11 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
 
     const resolvedTitle = isTitleUseful(title) ? title : winname || title;
     const wact = parseInt(wactStr, 10) || 0;
-    const tailContent = capturePaneTailSync(tmuxPaneId);
-    const { status, detail } = detectStatusSync(pane, resolvedTitle, wact, agentName, tmuxPaneId, stateSnapshot, { tail: tailContent });
+    const usesHookRuntime = isHookAuthoritativeAgent(agentName);
+    const tailContent = usesHookRuntime ? "" : capturePaneTailSync(tmuxPaneId);
+    const { status, detail } = usesHookRuntime
+      ? resolveStatusFromContent(resolvedTitle, wact, agentName, "", tmuxPaneId, stateSnapshot, "")
+      : detectStatusSync(pane, resolvedTitle, wact, agentName, tmuxPaneId, stateSnapshot, { tail: tailContent });
     const richDetail = stateDetail(agentName, tmuxPaneId, stateSnapshot);
     const context = stateContext(agentName, tmuxPaneId, stateSnapshot);
     const provenance = stateProvenance(agentName, tmuxPaneId, stateSnapshot);
@@ -279,7 +282,8 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
 
     if (!agentName) continue;
 
-    const content = mux.getPaneContent(p.id, 20);
+    const usesHookRuntime = isHookAuthoritativeAgent(agentName);
+    const content = usesHookRuntime ? "" : mux.getPaneContent(p.id, 20);
     const { status, detail } = resolveStatusFromContent(p.title, 0, agentName, content, p.id, stateSnapshot, content);
 
     const paneRef = `${p.session}:${p.tab}`;
@@ -386,8 +390,11 @@ function scanSync(): AgentPane[] {
   const results: AgentPane[] = [];
   for (const p of agentPanes) {
     const wact = parseInt(p.wactStr, 10) || 0;
-    const tailContent = capturePaneTailSync(p.tmuxPaneId);
-    const { status, detail } = detectStatusSync(p.pane, p.title, wact, p.agentName, p.tmuxPaneId, stateSnapshot, { tail: tailContent });
+    const usesHookRuntime = isHookAuthoritativeAgent(p.agentName);
+    const tailContent = usesHookRuntime ? "" : capturePaneTailSync(p.tmuxPaneId);
+    const { status, detail } = usesHookRuntime
+      ? resolveStatusFromContent(p.title, wact, p.agentName, "", p.tmuxPaneId, stateSnapshot, "")
+      : detectStatusSync(p.pane, p.title, wact, p.agentName, p.tmuxPaneId, stateSnapshot, { tail: tailContent });
     const richDetail = stateDetail(p.agentName, p.tmuxPaneId, stateSnapshot);
     const finalDetail = richDetail || detail;
     const paneShort = p.pane.replace(/\.\d+$/, "");
@@ -499,8 +506,11 @@ export async function scanAsync(): Promise<AgentPane[]> {
 
   const promises = agentPanes.map(async (p) => {
     const wact = parseInt(p.wactStr, 10) || 0;
-    const tailContent = await capturePaneTailAsync(p.tmuxPaneId);
-    const { status, detail } = await detectStatus(p.pane, p.title, wact, p.agentName, p.tmuxPaneId, stateSnapshot, { tail: tailContent });
+    const usesHookRuntime = isHookAuthoritativeAgent(p.agentName);
+    const tailContent = usesHookRuntime ? "" : await capturePaneTailAsync(p.tmuxPaneId);
+    const { status, detail } = usesHookRuntime
+      ? resolveStatusFromContent(p.title, wact, p.agentName, "", p.tmuxPaneId, stateSnapshot, "")
+      : await detectStatus(p.pane, p.title, wact, p.agentName, p.tmuxPaneId, stateSnapshot, { tail: tailContent });
     const richDetail = stateDetail(p.agentName, p.tmuxPaneId, stateSnapshot);
     const finalDetail = richDetail || detail;
     const paneShort = p.pane.replace(/\.\d+$/, "");

@@ -3,6 +3,12 @@ import { inferContextFromContent, inferModelMetadataFromContent } from "./scanne
 import type { ModelMetadata, StateSnapshot } from "./state.js";
 import type { AgentRuntimeState } from "./scanner-types.js";
 
+const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode"]);
+
+export function isHookAuthoritativeAgent(agent: string): boolean {
+  return HOOK_AGENTS.has(agent.toLowerCase());
+}
+
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
@@ -69,6 +75,10 @@ export function stateTokens(agent: string, paneId?: string, snapshot?: StateSnap
 
 export function mergedContextTokens(agent: string, paneId: string | undefined, content: string, snapshot?: StateSnapshot): { contextTokens?: number; contextMax?: number } {
   const stored = stateTokens(agent, paneId, snapshot);
+  if (isHookAuthoritativeAgent(agent)) {
+    return stored;
+  }
+
   const inferred = inferContextFromContent(agent, content);
 
   if (agent.toLowerCase() === "codex") {
@@ -102,6 +112,10 @@ export function stateProvenance(agent: string, paneId?: string, snapshot?: State
 
 export function resolveModelInfo(agent: string, paneId: string | undefined, content: string, snapshot?: StateSnapshot): ModelMetadata {
   const stored = stateModelInfo(agent, paneId, snapshot);
+  if (isHookAuthoritativeAgent(agent)) {
+    return stored;
+  }
+
   if (hasResolvedModel(stored)) return stored;
 
   const inferred = inferModelMetadataFromContent(agent, content);

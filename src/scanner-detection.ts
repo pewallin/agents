@@ -215,7 +215,7 @@ export function reconcileStaleCodexWorkingState(content: string, title: string, 
   if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
 }
 
-const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode"]);
+export const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode"]);
 
 export function resolveStatusFromContent(
   title: string,

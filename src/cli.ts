@@ -109,7 +109,7 @@ const [
 ]);
 
 const { Command } = commander;
-const { scan, runtimeStates, getSessionHistory, inferContextFromContent, inferModelMetadataFromContent } = scanner;
+const { scan, runtimeStates, getSessionHistory } = scanner;
 const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
@@ -346,23 +346,6 @@ program
     let modelSource = opts.modelSource as string | undefined;
     let ctxTokens = isNaN(opts.contextTokens) ? undefined : opts.contextTokens;
     let ctxMax = isNaN(opts.contextMax) ? undefined : opts.contextMax;
-    if (muxKind === "tmux" && session?.startsWith("%") && (!model || !provider || !modelId || !modelLabel || ctxTokens === undefined || ctxMax === undefined)) {
-      try {
-        const paneTail = execSync(
-          `tmux capture-pane -t ${session} -p -S -20 2>/dev/null`,
-          { encoding: "utf-8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"] }
-        ).trim();
-        const inferredModel = inferModelMetadataFromContent(opts.agent, paneTail);
-        if (!model) model = inferredModel.model;
-        if (!provider) provider = inferredModel.provider;
-        if (!modelId) modelId = inferredModel.modelId;
-        if (!modelLabel) modelLabel = inferredModel.modelLabel;
-        if (!modelSource) modelSource = inferredModel.modelSource;
-        const inferredContext = inferContextFromContent(opts.agent, paneTail);
-        if (ctxTokens === undefined) ctxTokens = inferredContext.contextTokens;
-        if (ctxMax === undefined) ctxMax = inferredContext.contextMax;
-      } catch {}
-    }
     if (opts.auxiliary && !opts.reporter) {
       console.error("--auxiliary requires --reporter");
       process.exit(1);
