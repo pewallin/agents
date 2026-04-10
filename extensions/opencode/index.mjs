@@ -12,6 +12,8 @@ import { appendFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+const AGENTS_HOME = process.env.AGENTS_HOME || join(homedir(), ".agents");
+
 // Resolve agents binary — may not be on PATH in sandboxed processes
 const AGENTS_BIN = [
   join(homedir(), ".local", "bin", "agents"),
@@ -20,7 +22,7 @@ const AGENTS_BIN = [
 
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
-const LOG = join(homedir(), ".agents", "opencode-plugin.log");
+const LOG = join(AGENTS_HOME, "opencode-plugin.log");
 
 let currentModel = {};
 let externalSessionId;
