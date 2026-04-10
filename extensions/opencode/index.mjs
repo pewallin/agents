@@ -8,11 +8,14 @@
  * or run `agents setup` to have it configured automatically.
  */
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const AGENTS_HOME = process.env.AGENTS_HOME || join(homedir(), ".agents");
+const AGENTS_SHARED_HOME = process.env.AGENTS_SHARED_HOME || join(homedir(), ".agents");
+const AGENTS_PRODUCT_DIRNAME = process.env.AGENTS_PRODUCT_DIRNAME || "agents-app";
+const AGENTS_HOME = process.env.AGENTS_HOME || join(AGENTS_SHARED_HOME, AGENTS_PRODUCT_DIRNAME);
+const AGENTS_LOG_DIR = process.env.AGENTS_LOG_DIR || join(AGENTS_HOME, "logs");
 
 // Resolve agents binary — may not be on PATH in sandboxed processes
 const AGENTS_BIN = [
@@ -22,7 +25,7 @@ const AGENTS_BIN = [
 
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
-const LOG = join(AGENTS_HOME, "opencode-plugin.log");
+const LOG = join(AGENTS_LOG_DIR, "opencode-plugin.log");
 
 let currentModel = {};
 let externalSessionId;
@@ -30,7 +33,10 @@ let contextTokens;
 let contextMax;
 
 function log(msg) {
-  try { appendFileSync(LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
+  try {
+    mkdirSync(AGENTS_LOG_DIR, { recursive: true });
+    appendFileSync(LOG, `${new Date().toISOString()} ${msg}\n`);
+  } catch {}
 }
 
 function pickString(...values) {

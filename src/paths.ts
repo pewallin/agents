@@ -1,9 +1,20 @@
 import { mkdirSync } from "fs";
-import { homedir, tmpdir } from "os";
+import { homedir } from "os";
 import { join } from "path";
 
+const DEFAULT_SHARED_FOLDER = ".agents";
+const DEFAULT_PRODUCT_DIRNAME = "agents-app";
+
+function resolveSharedAgentsHome(): string {
+  return process.env.AGENTS_SHARED_HOME || join(homedir(), DEFAULT_SHARED_FOLDER);
+}
+
+function resolveAgentsProductDirname(): string {
+  return process.env.AGENTS_PRODUCT_DIRNAME || DEFAULT_PRODUCT_DIRNAME;
+}
+
 function resolveAgentsHome(): string {
-  return process.env.AGENTS_HOME || join(homedir(), ".agents");
+  return process.env.AGENTS_HOME || join(resolveSharedAgentsHome(), resolveAgentsProductDirname());
 }
 
 export function getAgentsHome(): string {
@@ -30,11 +41,22 @@ export function getGridFocusFile(): string {
   return process.env.AGENTS_GRID_FOCUS_FILE || join(getStateDir(), "grid-focus");
 }
 
+export function getLogsDir(): string {
+  return process.env.AGENTS_LOG_DIR || join(resolveAgentsHome(), "logs");
+}
+
+export function getRuntimeDir(): string {
+  return process.env.AGENTS_RUNTIME_DIR || join(resolveAgentsHome(), "runtime");
+}
+
 export function getRuntimeTempDir(): string {
-  return process.env.AGENTS_RUNTIME_DIR || tmpdir();
+  return process.env.AGENTS_TMP_DIR || join(getRuntimeDir(), "tmp");
 }
 
 export function ensureAgentsDirs(): void {
+  mkdirSync(getAgentsHome(), { recursive: true });
   mkdirSync(getStateDir(), { recursive: true });
   mkdirSync(getContributorStateDir(), { recursive: true });
+  mkdirSync(getLogsDir(), { recursive: true });
+  mkdirSync(getRuntimeTempDir(), { recursive: true });
 }
