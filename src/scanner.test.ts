@@ -1,7 +1,7 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
@@ -65,6 +65,15 @@ describe("inferModelFromContent", () => {
     expect(inferModelFromContent("codex", content)).toBe("gpt-5.2-codex");
   });
 
+  it("extracts codex model from the new footer format", () => {
+    const content = [
+      "› review these beads",
+      "",
+      "gpt-5.4 high fast · backlog-app · main · Context [█▉   ] · weekly 90% · 258K window · Fast on",
+    ].join("\n");
+    expect(inferModelFromContent("codex", content)).toBe("gpt-5.4");
+  });
+
   it("extracts pi model from footer", () => {
     const content = [
       "~/code · 11 pkgs • ↻...  (sub) · 9.5%/400k · 1h18m",
@@ -116,6 +125,43 @@ describe("inferContextFromContent", () => {
     expect(inferContextFromContent("claude", content)).toEqual({
       contextTokens: 70000,
       contextMax: 1000000,
+    });
+  });
+
+  it("does not infer codex context usage from footer text", () => {
+    const content = "gpt-5.4 high fast · backlog-app · main · Context [█▉   ] · weekly 90% · 258K window · Fast on";
+    expect(inferContextFromContent("codex", content)).toEqual({});
+  });
+});
+
+describe("extractLatestCodexTokenUsageFromSessionLines", () => {
+  it("reads the latest token_count event from the session log", () => {
+    const usage = extractLatestCodexTokenUsageFromSessionLines([
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { total_tokens: 54321 },
+            model_context_window: 258400,
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { input_tokens: 50000, cached_input_tokens: 1000, output_tokens: 2000, reasoning_output_tokens: 300 },
+            model_context_window: 512000,
+          },
+        },
+      }),
+    ]);
+
+    expect(usage).toEqual({
+      contextTokens: 53300,
+      contextMax: 512000,
     });
   });
 });

@@ -18,7 +18,7 @@ import type { AgentSessionHistoryItem } from "./scanner-history.js";
 import type { AgentPane, AgentRuntimeState, AgentStatus } from "./scanner-types.js";
 export type { AgentPane, AgentRuntimeState, AgentStatus } from "./scanner-types.js";
 export type { AgentSessionHistoryItem } from "./scanner-history.js";
-export { inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent } from "./scanner-runtime.js";
+export { extractLatestCodexTokenUsageFromSessionLines, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent } from "./scanner-runtime.js";
 export { extractLatestCodexOpsFromLogLines, getDetector, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner-detection.js";
 export { detectAgentProcess } from "./scanner-discovery.js";
 export { extractClaudeRenameTitleFromTranscript, extractLatestCodexSessionTitlesFromIndexLines } from "./scanner-history.js";

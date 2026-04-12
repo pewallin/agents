@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { deriveModelDisplay } from "./state.js";
@@ -14,30 +14,103 @@ function parseContextWindowLabel(label?: string): number | undefined {
   return Math.round(base * multiplier);
 }
 
-const codexModelCachePath = join(homedir(), ".codex", "models_cache.json");
-let codexModelCache: { mtimeMs: number; models: Map<string, number> } | null = null;
+const codexSessionsRoot = join(homedir(), ".codex", "sessions");
+const codexSessionPathCache = new Map<string, string>();
+const codexSessionUsageCache = new Map<string, { path: string; mtimeMs: number; usage: { contextTokens?: number; contextMax?: number } }>();
 
-function codexContextMaxForModel(model?: string): number | undefined {
-  if (!model || !existsSync(codexModelCachePath)) return undefined;
+function totalTokens(usage?: { total_tokens?: number; input_tokens?: number; cached_input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number }): number | undefined {
+  if (!usage) return undefined;
+  if (typeof usage.total_tokens === "number") return usage.total_tokens;
+
+  const parts = [
+    usage.input_tokens,
+    usage.cached_input_tokens,
+    usage.output_tokens,
+    usage.reasoning_output_tokens,
+  ].filter((value): value is number => typeof value === "number");
+  if (parts.length === 0) return undefined;
+  return parts.reduce((sum, value) => sum + value, 0);
+}
+
+export function extractLatestCodexTokenUsageFromSessionLines(lines: string[]): { contextTokens?: number; contextMax?: number } {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (!line) continue;
+
+    try {
+      const entry = JSON.parse(line) as {
+        type?: string;
+        payload?: {
+          type?: string;
+          info?: {
+            last_token_usage?: {
+              total_tokens?: number;
+              input_tokens?: number;
+              cached_input_tokens?: number;
+              output_tokens?: number;
+              reasoning_output_tokens?: number;
+            };
+            model_context_window?: number;
+          };
+        };
+      };
+      if (entry.type !== "event_msg" || entry.payload?.type !== "token_count") continue;
+
+      const contextTokens = totalTokens(entry.payload.info?.last_token_usage);
+      const contextMax = entry.payload.info?.model_context_window;
+      return {
+        ...(contextTokens !== undefined ? { contextTokens } : {}),
+        ...(typeof contextMax === "number" ? { contextMax } : {}),
+      };
+    } catch {}
+  }
+
+  return {};
+}
+
+function findCodexSessionPath(externalSessionId?: string): string | undefined {
+  if (!externalSessionId || !existsSync(codexSessionsRoot)) return undefined;
+
+  const cached = codexSessionPathCache.get(externalSessionId);
+  if (cached && existsSync(cached)) return cached;
+
+  const stack = [codexSessionsRoot];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (!dir) continue;
+
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+        if (entry.isFile() && entry.name.endsWith(`${externalSessionId}.jsonl`)) {
+          codexSessionPathCache.set(externalSessionId, fullPath);
+          return fullPath;
+        }
+      }
+    } catch {}
+  }
+
+  return undefined;
+}
+
+export function readCodexTokenUsageFromSession(externalSessionId?: string): { contextTokens?: number; contextMax?: number } {
+  const sessionPath = findCodexSessionPath(externalSessionId);
+  if (!sessionPath) return {};
 
   try {
-    const mtimeMs = statSync(codexModelCachePath).mtimeMs;
-    if (!codexModelCache || codexModelCache.mtimeMs !== mtimeMs) {
-      const parsed = JSON.parse(readFileSync(codexModelCachePath, "utf-8")) as {
-        models?: Array<{ slug?: string; context_window?: number; effective_context_window_percent?: number }>;
-      };
-      const models = new Map<string, number>();
-      for (const entry of parsed.models || []) {
-        if (!entry.slug || entry.context_window === undefined) continue;
-        const pct = entry.effective_context_window_percent ?? 100;
-        models.set(entry.slug.toLowerCase(), Math.round(entry.context_window * pct / 100));
-      }
-      codexModelCache = { mtimeMs, models };
-    }
+    const mtimeMs = statSync(sessionPath).mtimeMs;
+    const cached = externalSessionId ? codexSessionUsageCache.get(externalSessionId) : undefined;
+    if (cached && cached.path === sessionPath && cached.mtimeMs === mtimeMs) return cached.usage;
 
-    return codexModelCache.models.get(model.toLowerCase());
+    const usage = extractLatestCodexTokenUsageFromSessionLines(readFileSync(sessionPath, "utf-8").split("\n"));
+    if (externalSessionId) codexSessionUsageCache.set(externalSessionId, { path: sessionPath, mtimeMs, usage });
+    return usage;
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -67,16 +140,6 @@ export function inferContextFromContent(agent: string, content: string): { conte
       return {};
     }
     case "codex": {
-      for (const line of lines) {
-        const leftMatch = line.match(/([0-9]+(?:\.[0-9]+)?)%\s+left\b/i);
-        if (!leftMatch) continue;
-        const model = inferModelFromContent("codex", line);
-        const max = codexContextMaxForModel(model);
-        if (max === undefined) return {};
-        const leftPct = Number.parseFloat(leftMatch[1]);
-        const usedPct = Math.max(0, Math.min(100, 100 - leftPct));
-        return { contextTokens: Math.round(max * usedPct / 100), contextMax: max };
-      }
       return {};
     }
     default:
@@ -147,7 +210,7 @@ export function inferModelFromContent(agent: string, content: string): string | 
   switch (agent.toLowerCase()) {
     case "codex":
       for (const line of lines) {
-        let match = line.match(/^([A-Za-z0-9][A-Za-z0-9._/-]*)\s+(?:low|medium|high|xhigh)\s+·/i);
+        let match = line.match(/^([A-Za-z0-9][A-Za-z0-9._/-]*)\s+(?:low|medium|high|xhigh)(?:\s+[A-Za-z0-9._/-]+)*\s+·/i);
         if (match) return match[1];
         match = line.match(/^([A-Za-z0-9][A-Za-z0-9._/-]*)\s+·/);
         if (match && /(gpt|codex|claude|gemini|sonnet|opus|haiku|o\d)/i.test(match[1])) return match[1];

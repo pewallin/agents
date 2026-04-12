@@ -1,5 +1,5 @@
 import { deriveModelDisplay, getAgentStateEntry, getAgentStateProvenance } from "./state.js";
-import { inferContextFromContent, inferModelMetadataFromContent } from "./scanner-runtime.js";
+import { inferContextFromContent, inferModelMetadataFromContent, readCodexTokenUsageFromSession } from "./scanner-runtime.js";
 import type { ModelMetadata, StateSnapshot } from "./state.js";
 import type { AgentRuntimeState } from "./scanner-types.js";
 
@@ -75,18 +75,20 @@ export function stateTokens(agent: string, paneId?: string, snapshot?: StateSnap
 
 export function mergedContextTokens(agent: string, paneId: string | undefined, content: string, snapshot?: StateSnapshot): { contextTokens?: number; contextMax?: number } {
   const stored = stateTokens(agent, paneId, snapshot);
+
+  if (agent.toLowerCase() === "codex") {
+    const sessionUsage = readCodexTokenUsageFromSession(stateExternalSessionId(agent, paneId, snapshot));
+    return {
+      ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : sessionUsage.contextTokens !== undefined ? { contextTokens: sessionUsage.contextTokens } : {}),
+      ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : sessionUsage.contextMax !== undefined ? { contextMax: sessionUsage.contextMax } : {}),
+    };
+  }
+
   if (isHookAuthoritativeAgent(agent)) {
     return stored;
   }
 
   const inferred = inferContextFromContent(agent, content);
-
-  if (agent.toLowerCase() === "codex") {
-    return {
-      ...(inferred.contextTokens !== undefined ? { contextTokens: inferred.contextTokens } : stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : {}),
-      ...(inferred.contextMax !== undefined ? { contextMax: inferred.contextMax } : stored.contextMax !== undefined ? { contextMax: stored.contextMax } : {}),
-    };
-  }
 
   return {
     ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : inferred.contextTokens !== undefined ? { contextTokens: inferred.contextTokens } : {}),

@@ -35,6 +35,31 @@ describe("hook-authoritative runtime metadata", () => {
     expect(mergedContextTokens("pi", "%2", content, snapshot)).toEqual({});
   });
 
+  it("returns no codex context usage when neither hook state nor session log has it", () => {
+    const snapshot = createStateSnapshot(
+      [{ agent: "codex", session: "%4", state: "working", ts: 100, externalSessionId: `vitest-missing-${Date.now()}` }],
+      [],
+    );
+
+    const content = "gpt-5.4 high fast · backlog-app · main · Context [█▉   ] · weekly 90% · 258K window · Fast on";
+
+    expect(mergedContextTokens("codex", "%4", content, snapshot)).toEqual({});
+  });
+
+  it("prefers stored codex context usage over session-log reads", () => {
+    const snapshot = createStateSnapshot(
+      [{ agent: "codex", session: "%5", state: "working", ts: 100, contextTokens: 1234, contextMax: 5678 }],
+      [],
+    );
+
+    const content = "gpt-5.4 high fast · backlog-app · main · Context [█▉   ] · weekly 90% · 258K window · Fast on";
+
+    expect(mergedContextTokens("codex", "%5", content, snapshot)).toEqual({
+      contextTokens: 1234,
+      contextMax: 5678,
+    });
+  });
+
   it("returns stored metadata for supported agents without consulting pane content", () => {
     const snapshot = createStateSnapshot(
       [{
