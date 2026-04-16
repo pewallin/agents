@@ -66,7 +66,7 @@ Add `bind -n M-b run-shell "node ~/code/agents/dist/cli.js back 2>/dev/null || t
       "workspace": "default"
     },
     "pi": {
-      "command": "pi",
+      "command": "pi --yolo",
       "workspace": "small"
     },
     "opencode": {
@@ -122,17 +122,22 @@ set -g @plugin 'tmux-plugins/tpm'
 set -g @plugin 'tmux-plugins/tmux-resurrect'
 set -g @plugin 'tmux-plugins/tmux-continuum'
 
-# Auto-save every 15 min, auto-restore on tmux server start
+# Restore on tmux server start
 set -g @continuum-save-interval '15'
 set -g @continuum-restore 'on'
 
-# Restore agents with session continuation, preserving original flags (--yolo etc.) via *
+# Headless autosave for tmux-continuum
+run-shell -b '~/.tmux/continuum-headless.sh ensure'
+
+# Restore agent CLIs with explicit resume commands.
+# tmux-resurrect does not reliably preserve agent flags from saved argv/process titles.
+# Utilities and editors still preserve their original args via *.
 set -g @resurrect-processes '\
-  "~claude -> claude --continue *" \
-  "~codex -> codex resume --last *" \
-  "~copilot -> copilot --continue *" \
-  "~opencode -> opencode --continue *" \
-  "~pi -> pi --continue *" \
+  "~claude -> claude --continue --dangerously-skip-permissions" \
+  "~codex -> codex resume --last --yolo" \
+  "~copilot -> copilot --continue --yolo" \
+  "~opencode -> opencode --continue" \
+  "~pi -> pi --continue --yolo" \
   "~bv -> bv *" \
   "~lazygit -> lazygit *" \
   "~nvim -> nvim -S Session.vim *" \
@@ -148,7 +153,7 @@ Then press `prefix + I` inside tmux to install the plugins.
 
 ### How it works
 
-`tmux-resurrect` saves all sessions, windows, panes, layouts, and working directories. The `@resurrect-processes` setting tells it which programs to restore and what command to use. The `~` prefix enables fuzzy matching against the full saved command string (needed because Node-based agents like pi and codex show up as `node` in the process table). The `*` preserves the original command arguments, so flags like `--yolo` or `--dangerously-skip-permissions` carry over from however you launched the agent. The restore config only adds `--continue` (or `resume --last` for codex) to resume the most recent session. `tmux-continuum` triggers saves automatically and restores on tmux server start.
+`tmux-resurrect` saves all sessions, windows, panes, layouts, and working directories. The `@resurrect-processes` setting tells it which programs to restore and what command to use. The `~` prefix enables fuzzy matching against the saved command string. For agent CLIs, the recommended restore commands are explicit because `tmux-resurrect` does not reliably preserve agent flags from saved argv or process titles, especially for Node-based wrappers. The `*` is still useful for utilities and editors where preserving the original arguments is desirable. `tmux-continuum` still handles restore on tmux server start, but autosave should be driven by a headless helper such as `~/.tmux/continuum-headless.sh` so app-managed sessions can keep `status off`.
 
 After a reboot, restore happens the first time tmux starts — the app may prompt you to start tmux if no server is running yet.
 
@@ -164,7 +169,7 @@ Flags for running agents without approval prompts and for resuming sessions.
 | opencode | `--continue` | — | No auto-approve flag |
 | pi | `--continue` | `--yolo` | Also has `--resume` for interactive picker |
 
-The recommended tmux setup above preserves your original flags via `*` and adds session continuation on restore.
+The recommended tmux setup above restores agent CLIs with explicit resume/YOLO flags and still preserves original args for utility panes via `*`.
 
 ## Status Detection
 
