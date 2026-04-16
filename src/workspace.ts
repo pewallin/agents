@@ -283,8 +283,12 @@ function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: st
 }
 
 function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean): void {
+  const shouldFocusNewWindow = detectMultiplexer() === "tmux";
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
+  if (!shouldFocusNewWindow) {
+    newWindowCmd += " -d";
+  }
   if (opts?.tmuxSession) {
     newWindowCmd += ` -t ${JSON.stringify(opts.tmuxSession + ":")}`;
   }
@@ -335,6 +339,7 @@ function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: stri
     }
   }
 
-  // Focus the agent pane
-  exec(`tmux select-pane -t ${agentPaneId}`);
+  if (shouldFocusNewWindow) {
+    exec(`tmux select-pane -t ${agentPaneId}`);
+  }
 }
