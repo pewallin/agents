@@ -19,14 +19,13 @@ if (args.length === 1 && firstArg === "back" && muxKind === "tmux") {
   process.exit(switchBack() ? 0 : 1);
 }
 
-// If launched outside a multiplexer for a command that needs one, re-exec inside.
-// Non-interactive commands (report, setup, uninstall, count, back) work fine without one.
+// If launched outside a multiplexer for a command that truly requires a live
+// dashboard pane, re-exec inside tmux. Other commands may still talk to tmux,
+// but they should not force an attach just because they were launched from a
+// plain shell.
 const insideMux = !!muxKind;
 if (!insideMux) {
-  const hasJson = args.includes("--json");
-  const needsMux = !firstArg || firstArg === "watch" || firstArg === "w"
-    || ((firstArg === "list" || firstArg === "ls") && !hasJson)
-    || firstArg === "workspace" || firstArg === "ws";
+  const needsMux = !firstArg || firstArg === "watch" || firstArg === "w";
   if (needsMux) {
     // Try tmux (zellij auto-session creation not yet supported)
     try {
