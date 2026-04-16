@@ -4,6 +4,7 @@ import type { ModelMetadata, StateSnapshot } from "./state.js";
 import type { AgentRuntimeState } from "./scanner-types.js";
 
 const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode"]);
+const CODEX_SESSION_USAGE_MAX_SKEW_SECONDS = 300;
 
 export function isHookAuthoritativeAgent(agent: string): boolean {
   return HOOK_AGENTS.has(agent.toLowerCase());
@@ -77,10 +78,14 @@ export function mergedContextTokens(agent: string, paneId: string | undefined, c
   const stored = stateTokens(agent, paneId, snapshot);
 
   if (agent.toLowerCase() === "codex") {
+    const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
     const sessionUsage = readCodexTokenUsageFromSession(stateExternalSessionId(agent, paneId, snapshot));
+    const sessionUsageFresh = sessionUsage.observedAt === undefined
+      || entry?.ts === undefined
+      || Math.abs(sessionUsage.observedAt - entry.ts) <= CODEX_SESSION_USAGE_MAX_SKEW_SECONDS;
     return {
-      ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : sessionUsage.contextTokens !== undefined ? { contextTokens: sessionUsage.contextTokens } : {}),
-      ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : sessionUsage.contextMax !== undefined ? { contextMax: sessionUsage.contextMax } : {}),
+      ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : sessionUsageFresh && sessionUsage.contextTokens !== undefined ? { contextTokens: sessionUsage.contextTokens } : {}),
+      ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : sessionUsageFresh && sessionUsage.contextMax !== undefined ? { contextMax: sessionUsage.contextMax } : {}),
     };
   }
 

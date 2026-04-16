@@ -16,7 +16,13 @@ function parseContextWindowLabel(label?: string): number | undefined {
 
 const codexSessionsRoot = join(homedir(), ".codex", "sessions");
 const codexSessionPathCache = new Map<string, string>();
-const codexSessionUsageCache = new Map<string, { path: string; mtimeMs: number; usage: { contextTokens?: number; contextMax?: number } }>();
+const codexSessionUsageCache = new Map<string, { path: string; mtimeMs: number; usage: CodexTokenUsageSample }>();
+
+export interface CodexTokenUsageSample {
+  contextTokens?: number;
+  contextMax?: number;
+  observedAt?: number;
+}
 
 function totalTokens(usage?: { total_tokens?: number; input_tokens?: number; cached_input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number }): number | undefined {
   if (!usage) return undefined;
@@ -32,13 +38,21 @@ function totalTokens(usage?: { total_tokens?: number; input_tokens?: number; cac
   return parts.reduce((sum, value) => sum + value, 0);
 }
 
-export function extractLatestCodexTokenUsageFromSessionLines(lines: string[]): { contextTokens?: number; contextMax?: number } {
+function parseSessionTimestamp(timestamp?: string): number | undefined {
+  if (!timestamp) return undefined;
+  const millis = Date.parse(timestamp);
+  if (!Number.isFinite(millis)) return undefined;
+  return Math.round(millis / 1000);
+}
+
+export function extractLatestCodexTokenUsageSampleFromSessionLines(lines: string[]): CodexTokenUsageSample {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index]?.trim();
     if (!line) continue;
 
     try {
       const entry = JSON.parse(line) as {
+        timestamp?: string;
         type?: string;
         payload?: {
           type?: string;
@@ -61,11 +75,20 @@ export function extractLatestCodexTokenUsageFromSessionLines(lines: string[]): {
       return {
         ...(contextTokens !== undefined ? { contextTokens } : {}),
         ...(typeof contextMax === "number" ? { contextMax } : {}),
+        ...(parseSessionTimestamp(entry.timestamp) !== undefined ? { observedAt: parseSessionTimestamp(entry.timestamp) } : {}),
       };
     } catch {}
   }
 
   return {};
+}
+
+export function extractLatestCodexTokenUsageFromSessionLines(lines: string[]): { contextTokens?: number; contextMax?: number } {
+  const sample = extractLatestCodexTokenUsageSampleFromSessionLines(lines);
+  return {
+    ...(sample.contextTokens !== undefined ? { contextTokens: sample.contextTokens } : {}),
+    ...(sample.contextMax !== undefined ? { contextMax: sample.contextMax } : {}),
+  };
 }
 
 function findCodexSessionPath(externalSessionId?: string): string | undefined {
@@ -97,7 +120,7 @@ function findCodexSessionPath(externalSessionId?: string): string | undefined {
   return undefined;
 }
 
-export function readCodexTokenUsageFromSession(externalSessionId?: string): { contextTokens?: number; contextMax?: number } {
+export function readCodexTokenUsageFromSession(externalSessionId?: string): CodexTokenUsageSample {
   const sessionPath = findCodexSessionPath(externalSessionId);
   if (!sessionPath) return {};
 
@@ -106,7 +129,7 @@ export function readCodexTokenUsageFromSession(externalSessionId?: string): { co
     const cached = externalSessionId ? codexSessionUsageCache.get(externalSessionId) : undefined;
     if (cached && cached.path === sessionPath && cached.mtimeMs === mtimeMs) return cached.usage;
 
-    const usage = extractLatestCodexTokenUsageFromSessionLines(readFileSync(sessionPath, "utf-8").split("\n"));
+    const usage = extractLatestCodexTokenUsageSampleFromSessionLines(readFileSync(sessionPath, "utf-8").split("\n"));
     if (externalSessionId) codexSessionUsageCache.set(externalSessionId, { path: sessionPath, mtimeMs, usage });
     return usage;
   } catch {

@@ -1,3 +1,6 @@
+import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { createStateSnapshot } from "./state.js";
 import { isHookAuthoritativeAgent, mergedContextTokens, resolveModelInfo } from "./scanner-state-runtime.js";
@@ -44,6 +47,67 @@ describe("hook-authoritative runtime metadata", () => {
     const content = "gpt-5.4 high fast · backlog-app · main · Context [█▉   ] · weekly 90% · 258K window · Fast on";
 
     expect(mergedContextTokens("codex", "%4", content, snapshot)).toEqual({});
+  });
+
+  it("reads codex context usage from a fresh session log sample", () => {
+    const externalSessionId = `vitest-codex-fresh-${Date.now()}`;
+    const sessionDir = join(homedir(), ".codex", "sessions", "2099", "01", "01");
+    const sessionPath = join(sessionDir, `rollout-2099-01-01T00-01-40-${externalSessionId}.jsonl`);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(sessionPath, `${JSON.stringify({
+      timestamp: "1970-01-01T00:01:40.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: { total_tokens: 54321 },
+          model_context_window: 258400,
+        },
+      },
+    })}\n`);
+
+    try {
+      const snapshot = createStateSnapshot(
+        [{ agent: "codex", session: "%fresh", state: "working", ts: 100, externalSessionId }],
+        [],
+      );
+
+      expect(mergedContextTokens("codex", "%fresh", "", snapshot)).toEqual({
+        contextTokens: 54321,
+        contextMax: 258400,
+      });
+    } finally {
+      rmSync(sessionPath, { force: true });
+    }
+  });
+
+  it("ignores codex session usage when it is stale relative to pane state", () => {
+    const externalSessionId = `vitest-codex-stale-${Date.now()}`;
+    const sessionDir = join(homedir(), ".codex", "sessions", "2099", "01", "01");
+    const sessionPath = join(sessionDir, `rollout-2099-01-01T00-01-40-${externalSessionId}.jsonl`);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(sessionPath, `${JSON.stringify({
+      timestamp: "1970-01-01T00:01:40.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: { total_tokens: 54321 },
+          model_context_window: 258400,
+        },
+      },
+    })}\n`);
+
+    try {
+      const snapshot = createStateSnapshot(
+        [{ agent: "codex", session: "%stale", state: "idle", ts: 1000, externalSessionId }],
+        [],
+      );
+
+      expect(mergedContextTokens("codex", "%stale", "", snapshot)).toEqual({});
+    } finally {
+      rmSync(sessionPath, { force: true });
+    }
   });
 
   it("prefers stored codex context usage over session-log reads", () => {

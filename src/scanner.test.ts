@@ -1,7 +1,7 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
@@ -162,6 +162,30 @@ describe("extractLatestCodexTokenUsageFromSessionLines", () => {
     expect(usage).toEqual({
       contextTokens: 53300,
       contextMax: 512000,
+    });
+  });
+});
+
+describe("extractLatestCodexTokenUsageSampleFromSessionLines", () => {
+  it("includes the event timestamp for freshness checks", () => {
+    const usage = extractLatestCodexTokenUsageSampleFromSessionLines([
+      JSON.stringify({
+        timestamp: "1970-01-01T00:01:40.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { total_tokens: 54321 },
+            model_context_window: 258400,
+          },
+        },
+      }),
+    ]);
+
+    expect(usage).toEqual({
+      contextTokens: 54321,
+      contextMax: 258400,
+      observedAt: 100,
     });
   });
 });
