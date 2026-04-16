@@ -3,7 +3,18 @@
   "version": "1.0.0",
   "description": "Monitor AI agent panes across tmux sessions",
   "type": "module",
-  "main": "dist/cli.js",
+  "main": "dist/lib.js",
+  "types": "dist/lib.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/lib.d.ts",
+      "import": "./dist/lib.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
   "bin": {
     "agents": "dist/cli.js"
   },

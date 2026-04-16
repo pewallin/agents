@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, statSync } from "fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "fs";
+import { randomUUID } from "crypto";
 import { dirname, join, resolve } from "path";
 import { exec } from "./shell.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
@@ -34,6 +35,8 @@ function resolveLayout(config: ReturnType<typeof loadConfig>, layout?: string): 
 
 export interface CreateWorkspaceOpts {
   agentCmd?: string;
+  overrideArgs?: string[];
+  directAgentLaunch?: boolean; // tmux-only: launch the main agent pane via exec script instead of shell send-keys
   name?: string;
   layout?: string;
   profile?: string;
@@ -46,11 +49,20 @@ export interface CreateWorkspaceOpts {
 export interface ResolvedWorkspaceLaunch {
   command: string;
   agentCommand: string;
+  argv: string[];
+  env?: Record<string, string>;
   layout?: string;
   name?: string;
   profileName?: string;
   profileEnv?: Record<string, string>;
   alternateScreen?: boolean;
+}
+
+export interface WorkspaceLaunchResult {
+  cwd: string;
+  mux: "tmux" | "zellij" | null;
+  windowName: string;
+  resolved: ResolvedWorkspaceLaunch;
 }
 
 export interface RestorableWorkspace {
@@ -129,15 +141,119 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function applyProfileEnv(command: string, env?: Record<string, string>): string {
-  if (!env || Object.keys(env).length === 0) return command;
-  const exports = Object.entries(env).map(([key, value]) => {
+function shellQuoteIfNeeded(value: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : shellQuote(value);
+}
+
+function renderCommand(argv: string[]): string {
+  return argv.map(shellQuoteIfNeeded).join(" ");
+}
+
+function renderEnvExports(env?: Record<string, string>): string[] {
+  if (!env || Object.keys(env).length === 0) return [];
+  return Object.entries(env).map(([key, value]) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       throw new Error(`Invalid environment variable name in profile: ${key}`);
     }
     return `export ${key}=${shellQuote(String(value))}`;
   });
+}
+
+function applyProfileEnv(command: string, env?: Record<string, string>): string {
+  const exports = renderEnvExports(env);
+  if (exports.length === 0) return command;
   return `${exports.join("; ")}; ${command}`;
+}
+
+function splitCommandArgv(command: string): string[] {
+  const argv: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaping = false;
+
+  const pushCurrent = () => {
+    if (current.length > 0) {
+      argv.push(current);
+      current = "";
+    }
+  };
+
+  for (const ch of command) {
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+
+    if (quote === "'") {
+      if (ch === "'") {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = null;
+      } else if (ch === "\\") {
+        escaping = true;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      pushCurrent();
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "\\") {
+      escaping = true;
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (escaping) throw new Error("Invalid command: trailing escape");
+  if (quote) throw new Error("Invalid command: unterminated quote");
+  pushCurrent();
+
+  if (argv.length === 0) throw new Error("No command specified and no defaultCommand in config");
+  return argv;
+}
+
+function buildLauncherScript(cwd: string, argv: string[], env?: Record<string, string>): string {
+  const exports = renderEnvExports(env);
+  const command = renderCommand(argv);
+  return [
+    "#!/bin/sh",
+    "set -eu",
+    `cd -- ${shellQuote(cwd)}`,
+    ...exports,
+    "rm -f -- \"$0\"",
+    `exec ${command}`,
+    "",
+  ].join("\n");
+}
+
+function writeLauncherScript(cwd: string, argv: string[], env?: Record<string, string>): string {
+  const path = join("/tmp", `agents-launch-${randomUUID()}.sh`);
+  writeFileSync(path, buildLauncherScript(cwd, argv, env), { mode: 0o755 });
+  return path;
+}
+
+function shellLaunchCommand(scriptPath: string): string {
+  const shell = process.env.SHELL || "/bin/sh";
+  return `${shellQuote(shell)} -lc ${shellQuote(`exec ${scriptPath}`)}`;
 }
 
 export function resolveWorkspaceLaunch(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): ResolvedWorkspaceLaunch {
@@ -149,12 +265,17 @@ export function resolveWorkspaceLaunch(agentCmd?: string, name?: string, layout?
   if (!baseCommand) {
     throw new Error("No command specified and no defaultCommand in config");
   }
+  const overrideArgs = opts?.overrideArgs || [];
+  const argv = [...splitCommandArgv(baseCommand), ...overrideArgs];
+  const agentCommandString = renderCommand(argv);
   const layoutName = layout || profile?.workspace;
   const displayName = name || profile?.name || profileName;
 
   return {
-    command: applyProfileEnv(baseCommand, profile?.env),
-    agentCommand: baseCommand,
+    command: applyProfileEnv(agentCommandString, profile?.env),
+    agentCommand: agentCommandString,
+    argv,
+    ...(profile?.env ? { env: profile.env } : {}),
     ...(layoutName ? { layout: layoutName } : {}),
     ...(displayName ? { name: displayName } : {}),
     ...(profileName ? { profileName } : {}),
@@ -163,34 +284,28 @@ export function resolveWorkspaceLaunch(agentCmd?: string, name?: string, layout?
   };
 }
 
-export function createWorkspace(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): void {
+export function createWorkspaceOrThrow(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): WorkspaceLaunchResult {
   const config = loadConfig();
-  let resolved: ResolvedWorkspaceLaunch;
-  try {
-    resolved = resolveWorkspaceLaunch(agentCmd, name, layout, opts);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(message);
-    process.exit(1);
-  }
+  const resolved = resolveWorkspaceLaunch(agentCmd, name, layout, opts);
   const cmd = resolved.command;
   const metadataCommand = resolved.agentCommand;
+  const argv = resolved.argv;
+  const launchEnv = resolved.env;
   const layoutName = resolved.layout;
   const resolvedName = resolved.name;
 
   if (!cmd) {
-    console.error("No command specified and no defaultCommand in config");
-    process.exit(1);
+    throw new Error("No command specified and no defaultCommand in config");
   }
 
   if (opts?.cwd && opts.initProject && !prepareWorkspaceDir(opts.cwd)) {
-    console.error(`Failed to create project directory: ${opts.cwd}`);
-    process.exit(1);
+    throw new Error(`Failed to create project directory: ${opts.cwd}`);
   }
 
   const defs = opts?.agentOnly ? [] : resolveLayout(config, layoutName);
+  const cwd = opts?.cwd || process.cwd();
   const baseName = resolvedName || metadataCommand.split(/\s+/)[0];
-  const cwdBase = (opts?.cwd || process.cwd()).split("/").pop() || "";
+  const cwdBase = cwd.split("/").pop() || "";
   const windowName = cwdBase ? `${baseName}:${cwdBase}` : baseName;
 
   // Build workspace snapshot at creation time — this is the authoritative
@@ -198,7 +313,7 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
   const muxKind = detectMultiplexer();
   const wsSnapshot: WorkspaceSnapshot = {
     command: cmd,
-    cwd: opts?.cwd || process.cwd(),
+    cwd,
     mux: muxKind || undefined,
     sessionName: opts?.tmuxSession || undefined,
   };
@@ -206,7 +321,24 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
   if (muxKind === "zellij") {
     createWorkspaceZellij(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
   } else {
-    createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen);
+    createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen, argv, launchEnv);
+  }
+
+  return {
+    cwd,
+    mux: muxKind,
+    windowName,
+    resolved,
+  };
+}
+
+export function createWorkspace(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): WorkspaceLaunchResult {
+  try {
+    return createWorkspaceOrThrow(agentCmd, name, layout, opts);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(message);
+    process.exit(1);
   }
 }
 
@@ -230,7 +362,7 @@ function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: st
   // Create tab — getMux().createTab returns the tab name, not pane ID
   // Snapshot panes before to find the new one after
   const before = new Set(mux.listPanes().map(p => p.id));
-  mux.createTab(windowName, cmd, { cwd: opts?.cwd });
+  mux.createTab(windowName, cmd, { cwd: opts?.cwd || process.cwd() });
 
   // Find the new pane (the one not in the before set)
   const after = mux.listPanes();
@@ -238,8 +370,7 @@ function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: st
   const agentPaneId = newPane?.id || "";
 
   if (!agentPaneId) {
-    console.error("Failed to create zellij tab");
-    return;
+    throw new Error("Failed to create zellij tab");
   }
 
   if (wsSnapshot) seedWorkspaceState(agentPaneId, agentCommand, wsSnapshot);
@@ -282,8 +413,9 @@ function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: st
   mux.focusPane(agentPaneId);
 }
 
-function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean): void {
+function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean, argv?: string[], env?: Record<string, string>): void {
   const shouldFocusNewWindow = detectMultiplexer() === "tmux";
+  const cwd = opts?.cwd || process.cwd();
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
   if (!shouldFocusNewWindow) {
@@ -293,16 +425,18 @@ function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: stri
     newWindowCmd += ` -t ${JSON.stringify(opts.tmuxSession + ":")}`;
   }
   newWindowCmd += ` -n ${JSON.stringify(windowName)} -P -F '#{pane_id}'`;
-  if (opts?.cwd) {
-    newWindowCmd += ` -c ${JSON.stringify(opts.cwd)}`;
+  if (cwd) {
+    newWindowCmd += ` -c ${JSON.stringify(cwd)}`;
+  }
+  if (opts?.directAgentLaunch) {
+    const launcherPath = writeLauncherScript(cwd, argv || splitCommandArgv(agentCommand), env);
+    const launchCmd = shellLaunchCommand(launcherPath);
+    newWindowCmd += ` ${JSON.stringify(launchCmd)}`;
   }
 
-  // Create window with interactive shell, then send the agent command.
-  // This ensures .zshrc/.bashrc is loaded so aliases and PATH are available.
   const agentPaneId = exec(newWindowCmd);
   if (!agentPaneId) {
-    console.error("Failed to create tmux window");
-    process.exit(1);
+    throw new Error("Failed to create tmux window");
   }
   exec(`tmux set-option -t ${agentPaneId} -w automatic-rename off`);
   exec(`tmux set-option -t ${agentPaneId} -w allow-rename off`);
@@ -311,7 +445,9 @@ function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: stri
     exec(`tmux set-option -p -t ${agentPaneId} alternate-screen off`);
   }
   if (wsSnapshot) seedWorkspaceState(agentPaneId, agentCommand, wsSnapshot);
-  exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);
+  if (!opts?.directAgentLaunch) {
+    exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);
+  }
 
   const paneMap: Record<string, string> = { agent: agentPaneId };
 

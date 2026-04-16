@@ -17,6 +17,28 @@ agents setup          # install reporting hooks
 agents                # live dashboard
 ```
 
+## Use as Library
+
+For local testing from another Node project:
+
+```bash
+cd /path/to/other-project
+npm link agents
+```
+
+```ts
+import { launchWorkspace, listAgents } from "agents";
+
+launchWorkspace({
+  profile: "codex",
+  overrides: ["--yolo"],
+  agentOnly: true,
+  cwd: process.cwd(),
+});
+
+console.log(listAgents());
+```
+
 ## Commands
 
 ```
@@ -106,6 +128,8 @@ Profiles define agent launch commands. Each profile can set a `workspace` layout
 ## Recommended tmux setup
 
 Agents treats tmux as the runtime source of truth. To persist and restore agent sessions across reboots, use [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) and [tmux-continuum](https://github.com/tmux-plugins/tmux-continuum).
+
+`agents ws` launches the main agent pane through the shell by default so you can exit back to the shell and reuse the pane. For tmux-only agent panes, `agents ws --agent-only --direct-agent-launch` uses a direct exec-style launch instead.
 
 ### Install
 

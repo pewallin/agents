@@ -6,6 +6,20 @@ const execMock = vi.fn((command: string) => {
   return "";
 });
 const reportStateMock = vi.fn();
+const writeFileSyncMock = vi.fn();
+const randomUUIDMock = vi.fn(() => "fixed-uuid");
+
+vi.mock("fs", async () => {
+  const actual = await vi.importActual<typeof import("fs")>("fs");
+  return {
+    ...actual,
+    writeFileSync: writeFileSyncMock,
+  };
+});
+
+vi.mock("crypto", () => ({
+  randomUUID: randomUUIDMock,
+}));
 
 vi.mock("./config.js", () => ({
   loadConfig: () => ({
@@ -113,9 +127,25 @@ describe("resolveWorkspaceLaunch", () => {
     expect(launch.name).toBeUndefined();
     expect(launch.profileEnv).toBeUndefined();
   });
+
+  it("appends override args to the resolved profile command", () => {
+    const launch = resolveWorkspaceLaunch(undefined, undefined, undefined, {
+      profile: "copilot",
+      overrideArgs: ["--model", "gpt-5.4", "--resume"],
+    });
+    expect(launch.argv).toEqual(["copilot", "--yolo", "--model", "gpt-5.4", "--resume"]);
+    expect(launch.agentCommand).toBe("copilot --yolo --model gpt-5.4 --resume");
+    expect(launch.command).toBe("export OPENAI_API_KEY='abc 123'; export DEBUG_FLAG='enabled'; copilot --yolo --model gpt-5.4 --resume");
+  });
 });
 
 describe("createWorkspace", () => {
+  beforeEach(() => {
+    writeFileSyncMock.mockClear();
+    randomUUIDMock.mockClear();
+    randomUUIDMock.mockReturnValue("fixed-uuid");
+  });
+
   it("uses the underlying agent command for window naming and seeded state", () => {
     createWorkspace(undefined, undefined, undefined, { profile: "bare", cwd: "/tmp/demo", agentOnly: true });
 
@@ -134,5 +164,29 @@ describe("createWorkspace", () => {
         sessionName: "agents",
       }),
     );
+  });
+
+  it("can launch the main tmux agent pane directly when requested", () => {
+    createWorkspace(undefined, undefined, undefined, {
+      profile: "bare",
+      cwd: "/tmp/demo",
+      agentOnly: true,
+      directAgentLaunch: true,
+    });
+
+    expect(writeFileSyncMock).toHaveBeenCalledWith(
+      "/tmp/agents-launch-fixed-uuid.sh",
+      expect.stringContaining("exec claude --dangerously-skip-permissions"),
+      { mode: 0o755 },
+    );
+    expect(writeFileSyncMock).toHaveBeenCalledWith(
+      "/tmp/agents-launch-fixed-uuid.sh",
+      expect.stringContaining("export FEATURE_FLAG='1'"),
+      { mode: 0o755 },
+    );
+    const expectedShell = process.env.SHELL || "/bin/sh";
+    const newWindowCall = execMock.mock.calls.find(([command]) => String(command).startsWith("tmux new-window"));
+    expect(newWindowCall?.[0]).toContain(JSON.stringify(`'${expectedShell}' -lc 'exec /tmp/agents-launch-fixed-uuid.sh'`));
+    expect(execMock).not.toHaveBeenCalledWith(expect.stringContaining(`tmux send-keys -t %42`));
   });
 });

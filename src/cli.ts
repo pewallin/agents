@@ -394,6 +394,7 @@ program
   .option("-l, --layout <layout>", "Layout name (default, small, or custom)")
   .option("--list-profiles", "List available profiles and exit")
   .option("--agent-only", "Skip helper pane creation (app creates them on demand)")
+  .option("--direct-agent-launch", "tmux only: launch the main agent pane directly instead of through the shell")
   .allowUnknownOption()
   .action((profile, overrides, opts) => {
     const profiles = getProfileNames();
@@ -410,9 +411,13 @@ program
       console.error(`Unknown profile "${profile}". Available: ${profiles.join(", ")}`);
       process.exit(1);
     }
-    const resolved = resolveProfile(selectedProfile);
-    const cmd = overrides.length ? `${resolved.command} ${overrides.join(" ")}` : undefined;
-    createWorkspace(cmd, opts.name, opts.layout, { profile: selectedProfile, cwd: process.cwd(), agentOnly: opts.agentOnly });
+    createWorkspace(undefined, opts.name, opts.layout, {
+      profile: selectedProfile,
+      cwd: process.cwd(),
+      agentOnly: opts.agentOnly,
+      directAgentLaunch: opts.directAgentLaunch,
+      overrideArgs: overrides,
+    });
     // New pane shell startups trigger iTerm2/terminal DA queries whose responses
     // leak back to this pane's input buffer. Drain them before exiting.
     if (process.stdin.isTTY) {
