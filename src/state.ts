@@ -352,6 +352,7 @@ export function reportState(agent: string, session: string, state: ReportedState
   const mergedModel = mergeModelMetadata(existing, opts);
 
   let { detail, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
+  if (detail === undefined) detail = existing?.detail;
   if (extSessionId === undefined) extSessionId = existing?.externalSessionId;
   if (context === undefined) context = existing?.context;
   if (ctxTokens === undefined) ctxTokens = existing?.contextTokens;

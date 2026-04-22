@@ -15,13 +15,26 @@ else
 fi
 
 INPUT=$(cat)
-SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // .sessionId // .thread_id // .threadId // .agent_id // .agentId // empty' 2>/dev/null)
 MODEL=$(printf '%s' "$INPUT" | jq -r '.model // empty' 2>/dev/null)
 MODEL_ID=$(printf '%s' "$INPUT" | jq -r '.model_id // .modelId // empty' 2>/dev/null)
 MODEL_LABEL=$(printf '%s' "$INPUT" | jq -r '.model_label // .modelLabel // empty' 2>/dev/null)
 PROVIDER=$(printf '%s' "$INPUT" | jq -r '.provider // .model_provider // .modelProvider // empty' 2>/dev/null)
 CONTEXT_TOKENS=$(printf '%s' "$INPUT" | jq -r '.context_tokens // .contextTokens // .token_usage.total // .tokenUsage.total // .usage.current_tokens // .usage.currentTokens // .usage.tokens // empty' 2>/dev/null)
 CONTEXT_MAX=$(printf '%s' "$INPUT" | jq -r '.context_max // .contextMax // .context_window // .contextWindow // .token_usage.limit // .tokenUsage.limit // .usage.token_limit // .usage.tokenLimit // .usage.context_window // .usage.contextWindow // empty' 2>/dev/null)
+DETAIL_RAW=$(printf '%s' "$INPUT" | jq -r '
+def first_text:
+  if type == "string" then .
+  elif type == "array" then
+    ([ .[] | if type == "string" then . elif type == "object" then (.text // .content // empty) else empty end ]
+      | map(select(type == "string" and length > 0))
+      | .[0]) // empty
+  elif type == "object" then (.text // .content // empty)
+  else empty
+  end;
+(.prompt // .user_prompt // .userPrompt // .input // .input_text // .inputText // .message // .text // .user_message // .userMessage // .hook_event.input // .hookEvent.input // empty) | first_text
+' 2>/dev/null)
+DETAIL=$(printf '%s' "$DETAIL_RAW" | awk 'NF { print; exit }' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-160)
 
 if [ -z "$MODEL_ID" ] && [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
   case "$MODEL" in
@@ -75,6 +88,9 @@ if [ -n "$PROVIDER" ] || [ -n "$MODEL_ID" ] || [ -n "$MODEL_LABEL" ]; then
 fi
 if [ -n "$SESSION_ID" ] && [ "$SESSION_ID" != "null" ]; then
   ARGS+=(--external-session-id "$SESSION_ID")
+fi
+if [ -n "$DETAIL" ] && [ "$DETAIL" != "null" ]; then
+  ARGS+=(--detail "$DETAIL")
 fi
 if [ -n "$CONTEXT_TOKENS" ] && [ "$CONTEXT_TOKENS" != "null" ]; then
   ARGS+=(--context-tokens "$CONTEXT_TOKENS")

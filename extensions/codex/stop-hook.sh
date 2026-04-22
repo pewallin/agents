@@ -18,7 +18,7 @@ if [ "$ACTIVE" = "true" ]; then
   exit 0
 fi
 
-SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // .sessionId // .thread_id // .threadId // .agent_id // .agentId // empty' 2>/dev/null)
 MODEL=$(printf '%s' "$INPUT" | jq -r '.model // empty' 2>/dev/null)
 MODEL_ID=$(printf '%s' "$INPUT" | jq -r '.model_id // .modelId // empty' 2>/dev/null)
 MODEL_LABEL=$(printf '%s' "$INPUT" | jq -r '.model_label // .modelLabel // empty' 2>/dev/null)
@@ -27,6 +27,7 @@ CONTEXT_TOKENS=$(printf '%s' "$INPUT" | jq -r '.context_tokens // .contextTokens
 CONTEXT_MAX=$(printf '%s' "$INPUT" | jq -r '.context_max // .contextMax // .context_window // .contextWindow // .token_usage.limit // .tokenUsage.limit // .usage.token_limit // .usage.tokenLimit // .usage.context_window // .usage.contextWindow // empty' 2>/dev/null)
 MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""' 2>/dev/null)
 LAST_LINE=$(printf '%s' "$MSG" | awk 'NF { last=$0 } END { print last }')
+QUESTION_DETAIL=$(printf '%s' "$MSG" | awk 'NF { print; exit }' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-160)
 
 if [ -z "$MODEL_ID" ] && [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
   case "$MODEL" in
@@ -88,7 +89,11 @@ fi
 
 if [ ${#AGENTS_CMD[@]} -gt 0 ]; then
   if printf '%s' "$LAST_LINE" | grep -Eq '\?[[:space:]]*$'; then
-    "${AGENTS_CMD[@]}" "${ARGS[@]}" --state question
+    if [ -n "$QUESTION_DETAIL" ] && [ "$QUESTION_DETAIL" != "null" ]; then
+      "${AGENTS_CMD[@]}" "${ARGS[@]}" --state question --detail "$QUESTION_DETAIL"
+    else
+      "${AGENTS_CMD[@]}" "${ARGS[@]}" --state question
+    fi
   else
     "${AGENTS_CMD[@]}" "${ARGS[@]}" --state idle
   fi

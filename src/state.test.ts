@@ -100,6 +100,18 @@ describe("state priority logic", () => {
   });
 });
 
+describe("reportState", () => {
+  it("preserves existing detail when a later update omits it", () => {
+    const session = `%vitest-detail-preserve-${Date.now()}`;
+
+    reportState("codex", session, "working", { detail: "Implement sidebar grouping" });
+    reportState("codex", session, "idle", {});
+
+    expect(getAgentStateEntry("codex", session)?.detail).toBe("Implement sidebar grouping");
+    expect(getAgentStateEntry("codex", session)?.state).toBe("idle");
+  });
+});
+
 describe("session filtering", () => {
   const now = Math.floor(Date.now() / 1000);
 
