@@ -1,7 +1,7 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
@@ -225,6 +225,20 @@ describe("extractLatestCodexSessionTitlesFromIndexLines", () => {
       JSON.stringify({ id: thread, thread_name: "Agents dev" }),
     ]);
     expect(latest.get(thread)).toBe("Agents dev");
+  });
+});
+
+describe("resolveAgentIntentTitle", () => {
+  it("keeps the live pane title when it differs from the stable display title", () => {
+    expect(resolveAgentIntentTitle("Committing fo-usecase changes", "Weekly pricing cleanup")).toBe("Committing fo-usecase changes");
+  });
+
+  it("drops the intent when the live pane title matches the display title", () => {
+    expect(resolveAgentIntentTitle("Weekly pricing cleanup", "Weekly pricing cleanup")).toBeUndefined();
+  });
+
+  it("strips spinner prefixes before comparing titles", () => {
+    expect(resolveAgentIntentTitle("⠋ Weekly pricing cleanup", "Weekly pricing cleanup")).toBeUndefined();
   });
 });
 

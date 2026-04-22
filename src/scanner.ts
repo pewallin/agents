@@ -128,6 +128,13 @@ function friendlyName(name: string): string {
   return FRIENDLY_NAMES[name] ?? name;
 }
 
+export function resolveAgentIntentTitle(paneTitle: string, displayTitle?: string): string | undefined {
+  const normalizedPaneTitle = cleanTitle(paneTitle).trim();
+  if (!isTitleUseful(normalizedPaneTitle)) return undefined;
+  if (displayTitle && normalizedPaneTitle === displayTitle.trim()) return undefined;
+  return normalizedPaneTitle;
+}
+
 interface PaneContentSnapshot {
   tail?: string;
   full?: string;
@@ -215,6 +222,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
     const agentName = matchedProcess.agentName;
 
     const resolvedTitle = isTitleUseful(title) ? title : winname || title;
+    const intent = resolveAgentIntentTitle(resolvedTitle);
     const wact = parseInt(wactStr, 10) || 0;
     const usesHookRuntime = isHookAuthoritativeAgent(agentName);
     const tailContent = usesHookRuntime ? "" : capturePaneTailSync(tmuxPaneId);
@@ -240,6 +248,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
       status,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
+      ...(intent ? { intent } : {}),
       ...(richDetail || detail ? { detail: richDetail || detail } : {}),
       ...modelInfo,
       ...(context ? { context } : {}),
@@ -299,12 +308,15 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const modelInfo = resolveModelInfo(agentName, p.id, content, stateSnapshot);
     const tokenInfo = mergedContextTokens(agentName, p.id, content, stateSnapshot);
     const provenance = stateProvenance(agentName, p.id, stateSnapshot);
+    const displayTitle = resolveAgentDisplayTitle(agentName, p.cwd, externalSessionId, titleClean);
+    const intent = resolveAgentIntentTitle(p.title, displayTitle);
 
     results.push({
       pane: paneRef,
       paneId: paneRef,
       tmuxPaneId: p.id,
-      title: resolveAgentDisplayTitle(agentName, p.cwd, externalSessionId, titleClean),
+      title: displayTitle,
+      ...(intent ? { intent } : {}),
       agent: friendlyName(agentName),
       status,
       cpuPercent: 0,
@@ -405,12 +417,15 @@ function scanSync(): AgentPane[] {
     const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
+    const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
+    const intent = resolveAgentIntentTitle(p.title, displayTitle);
 
     results.push({
       pane: paneShort,
       paneId: p.paneId,
       tmuxPaneId: p.tmuxPaneId,
-      title: resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean),
+      title: displayTitle,
+      ...(intent ? { intent } : {}),
       agent: friendlyName(p.agentName),
       status,
       cpuPercent: p.cpuPercent,
@@ -521,12 +536,15 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
+    const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
+    const intent = resolveAgentIntentTitle(p.title, displayTitle);
 
     return {
       pane: paneShort,
       paneId: p.paneId,
       tmuxPaneId: p.tmuxPaneId,
-      title: resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean),
+      title: displayTitle,
+      ...(intent ? { intent } : {}),
       agent: friendlyName(p.agentName),
       status,
       cpuPercent: p.cpuPercent,
