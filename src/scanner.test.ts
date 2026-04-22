@@ -2,6 +2,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { resolveCodexFallbackTitleFromHistory } from "./scanner-history.js";
 import { getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
@@ -228,6 +229,33 @@ describe("extractLatestCodexSessionTitlesFromIndexLines", () => {
   });
 });
 
+describe("resolveCodexFallbackTitleFromHistory", () => {
+  it("uses a recent short Codex history title when the pane title is only the repo basename", () => {
+    expect(
+      resolveCodexFallbackTitleFromHistory("agents", "/Users/peter/code/agents", [
+        "ta bort mcp_agent_mail mcp-servern från codex",
+        "agents",
+      ]),
+    ).toBe("ta bort mcp_agent_mail mcp-servern från codex");
+  });
+
+  it("ignores very long first-prompt style titles", () => {
+    expect(
+      resolveCodexFallbackTitleFromHistory("shape", "/Users/peter/code/shape", [
+        "Build a complete redesign of the sidebar and keep all previous behavior while also making it work across multiple repos with a large amount of project context that should not be truncated poorly",
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("keeps an already-meaningful fallback title", () => {
+    expect(
+      resolveCodexFallbackTitleFromHistory("Fix sidebar regrouping", "/Users/peter/code/agents-app", [
+        "Some other recent task",
+      ]),
+    ).toBeUndefined();
+  });
+});
+
 describe("resolveAgentIntentTitle", () => {
   it("keeps the live pane title when it differs from the stable display title", () => {
     expect(resolveAgentIntentTitle("Committing fo-usecase changes", "Weekly pricing cleanup")).toBe("Committing fo-usecase changes");
@@ -239,6 +267,12 @@ describe("resolveAgentIntentTitle", () => {
 
   it("strips spinner prefixes before comparing titles", () => {
     expect(resolveAgentIntentTitle("⠋ Weekly pricing cleanup", "Weekly pricing cleanup")).toBeUndefined();
+  });
+
+  it("drops repo-basename pane titles when a richer display title exists", () => {
+    expect(
+      resolveAgentIntentTitle("agents", "ta bort mcp_agent_mail mcp-servern från codex", "/Users/peter/code/agents"),
+    ).toBeUndefined();
   });
 });
 

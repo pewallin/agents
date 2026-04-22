@@ -146,6 +146,41 @@ function getCodexThreadTitle(externalSessionId?: string): string | undefined {
   return title;
 }
 
+function isLikelyProjectBasenameTitle(title: string, cwdRaw?: string): boolean {
+  if (!cwdRaw) return false;
+  const normalizedTitle = title.trim().toLowerCase();
+  if (!normalizedTitle) return false;
+  return normalizedTitle === basename(cwdRaw).trim().toLowerCase();
+}
+
+export function resolveCodexFallbackTitleFromHistory(
+  fallbackTitle: string,
+  cwdRaw: string | undefined,
+  candidateTitles: string[],
+): string | undefined {
+  if (!cwdRaw || !isLikelyProjectBasenameTitle(fallbackTitle, cwdRaw)) return undefined;
+
+  for (const candidateTitle of candidateTitles) {
+    const summary = summarizeText(candidateTitle);
+    if (!summary) continue;
+    if (summary.length > 120) continue;
+    if (isLikelyProjectBasenameTitle(summary, cwdRaw)) continue;
+    return summary;
+  }
+
+  return undefined;
+}
+
+function getCodexCwdFallbackTitle(cwdRaw: string | undefined, fallbackTitle: string): string | undefined {
+  if (!cwdRaw) return undefined;
+  const history = listCodexHistoryForCwd(cwdRaw, 3);
+  return resolveCodexFallbackTitleFromHistory(
+    fallbackTitle,
+    cwdRaw,
+    history.map((item) => item.title),
+  );
+}
+
 function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
   const dbPath = codexStateDbPath();
   if (!dbPath || !existsSync(dbPath)) return [];
@@ -506,7 +541,10 @@ function listCursorHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
 export function resolveAgentDisplayTitle(agent: string, cwdRaw: string | undefined, externalSessionId: string | undefined, fallbackTitle: string): string {
   const renamedTitle = agent === "claude" ? getClaudeRenamedTitle(cwdRaw, externalSessionId) : undefined;
   const codexTitle = agent === "codex" ? getCodexThreadTitle(externalSessionId) : undefined;
-  return codexTitle || renamedTitle || fallbackTitle;
+  const codexCwdFallback = agent === "codex" && !externalSessionId
+    ? getCodexCwdFallbackTitle(cwdRaw, fallbackTitle)
+    : undefined;
+  return codexTitle || codexCwdFallback || renamedTitle || fallbackTitle;
 }
 
 export function normalizeHistoryCwd(cwdRaw: string): string {

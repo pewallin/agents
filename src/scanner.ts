@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
 import { exec, execAsync } from "./shell.js";
 import { getAgentStateEntry, readStateSnapshot } from "./state.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
@@ -128,10 +128,11 @@ function friendlyName(name: string): string {
   return FRIENDLY_NAMES[name] ?? name;
 }
 
-export function resolveAgentIntentTitle(paneTitle: string, displayTitle?: string): string | undefined {
+export function resolveAgentIntentTitle(paneTitle: string, displayTitle?: string, cwdRaw?: string): string | undefined {
   const normalizedPaneTitle = cleanTitle(paneTitle).trim();
   if (!isTitleUseful(normalizedPaneTitle)) return undefined;
   if (displayTitle && normalizedPaneTitle === displayTitle.trim()) return undefined;
+  if (cwdRaw && displayTitle && normalizedPaneTitle.toLowerCase() === basename(cwdRaw).trim().toLowerCase()) return undefined;
   return normalizedPaneTitle;
 }
 
@@ -309,7 +310,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const tokenInfo = mergedContextTokens(agentName, p.id, content, stateSnapshot);
     const provenance = stateProvenance(agentName, p.id, stateSnapshot);
     const displayTitle = resolveAgentDisplayTitle(agentName, p.cwd, externalSessionId, titleClean);
-    const intent = resolveAgentIntentTitle(p.title, displayTitle);
+    const intent = resolveAgentIntentTitle(p.title, displayTitle, p.cwd);
 
     results.push({
       pane: paneRef,
@@ -418,7 +419,7 @@ function scanSync(): AgentPane[] {
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
     const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
-    const intent = resolveAgentIntentTitle(p.title, displayTitle);
+    const intent = resolveAgentIntentTitle(p.title, displayTitle, p.cwdRaw);
 
     results.push({
       pane: paneShort,
@@ -537,7 +538,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
     const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
-    const intent = resolveAgentIntentTitle(p.title, displayTitle);
+    const intent = resolveAgentIntentTitle(p.title, displayTitle, p.cwdRaw);
 
     return {
       pane: paneShort,
