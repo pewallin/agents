@@ -1,5 +1,6 @@
 import { loadConfig, getProfileNames, resolveProfile, type Config, type LaunchProfile } from "./config.js";
 import { scan, runtimeStates, getSessionHistory, type AgentPane, type AgentRuntimeState, type AgentSessionHistoryGroup } from "./scanner.js";
+import type { RuntimeLocator, RuntimeStateEvent, RuntimeStateEventEntity, RuntimeStateEventOperation, RuntimeMux } from "./runtime-events.js";
 import {
   createWorkspaceOrThrow,
   resolveWorkspaceLaunch,
@@ -18,6 +19,11 @@ export type {
   AgentPane,
   AgentRuntimeState,
   AgentSessionHistoryGroup,
+  RuntimeLocator,
+  RuntimeMux,
+  RuntimeStateEvent,
+  RuntimeStateEventEntity,
+  RuntimeStateEventOperation,
   Config,
   LaunchProfile,
   CreateWorkspaceOpts,

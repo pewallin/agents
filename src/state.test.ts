@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync, readdirSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
+import { readFileSync } from "fs";
 
 // We test state logic by importing and calling the functions directly.
 // To avoid polluting ~/.agents/state/, we'll test getAgentState logic
@@ -12,6 +10,8 @@ import { tmpdir } from "os";
 
 import { clearContributorState, createStateSnapshot, deriveModelDisplay, getAgentState, getAgentStateEntry, getAgentStateProvenance, reportContributorState, reportState, upsertStateSnapshotEntry } from "./state.js";
 import type { StateEntry, ReportedState } from "./state.js";
+import { getRuntimeStateEventsPath } from "./paths.js";
+import type { RuntimeStateEvent } from "./runtime-events.js";
 
 // Replicate the priority logic from getAgentState for unit testing
 // without filesystem dependency.
@@ -27,6 +27,18 @@ function filterBySession(entries: StateEntry[], session?: string): StateEntry[] 
   let filtered = entries;
   if (session) filtered = filtered.filter((e) => e.session === session);
   return filtered;
+}
+
+function readRuntimeStateEvents(): RuntimeStateEvent[] {
+  const path = getRuntimeStateEventsPath();
+  try {
+    return readFileSync(path, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as RuntimeStateEvent);
+  } catch {
+    return [];
+  }
 }
 
 describe("deriveModelDisplay", () => {
@@ -142,6 +154,72 @@ describe("contributor state overlays", () => {
 
     const entry = getAgentStateEntry("pi", session);
     expect(entry?.state).toBe("working");
+  });
+});
+
+describe("runtime state events", () => {
+  const primarySurface = `%vitest-events-primary-${Date.now()}`;
+  const contributorSurface = `%vitest-events-contrib-${Date.now()}`;
+  const zellijSurface = `terminal_vitest-events-zellij-${Date.now()}`;
+
+  afterEach(() => {
+    clearContributorState("pi", contributorSurface, "dustbot-sandbox");
+  });
+
+  it("appends primary state upserts using surface-oriented event fields", () => {
+    reportState("codex", primarySurface, "working", {
+      externalSessionId: "ext-123",
+      contextTokens: 42,
+    });
+
+    const event = readRuntimeStateEvents().at(-1);
+    expect(event).toMatchObject({
+      v: 1,
+      entity: "primary_state",
+      op: "upsert",
+      agent: "codex",
+      surfaceId: primarySurface,
+      mux: "tmux",
+    });
+  });
+
+  it("appends contributor upsert and remove events", () => {
+    reportContributorState("pi", contributorSurface, "dustbot-sandbox", "approval", { detail: "sandbox approval" });
+    reportContributorState("pi", contributorSurface, "dustbot-sandbox", "idle");
+
+    const events = readRuntimeStateEvents().slice(-2);
+    expect(events).toEqual([
+      expect.objectContaining({
+        entity: "contributor_state",
+        op: "upsert",
+        agent: "pi",
+        surfaceId: contributorSurface,
+        reporter: "dustbot-sandbox",
+        mux: "tmux",
+      }),
+      expect.objectContaining({
+        entity: "contributor_state",
+        op: "remove",
+        agent: "pi",
+        surfaceId: contributorSurface,
+        reporter: "dustbot-sandbox",
+        mux: "tmux",
+      }),
+    ]);
+  });
+
+  it("marks zellij surfaces without leaking tmux naming into the event payload", () => {
+    reportState("opencode", zellijSurface, "idle");
+
+    const event = readRuntimeStateEvents().at(-1);
+    expect(event).toMatchObject({
+      entity: "primary_state",
+      op: "upsert",
+      agent: "opencode",
+      surfaceId: zellijSurface,
+      mux: "zellij",
+    });
+    expect("session" in (event ?? {})).toBe(false);
   });
 });
 

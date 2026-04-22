@@ -1,6 +1,7 @@
 import { writeFileSync, readdirSync, readFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { ensureAgentsDirs, getContributorStateDir, getStateDir } from "./paths.js";
+import { appendRuntimeStateEvent } from "./runtime-events.js";
 
 export type ReportedState = "working" | "idle" | "approval" | "question";
 export type ModelSource = "hook" | "sdk" | "transcript" | "session-log" | "inferred";
@@ -375,6 +376,7 @@ export function reportState(agent: string, session: string, state: ReportedState
     ...(ws ? { workspace: ws } : {}),
   };
   writeStateFile(agent, session, entry);
+  appendRuntimeStateEvent("primary_state", "upsert", agent, session);
   return entry;
 }
 
@@ -415,6 +417,7 @@ export function reportContext(agent: string, session: string, context: string, o
     };
   }
   writeStateFile(agent, session, entry);
+  appendRuntimeStateEvent("primary_state", "upsert", agent, session);
   return entry;
 }
 
@@ -440,11 +443,16 @@ export function reportContributorState(
     ...(opts?.detail ? { detail: opts.detail } : existing?.detail ? { detail: existing.detail } : {}),
   };
   writeContributorStateFile(agent, session, reporter, entry);
+  appendRuntimeStateEvent("contributor_state", "upsert", agent, session, reporter);
 }
 
 export function clearContributorState(agent: string, session: string, reporter: string): void {
+  const existing = readContributorStateFile(agent, session, reporter);
   try {
     unlinkSync(contributorStateFilePath(agent, session, reporter));
+    if (existing) {
+      appendRuntimeStateEvent("contributor_state", "remove", agent, session, reporter);
+    }
   } catch {}
 }
 

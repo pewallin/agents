@@ -53,6 +53,10 @@ export function getRuntimeTempDir(): string {
   return process.env.AGENTS_TMP_DIR || join(getRuntimeDir(), "tmp");
 }
 
+export function getRuntimeStateEventsPath(): string {
+  return process.env.AGENTS_RUNTIME_STATE_EVENTS_PATH || join(getRuntimeDir(), "state-events.jsonl");
+}
+
 export function ensureAgentsDirs(): void {
   mkdirSync(getAgentsHome(), { recursive: true });
   mkdirSync(getStateDir(), { recursive: true });
