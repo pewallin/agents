@@ -5,3 +5,4 @@ dist/
 .bv/
 bridge-plugin/target/
 storage.sqlite3*
+.shape/
