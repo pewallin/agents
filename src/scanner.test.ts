@@ -2,7 +2,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
-import { resolveCodexFallbackTitleFromHistory } from "./scanner-history.js";
+import { getHistoryResumeInfo, resolveCodexFallbackTitleFromHistory } from "./scanner-history.js";
 import { getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
@@ -253,6 +253,44 @@ describe("resolveCodexFallbackTitleFromHistory", () => {
         "Some other recent task",
       ]),
     ).toBeUndefined();
+  });
+});
+
+describe("getHistoryResumeInfo", () => {
+  it("returns restart metadata for codex sessions", () => {
+    expect(getHistoryResumeInfo("codex", { sessionId: "thread-123" })).toEqual({
+      strategy: "restart",
+      target: "thread-123",
+      targetKind: "session-id",
+    });
+  });
+
+  it("returns restart metadata for claude sessions", () => {
+    expect(getHistoryResumeInfo("claude", { sessionId: "claude-123" })).toEqual({
+      strategy: "restart",
+      target: "claude-123",
+      targetKind: "session-id",
+    });
+  });
+
+  it("returns restart metadata for copilot sessions", () => {
+    expect(getHistoryResumeInfo("copilot", { sessionId: "copilot-123" })).toEqual({
+      strategy: "restart",
+      target: "copilot-123",
+      targetKind: "session-id",
+    });
+  });
+
+  it("returns switch-in-place metadata for pi session files", () => {
+    expect(getHistoryResumeInfo("pi", { sessionId: "pi-123", sessionPath: "/tmp/pi-session.jsonl" })).toEqual({
+      strategy: "switch-in-place",
+      target: "/tmp/pi-session.jsonl",
+      targetKind: "session-path",
+    });
+  });
+
+  it("returns undefined when an agent has no explicit resume contract yet", () => {
+    expect(getHistoryResumeInfo("opencode", { sessionId: "opencode-123" })).toBeUndefined();
   });
 });
 

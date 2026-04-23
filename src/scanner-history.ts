@@ -10,6 +10,18 @@ export interface AgentSessionHistoryItem {
   model?: string;
   updatedAt: number;
   current?: boolean;
+  resumeStrategy?: AgentSessionResumeStrategy;
+  resumeTarget?: string;
+  resumeTargetKind?: AgentSessionResumeTargetKind;
+}
+
+export type AgentSessionResumeStrategy = "restart" | "switch-in-place";
+export type AgentSessionResumeTargetKind = "session-id" | "session-path";
+
+export interface AgentSessionResumeInfo {
+  strategy: AgentSessionResumeStrategy;
+  target: string;
+  targetKind: AgentSessionResumeTargetKind;
 }
 
 const claudeRenameCache = new Map<string, { mtimeMs: number; title?: string }>();
@@ -181,6 +193,52 @@ function getCodexCwdFallbackTitle(cwdRaw: string | undefined, fallbackTitle: str
   );
 }
 
+export function getHistoryResumeInfo(
+  agent: string,
+  opts: { sessionId: string; sessionPath?: string },
+): AgentSessionResumeInfo | undefined {
+  switch (agent) {
+    case "claude":
+      return {
+        strategy: "restart",
+        target: opts.sessionId,
+        targetKind: "session-id",
+      };
+    case "codex":
+      return {
+        strategy: "restart",
+        target: opts.sessionId,
+        targetKind: "session-id",
+      };
+    case "copilot":
+      return {
+        strategy: "restart",
+        target: opts.sessionId,
+        targetKind: "session-id",
+      };
+    case "pi":
+      if (!opts.sessionPath) return undefined;
+      return {
+        strategy: "switch-in-place",
+        target: opts.sessionPath,
+        targetKind: "session-path",
+      };
+    default:
+      return undefined;
+  }
+}
+
+function resumeInfoFields(agent: string, opts: { sessionId: string; sessionPath?: string }): Partial<AgentSessionHistoryItem> {
+  const info = getHistoryResumeInfo(agent, opts);
+  return info
+    ? {
+        resumeStrategy: info.strategy,
+        resumeTarget: info.target,
+        resumeTargetKind: info.targetKind,
+      }
+    : {};
+}
+
 function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
   const dbPath = codexStateDbPath();
   if (!dbPath || !existsSync(dbPath)) return [];
@@ -204,6 +262,7 @@ function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?
           ...(row.model ? { model: row.model } : {}),
           updatedAt: row.updated_at || 0,
           ...(isCurrent ? { current: true } : {}),
+          ...resumeInfoFields("codex", { sessionId: row.id! }),
         };
       });
   } catch {
@@ -311,6 +370,7 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
       ...(model ? { model } : {}),
       updatedAt: indexEntry?.modifiedAt || Math.round(mtimeMs / 1000),
       ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+      ...resumeInfoFields("claude", { sessionId }),
     };
   } catch {
     return null;
@@ -335,6 +395,7 @@ function listClaudeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
             titleSource: entry.summary ? "summary" : entry.firstPrompt ? "first_prompt" : "fallback",
             updatedAt: entry.modifiedAt || 0,
             ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+            ...resumeInfoFields("claude", { sessionId }),
           };
         })
         .filter((item): item is AgentSessionHistoryItem => item !== null);
@@ -396,6 +457,7 @@ function parsePiHistoryEntry(filePath: string, currentSessionId?: string): Agent
       ...(model ? { model } : {}),
       updatedAt: ts,
       ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+      ...resumeInfoFields("pi", { sessionId, sessionPath: filePath }),
     };
   } catch {
     return null;
@@ -460,6 +522,7 @@ function parseCopilotHistoryEntry(sessionDir: string, currentSessionId?: string)
       titleSource: title ? "summary" : "fallback",
       updatedAt,
       ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+      ...resumeInfoFields("copilot", { sessionId }),
     };
   } catch {
     return null;

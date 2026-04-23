@@ -37,8 +37,11 @@ const AGENTS_BIN = findAgentsBin();
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
 const MAX_DETAIL_LENGTH = 60;
+const TERMINAL_ASSISTANT_STOP_REASONS = new Set(["stop", "length"] as const);
 
 type PiState = "working" | "idle" | "question";
+type AssistantStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
 function appendModel(args: string[], ctx: any): void {
   try {
     const model = ctx?.model;
@@ -105,11 +108,59 @@ function normalizeToolName(toolName: unknown): string | undefined {
   return trimmed ? trimmed.slice(0, MAX_DETAIL_LENGTH) : undefined;
 }
 
+function isAssistantMessage(message: any): boolean {
+  return message?.role === "assistant";
+}
+
+function getStreamingToolName(event: any): string | undefined {
+  return normalizeToolName(
+    event?.assistantMessageEvent?.toolCall?.name ??
+      event?.assistantMessageEvent?.toolCall?.toolName ??
+      event?.assistantMessageEvent?.toolName,
+  );
+}
+
+export function getAssistantStopReason(message: any): AssistantStopReason | undefined {
+  const stopReason = message?.stopReason;
+  if (
+    stopReason === "stop" ||
+    stopReason === "length" ||
+    stopReason === "toolUse" ||
+    stopReason === "error" ||
+    stopReason === "aborted"
+  ) {
+    return stopReason;
+  }
+  return undefined;
+}
+
+export function shouldSettleIdleAfterAgentEnd({
+  activePrompt,
+  pendingToolExecutions,
+  hasPendingMessages,
+  isIdle,
+  lastAssistantStopReason,
+}: {
+  activePrompt: boolean;
+  pendingToolExecutions: number;
+  hasPendingMessages: boolean;
+  isIdle: boolean;
+  lastAssistantStopReason?: AssistantStopReason;
+}): boolean {
+  if (!activePrompt) return false;
+  if (pendingToolExecutions > 0) return false;
+  if (hasPendingMessages) return false;
+  if (!isIdle) return false;
+  return !!lastAssistantStopReason && TERMINAL_ASSISTANT_STOP_REASONS.has(lastAssistantStopReason);
+}
+
 const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   let activePrompt = false;
   let lastState: PiState | undefined;
   let lastDetail: string | undefined;
+  let lastAssistantStopReason: AssistantStopReason | undefined;
   const pendingToolExecutions = new Set<string>();
+  const activeToolNames = new Map<string, string>();
 
   function setState(state: PiState, ctx: any, detail?: string, force = false): void {
     if (!force && lastState === state && lastDetail === detail) return;
@@ -122,17 +173,70 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     setState("working", ctx, detail);
   }
 
+  function ctxIsIdle(ctx: any): boolean {
+    try {
+      return !!ctx?.isIdle?.();
+    } catch {
+      return false;
+    }
+  }
+
+  function ctxHasPendingMessages(ctx: any): boolean {
+    try {
+      return !!ctx?.hasPendingMessages?.();
+    } catch {
+      return false;
+    }
+  }
+
+  function clearActivity(): void {
+    pendingToolExecutions.clear();
+    activeToolNames.clear();
+  }
+
+  function currentToolDetail(): string | undefined {
+    const names = Array.from(activeToolNames.values());
+    if (names.length === 0) return undefined;
+    if (names.length === 1) return names[0];
+    const newest = names[names.length - 1];
+    return `${newest} +${names.length - 1}`.slice(0, MAX_DETAIL_LENGTH);
+  }
+
+  function syncWorkingDetail(ctx: any, fallback = "thinking"): void {
+    if (!activePrompt) return;
+    const toolDetail = currentToolDetail();
+    if (toolDetail) {
+      setWorking(ctx, toolDetail);
+      return;
+    }
+    if (!ctxIsIdle(ctx)) {
+      setWorking(ctx, fallback);
+    }
+  }
+
   pi.on("agent_start", async (_event: any, ctx: any) => {
     activePrompt = true;
-    pendingToolExecutions.clear();
+    lastAssistantStopReason = undefined;
+    clearActivity();
     setWorking(ctx, "starting");
   });
 
   pi.on("agent_end", async (event: any, ctx: any) => {
     const messages = Array.isArray(event?.messages) ? event.messages : [];
     const last = lastAssistantMessage(messages);
+    const shouldSettle = shouldSettleIdleAfterAgentEnd({
+      activePrompt,
+      pendingToolExecutions: pendingToolExecutions.size,
+      hasPendingMessages: ctxHasPendingMessages(ctx),
+      isIdle: ctxIsIdle(ctx),
+      lastAssistantStopReason,
+    });
+    if (!shouldSettle) {
+      syncWorkingDetail(ctx);
+      return;
+    }
     activePrompt = false;
-    pendingToolExecutions.clear();
+    clearActivity();
     if (last && endsWithQuestion(last)) {
       setState("question", ctx);
     } else {
@@ -142,13 +246,36 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
 
   pi.on("message_update", async (event: any, ctx: any) => {
     if (!activePrompt) return;
-    if (event?.assistantMessageEvent?.type !== "text_delta") return;
-    setWorking(ctx, "thinking");
+    switch (event?.assistantMessageEvent?.type) {
+      case "thinking_start":
+      case "thinking_delta":
+      case "thinking_end":
+        setWorking(ctx, "thinking");
+        return;
+      case "text_start":
+      case "text_delta":
+      case "text_end":
+        setWorking(ctx, "responding");
+        return;
+      case "toolcall_start":
+      case "toolcall_delta":
+      case "toolcall_end":
+        setWorking(ctx, getStreamingToolName(event) ?? "tool");
+        return;
+      default:
+        return;
+    }
+  });
+
+  pi.on("message_end", async (event: any) => {
+    if (!isAssistantMessage(event?.message)) return;
+    lastAssistantStopReason = getAssistantStopReason(event.message);
   });
 
   pi.on("tool_call", async (event: any, ctx: any) => {
     if (event?.toolName === "AskUserQuestion" || event?.toolName === "ask_user") {
       activePrompt = false;
+      clearActivity();
       setState("question", ctx);
       return;
     }
@@ -157,15 +284,18 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
 
   pi.on("tool_execution_start", async (event: any, ctx: any) => {
     if (!activePrompt) activePrompt = true;
+    const toolName = normalizeToolName(event?.toolName) ?? "tool";
     if (typeof event?.toolCallId === "string" && event.toolCallId) {
       pendingToolExecutions.add(event.toolCallId);
+      activeToolNames.set(event.toolCallId, toolName);
     }
-    setWorking(ctx, normalizeToolName(event?.toolName) ?? "tool");
+    setWorking(ctx, toolName);
   });
 
   pi.on("tool_execution_end", async (event: any, ctx: any) => {
     if (typeof event?.toolCallId === "string" && event.toolCallId) {
       pendingToolExecutions.delete(event.toolCallId);
+      activeToolNames.delete(event.toolCallId);
     }
     if (!activePrompt) return;
     if (event?.isError) {
@@ -173,33 +303,34 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
       setWorking(ctx, `${toolName} failed`.slice(0, MAX_DETAIL_LENGTH));
       return;
     }
-    setWorking(ctx, "thinking");
+    syncWorkingDetail(ctx);
   });
 
   pi.on("session_before_compact", async (_event: any, ctx: any) => {
     activePrompt = true;
+    lastAssistantStopReason = undefined;
     setWorking(ctx, "compacting");
   });
 
   pi.on("session_compact", async (_event: any, ctx: any) => {
-    if (!activePrompt) return;
-    setWorking(ctx, "thinking");
+    syncWorkingDetail(ctx);
   });
 
   pi.on("turn_end", async (_event: any, ctx: any) => {
-    if (!activePrompt) return;
-    setWorking(ctx, "thinking");
+    syncWorkingDetail(ctx);
   });
 
   pi.on("session_switch", async (_event: any, ctx: any) => {
     activePrompt = false;
-    pendingToolExecutions.clear();
+    lastAssistantStopReason = undefined;
+    clearActivity();
     setState("idle", ctx, undefined, true);
   });
 
   pi.on("session_shutdown", async (_event: any, ctx: any) => {
     activePrompt = false;
-    pendingToolExecutions.clear();
+    lastAssistantStopReason = undefined;
+    clearActivity();
     setState("idle", ctx, undefined, true);
   });
 };

@@ -244,7 +244,7 @@ program
 program
   .command("history")
   .description("Show persisted session history for supported agents")
-  .option("--agent <name>", "Agent backend to query (currently codex)")
+  .option("--agent <name>", "Agent backend to query (e.g. codex, pi)")
   .option("--cwd <path>", "Workspace path to query (defaults to live agents, then current directory)")
   .option("--limit <n>", "Maximum sessions per agent/cwd", (value) => parseInt(value, 10), 5)
   .option("--json", "Output as JSON")
