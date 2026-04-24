@@ -296,6 +296,7 @@ function isReportOptions(value: unknown): value is ReportOptions {
   return !!value && typeof value === "object"
     && (
       "detail" in value
+      || "clearDetail" in value
       || "model" in value
       || "provider" in value
       || "modelId" in value
@@ -329,6 +330,7 @@ function mergeModelMetadata(existing: ModelMetadata | null, incoming: ModelMetad
 /** Write state for an agent session. Called by hook integrations. */
 export interface ReportOptions extends ModelMetadata {
   detail?: string;
+  clearDetail?: boolean;
   externalSessionId?: string;
   context?: string;
   workspace?: WorkspaceSnapshot;
@@ -352,7 +354,11 @@ export function reportState(agent: string, session: string, state: ReportedState
   const mergedModel = mergeModelMetadata(existing, opts);
 
   let { detail, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
-  if (detail === undefined) detail = existing?.detail;
+  if (opts.clearDetail) {
+    detail = undefined;
+  } else if (detail === undefined) {
+    detail = existing?.detail;
+  }
   if (extSessionId === undefined) extSessionId = existing?.externalSessionId;
   if (context === undefined) context = existing?.context;
   if (ctxTokens === undefined) ctxTokens = existing?.contextTokens;

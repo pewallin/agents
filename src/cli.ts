@@ -291,6 +291,7 @@ program
   .requiredOption("--agent <name>", "Agent name (claude, copilot, pi, opencode, codex)")
   .option("--state <state>", "State: working, idle, approval, question")
   .option("--detail <text>", "Current activity detail (tool name, filename, etc.)")
+  .option("--clear-detail", "Clear any previously reported activity detail")
   .option("--model <name>", "Backward-compatible model display string")
   .option("--provider <id>", "Model provider ID")
   .option("--model-id <id>", "Canonical model ID")
@@ -370,6 +371,7 @@ program
     } else if (opts.state) {
       reportState(opts.agent, session, opts.state, {
         detail: opts.detail,
+        clearDetail: !!opts.clearDetail,
         model,
         provider,
         modelId,

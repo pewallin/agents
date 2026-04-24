@@ -19,13 +19,13 @@ describe("getAssistantStopReason", () => {
 });
 
 describe("shouldSettleIdleAfterAgentEnd", () => {
-  it("treats final assistant completions as terminal", () => {
+  it("treats agent_end as terminal for active prompts", () => {
     expect(
       shouldSettleIdleAfterAgentEnd({
         activePrompt: true,
         pendingToolExecutions: 0,
         hasPendingMessages: false,
-        isIdle: true,
+        isIdle: false,
         lastAssistantStopReason: "stop",
       }),
     ).toBe(true);
@@ -34,26 +34,14 @@ describe("shouldSettleIdleAfterAgentEnd", () => {
       shouldSettleIdleAfterAgentEnd({
         activePrompt: true,
         pendingToolExecutions: 0,
-        hasPendingMessages: false,
-        isIdle: true,
-        lastAssistantStopReason: "length",
+        hasPendingMessages: true,
+        isIdle: false,
+        lastAssistantStopReason: "toolUse",
       }),
     ).toBe(true);
   });
 
-  it("ignores non-terminal tool-use completions", () => {
-    expect(
-      shouldSettleIdleAfterAgentEnd({
-        activePrompt: true,
-        pendingToolExecutions: 0,
-        hasPendingMessages: false,
-        isIdle: true,
-        lastAssistantStopReason: "toolUse",
-      }),
-    ).toBe(false);
-  });
-
-  it("ignores agent_end while tools are still pending", () => {
+  it("keeps working if a tool is still pending", () => {
     expect(
       shouldSettleIdleAfterAgentEnd({
         activePrompt: true,
@@ -72,30 +60,6 @@ describe("shouldSettleIdleAfterAgentEnd", () => {
         pendingToolExecutions: 0,
         hasPendingMessages: false,
         isIdle: true,
-        lastAssistantStopReason: "stop",
-      }),
-    ).toBe(false);
-  });
-
-  it("ignores agent_end while follow-up work is queued", () => {
-    expect(
-      shouldSettleIdleAfterAgentEnd({
-        activePrompt: true,
-        pendingToolExecutions: 0,
-        hasPendingMessages: true,
-        isIdle: true,
-        lastAssistantStopReason: "stop",
-      }),
-    ).toBe(false);
-  });
-
-  it("ignores agent_end while pi does not consider the session idle yet", () => {
-    expect(
-      shouldSettleIdleAfterAgentEnd({
-        activePrompt: true,
-        pendingToolExecutions: 0,
-        hasPendingMessages: false,
-        isIdle: false,
         lastAssistantStopReason: "stop",
       }),
     ).toBe(false);

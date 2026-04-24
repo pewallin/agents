@@ -110,6 +110,16 @@ describe("reportState", () => {
     expect(getAgentStateEntry("codex", session)?.detail).toBe("Implement sidebar grouping");
     expect(getAgentStateEntry("codex", session)?.state).toBe("idle");
   });
+
+  it("can explicitly clear existing detail", () => {
+    const session = `%vitest-detail-clear-${Date.now()}`;
+
+    reportState("pi", session, "working", { detail: "thinking" });
+    reportState("pi", session, "idle", { clearDetail: true });
+
+    expect(getAgentStateEntry("pi", session)?.detail).toBeUndefined();
+    expect(getAgentStateEntry("pi", session)?.state).toBe("idle");
+  });
 });
 
 describe("session filtering", () => {
