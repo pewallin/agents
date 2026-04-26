@@ -9,6 +9,7 @@ export interface AgentSessionHistoryItem {
   shortTitle?: string;
   titleSource?: "rename" | "summary" | "stored_title" | "session_info" | "first_prompt" | "fallback";
   model?: string;
+  reasoningEffort?: string;
   updatedAt: number;
   current?: boolean;
   resumeStrategy?: AgentSessionResumeStrategy;
@@ -218,7 +219,7 @@ function getCodexCwdFallbackTitle(cwdRaw: string | undefined, fallbackTitle: str
 
 export function getHistoryResumeInfo(
   agent: string,
-  opts: { sessionId: string; sessionPath?: string },
+  opts: { sessionId: string; sessionPath?: string; reasoningEffort?: string },
 ): AgentSessionResumeInfo | undefined {
   switch (agent) {
     case "claude":
@@ -231,7 +232,9 @@ export function getHistoryResumeInfo(
         argv: claudeArgv,
       };
     case "codex":
-      const codexArgv = ["codex", "resume", opts.sessionId];
+      const codexArgv = opts.reasoningEffort
+        ? ["codex", "resume", "-c", `model_reasoning_effort="${opts.reasoningEffort}"`, opts.sessionId]
+        : ["codex", "resume", opts.sessionId];
       return {
         strategy: "restart",
         target: opts.sessionId,
@@ -272,7 +275,7 @@ export function getHistoryResumeInfo(
   }
 }
 
-function resumeInfoFields(agent: string, opts: { sessionId: string; sessionPath?: string }): Partial<AgentSessionHistoryItem> {
+function resumeInfoFields(agent: string, opts: { sessionId: string; sessionPath?: string; reasoningEffort?: string }): Partial<AgentSessionHistoryItem> {
   const info = getHistoryResumeInfo(agent, opts);
   return info
     ? {
@@ -445,6 +448,30 @@ function codexConversationActivityAt(sessionId: string): number | undefined {
   }
 }
 
+export function extractLatestCodexReasoningEffortFromSessionLines(lines: string[]): string | undefined {
+  let effort: string | undefined;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: string; payload?: { effort?: unknown } };
+      if (entry.type === "turn_context" && typeof entry.payload?.effort === "string" && entry.payload.effort.trim()) {
+        effort = entry.payload.effort.trim();
+      }
+    } catch {}
+  }
+  return effort;
+}
+
+export function codexReasoningEffortForSession(sessionId: string): string | undefined {
+  const sessionPath = findCodexSessionPath(sessionId);
+  if (!sessionPath) return undefined;
+  try {
+    return extractLatestCodexReasoningEffortFromSessionLines(readFileSync(sessionPath, "utf-8").split("\n"));
+  } catch {
+    return undefined;
+  }
+}
+
 function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
   const dbPath = codexStateDbPath();
   if (!dbPath || !existsSync(dbPath)) return [];
@@ -462,14 +489,16 @@ function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?
       .map((row): AgentSessionHistoryItem => {
         const indexedTitle = sessionIndex.get(row.id!);
         const isCurrent = !!currentSessionId && row.id === currentSessionId;
+        const reasoningEffort = codexReasoningEffortForSession(row.id!);
         return {
           sessionId: row.id!,
           title: indexedTitle || row.title || row.id!,
           titleSource: indexedTitle ? "rename" : row.title ? "stored_title" : "fallback",
           ...(row.model ? { model: row.model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
           updatedAt: codexConversationActivityAt(row.id!) ?? row.updated_at ?? 0,
           ...(isCurrent ? { current: true } : {}),
-          ...resumeInfoFields("codex", { sessionId: row.id! }),
+          ...resumeInfoFields("codex", { sessionId: row.id!, reasoningEffort }),
         };
       })
       .sort((a, b) => b.updatedAt - a.updatedAt)

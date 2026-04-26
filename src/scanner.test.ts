@@ -2,7 +2,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
-import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
+import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget } from "./resume.js";
 import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
@@ -415,6 +415,21 @@ describe("session history activity timestamps", () => {
     ])).toBe(seconds(latestConversationAt));
   });
 
+  it("reads the latest Codex reasoning effort from turn context", () => {
+    expect(extractLatestCodexReasoningEffortFromSessionLines([
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:00.000Z",
+        type: "turn_context",
+        payload: { model: "gpt-5.4", effort: "high" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:05:00.000Z",
+        type: "turn_context",
+        payload: { model: "gpt-5.4", effort: "xhigh" },
+      }),
+    ])).toBe("xhigh");
+  });
+
   it("uses Pi user and assistant messages, not tool results", () => {
     const latestConversationAt = "2026-01-01T00:05:00.000Z";
     expect(extractLatestPiConversationActivityAt([
@@ -492,6 +507,16 @@ describe("getHistoryResumeInfo", () => {
       targetKind: "session-id",
       command: "codex resume thread-123",
       argv: ["codex", "resume", "thread-123"],
+    });
+  });
+
+  it("returns codex reasoning effort in resume metadata when available", () => {
+    expect(getHistoryResumeInfo("codex", { sessionId: "thread-123", reasoningEffort: "xhigh" })).toEqual({
+      strategy: "restart",
+      target: "thread-123",
+      targetKind: "session-id",
+      command: "codex resume -c 'model_reasoning_effort=\"xhigh\"' thread-123",
+      argv: ["codex", "resume", "-c", "model_reasoning_effort=\"xhigh\"", "thread-123"],
     });
   });
 
@@ -619,6 +644,17 @@ describe("resume helpers", () => {
     )).toEqual({
       strategy: "restart",
       argv: ["copilot", "--allow-all-tools", "--resume=copilot-123"],
+    });
+  });
+
+  it("carries Codex reasoning effort into resume invocations", () => {
+    expect(agentResumeInvocation(
+      "codex",
+      { target: "thread-123", targetKind: "session-id" },
+      { reasoningEffort: "xhigh" },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["codex", "resume", "-c", "model_reasoning_effort=\"xhigh\"", "thread-123"],
     });
   });
 

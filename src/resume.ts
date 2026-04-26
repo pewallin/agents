@@ -1,6 +1,6 @@
 import { execFileSync } from "child_process";
 import { scan, matchesHistoryPaneFilter } from "./scanner.js";
-import { renderShellCommand, normalizeHistoryCwd } from "./scanner-history.js";
+import { codexReasoningEffortForSession, renderShellCommand, normalizeHistoryCwd } from "./scanner-history.js";
 import { stateWorkspaceCwd } from "./scanner-state-runtime.js";
 import { clearStateExternalSessionId, readStateSnapshot } from "./state.js";
 import { resolveProfile, type LaunchProfile } from "./config.js";
@@ -54,6 +54,7 @@ interface ResumeInvocation {
 
 interface ResumeInvocationOptions {
   profile?: LaunchProfile;
+  reasoningEffort?: string;
 }
 
 export function agentStatusRequiresForce(status?: AgentStatus): boolean {
@@ -100,7 +101,12 @@ export function agentResumeInvocation(
       if (target.targetKind !== "session-id") return undefined;
       return {
         strategy: "restart",
-        argv: buildResumeArgv(baseArgv ?? ["codex"], ["resume", target.target]),
+        argv: buildResumeArgv(
+          baseArgv ?? ["codex"],
+          options.reasoningEffort
+            ? ["resume", "-c", `model_reasoning_effort="${options.reasoningEffort}"`, target.target]
+            : ["resume", target.target],
+        ),
       };
     case "copilot":
       if (target.targetKind !== "session-id") return undefined;
@@ -138,7 +144,7 @@ function profileArgvForAgent(agent: string, profile?: LaunchProfile): string[] |
 function buildResumeArgv(baseArgv: string[], resumeArgs: string[]): string[] {
   const merged = [...baseArgv];
   for (const arg of resumeArgs) {
-    if (merged.includes(arg)) continue;
+    if (arg !== "-c" && arg !== "--config" && merged.includes(arg)) continue;
     merged.push(arg);
   }
   return merged;
@@ -187,7 +193,13 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
   }
 
   const resumeAgent = options.agent?.toLowerCase() || pane.agent;
-  const invocation = agentResumeInvocation(resumeAgent, target, { profile: resolveProfile(resumeAgent) });
+  const reasoningEffort = resumeAgent === "codex" && target.targetKind === "session-id"
+    ? codexReasoningEffortForSession(target.target)
+    : undefined;
+  const invocation = agentResumeInvocation(resumeAgent, target, {
+    profile: resolveProfile(resumeAgent),
+    reasoningEffort,
+  });
   if (!invocation) {
     return {
       ok: false,
