@@ -649,9 +649,18 @@ function listClaudeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
   const dir = join(homedir(), ".claude", "projects", encodeClaudeProjectDir(cwdRaw));
   if (!existsSync(dir)) return [];
   try {
+    const candidateLimit = Math.max(limit, Math.min(250, limit * 4));
     const indexEntries = readClaudeSessionsIndex(cwdRaw);
     if (indexEntries.size > 0) {
-      return [...indexEntries.entries()]
+      const sortedEntries = [...indexEntries.entries()]
+        .sort((a, b) => (b[1].modifiedAt || 0) - (a[1].modifiedAt || 0));
+      const candidateEntries = sortedEntries.slice(0, candidateLimit);
+      if (currentSessionId && !candidateEntries.some(([sessionId]) => sessionId === currentSessionId)) {
+        const currentEntry = sortedEntries.find(([sessionId]) => sessionId === currentSessionId);
+        if (currentEntry) candidateEntries.push(currentEntry);
+      }
+
+      return candidateEntries
         .map(([sessionId, entry]): AgentSessionHistoryItem | null => {
           const transcriptPath = entry.transcriptPath || join(dir, `${sessionId}.jsonl`);
           if (existsSync(transcriptPath)) return parseClaudeHistoryEntry(transcriptPath, currentSessionId, entry);
@@ -669,9 +678,19 @@ function listClaudeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
         .slice(0, limit);
     }
 
-    return readdirSync(dir)
+    const sortedFiles = readdirSync(dir)
       .filter((name) => name.endsWith(".jsonl"))
       .map((name) => join(dir, name))
+      .map((filePath) => ({ filePath, mtimeMs: statSync(filePath).mtimeMs }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const candidateFiles = sortedFiles.slice(0, candidateLimit);
+    if (currentSessionId && !candidateFiles.some(({ filePath }) => basename(filePath, ".jsonl") === currentSessionId)) {
+      const currentFile = sortedFiles.find(({ filePath }) => basename(filePath, ".jsonl") === currentSessionId);
+      if (currentFile) candidateFiles.push(currentFile);
+    }
+
+    return candidateFiles
+      .map(({ filePath }) => filePath)
       .map((filePath) => parseClaudeHistoryEntry(filePath, currentSessionId))
       .filter((item): item is AgentSessionHistoryItem => item !== null)
       .sort((a, b) => b.updatedAt - a.updatedAt)
