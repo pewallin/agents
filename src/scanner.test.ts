@@ -1,9 +1,10 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { detectAgentProcess, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
-import { getHistoryResumeInfo, resolveCodexFallbackTitleFromHistory } from "./scanner-history.js";
-import { getAgentStateEntry, reportState } from "./state.js";
+import { detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
+import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget } from "./resume.js";
+import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
 
@@ -53,6 +54,29 @@ describe("detectAgentProcess", () => {
 
   it("detects codex from a truncated comm using full args", () => {
     expect(detectAgentProcess("/Users/peter/.nv", "/Users/peter/.nvm/versions/node/v22.20.0/lib/node_modules/@openai/codex/vendor/codex/codex --full-auto")).toBe("codex");
+  });
+});
+
+describe("externalSessionIdFromProcessArgs", () => {
+  it("reads codex resume targets even when launch flags precede resume", () => {
+    expect(externalSessionIdFromProcessArgs(
+      "codex",
+      "node /Users/peter/.nvm/bin/codex --dangerously-bypass-approvals-and-sandbox resume thread-123",
+    )).toBe("thread-123");
+  });
+
+  it("ignores codex resume --last because it is not a stable session id", () => {
+    expect(externalSessionIdFromProcessArgs(
+      "codex",
+      "codex resume --last --dangerously-bypass-approvals-and-sandbox",
+    )).toBeUndefined();
+  });
+
+  it("reads opencode session targets", () => {
+    expect(externalSessionIdFromProcessArgs(
+      "opencode",
+      "opencode --session opencode-123",
+    )).toBe("opencode-123");
   });
 });
 
@@ -256,12 +280,218 @@ describe("resolveCodexFallbackTitleFromHistory", () => {
   });
 });
 
+describe("resolveCopilotHistoryTitle", () => {
+  it("uses Copilot summary when available", () => {
+    expect(resolveCopilotHistoryTitle({ summary: "Fix inspector session history" })).toEqual({
+      title: "Fix inspector session history",
+      titleSource: "summary",
+    });
+  });
+
+  it("uses the first user message when the summary is missing or just an id", () => {
+    const eventLines = [
+      JSON.stringify({ type: "session.start", data: {} }),
+      JSON.stringify({
+        type: "user.message",
+        data: { content: "Make Copilot history titles readable" },
+      }),
+    ];
+
+    expect(resolveCopilotHistoryTitle({
+      summary: "01ffadf1-dccd-4d9d-b9d5-59dfab95ed79",
+      branch: "feature/history",
+    }, eventLines)).toEqual({
+      title: "Make Copilot history titles readable",
+      titleSource: "first_prompt",
+    });
+  });
+
+  it("falls back to branch metadata instead of showing the session uuid", () => {
+    expect(resolveCopilotHistoryTitle({
+      cwd: "/Users/peter/code/agents-app",
+      branch: "feature/session-history",
+    })).toEqual({
+      title: "feature/session-history",
+      titleSource: "session_info",
+    });
+  });
+
+  it("extracts text from nested Copilot user message content", () => {
+    expect(extractFirstCopilotUserMessageTitleFromEventLines([
+      JSON.stringify({
+        type: "user.message",
+        data: { content: [{ text: "Summarize session inventory" }] },
+      }),
+    ])).toBe("Summarize session inventory");
+  });
+});
+
+describe("session history activity timestamps", () => {
+  const seconds = (timestamp: string) => Math.round(Date.parse(timestamp) / 1000);
+
+  it("ignores Claude resume bookkeeping after the latest conversation message", () => {
+    const latestConversationAt = "2026-01-01T00:05:00.000Z";
+    expect(extractLatestClaudeConversationActivityAt([
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-01-01T00:04:00.000Z",
+        message: { role: "user", content: "Fix the inspector" },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: latestConversationAt,
+        message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
+      }),
+      JSON.stringify({
+        type: "progress",
+        timestamp: "2026-01-01T00:10:00.000Z",
+        data: { hookEvent: "SessionStart", hookName: "SessionStart:resume" },
+      }),
+      JSON.stringify({
+        type: "system",
+        subtype: "local_command",
+        timestamp: "2026-01-01T00:11:00.000Z",
+        content: "<command-name>/resume</command-name>",
+      }),
+    ])).toBe(seconds(latestConversationAt));
+  });
+
+  it("ignores Claude tool results when deriving conversation activity", () => {
+    const latestConversationAt = "2026-01-01T00:05:00.000Z";
+    expect(extractLatestClaudeConversationActivityAt([
+      JSON.stringify({
+        type: "assistant",
+        timestamp: latestConversationAt,
+        message: { role: "assistant", content: [{ type: "text", text: "Running tests" }] },
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-01-01T00:07:00.000Z",
+        message: { role: "user", content: [{ type: "tool_result", content: "ok" }] },
+      }),
+    ])).toBe(seconds(latestConversationAt));
+  });
+
+  it("ignores Codex bootstrap entries and token counts after the latest response", () => {
+    const latestConversationAt = "2026-01-01T00:05:00.000Z";
+    expect(extractLatestCodexConversationActivityAt([
+      JSON.stringify({
+        timestamp: "2026-01-01T00:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "thread-123" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:03:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Fix session history timestamps" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: latestConversationAt,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Fixed" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-01-01T00:10:00.000Z",
+        type: "event_msg",
+        payload: { type: "token_count" },
+      }),
+    ])).toBe(seconds(latestConversationAt));
+  });
+
+  it("uses Pi user and assistant messages, not tool results", () => {
+    const latestConversationAt = "2026-01-01T00:05:00.000Z";
+    expect(extractLatestPiConversationActivityAt([
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-01-01T00:03:00.000Z",
+        message: { role: "user", content: "Fix this" },
+      }),
+      JSON.stringify({
+        type: "message",
+        timestamp: latestConversationAt,
+        message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
+      }),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-01-01T00:10:00.000Z",
+        message: { role: "toolResult", content: [{ type: "text", text: "ok" }] },
+      }),
+    ])).toBe(seconds(latestConversationAt));
+  });
+
+  it("uses Copilot user and assistant messages, not tool execution metadata", () => {
+    const latestConversationAt = "2026-01-01T00:05:00.000Z";
+    expect(extractLatestCopilotConversationActivityAt([
+      JSON.stringify({
+        type: "user.message",
+        timestamp: "2026-01-01T00:03:00.000Z",
+        data: { content: "Fix this" },
+      }),
+      JSON.stringify({
+        type: "assistant.message",
+        timestamp: latestConversationAt,
+        data: { content: "Done" },
+      }),
+      JSON.stringify({
+        type: "tool.execution_complete",
+        timestamp: "2026-01-01T00:10:00.000Z",
+        data: { success: true },
+      }),
+    ])).toBe(seconds(latestConversationAt));
+  });
+
+  it("uses OpenCode user and assistant message times, not unrelated row updates", () => {
+    expect(extractLatestOpenCodeConversationActivityAt([
+      {
+        timeUpdated: 1770000010000,
+        data: JSON.stringify({
+          role: "user",
+          time: { created: 1770000000000 },
+        }),
+      },
+      {
+        timeUpdated: 1770000040000,
+        data: JSON.stringify({
+          role: "assistant",
+          time: { created: 1770000020000, completed: 1770000030000 },
+        }),
+      },
+      {
+        timeUpdated: 1770000050000,
+        data: JSON.stringify({
+          role: "tool",
+          time: { created: 1770000050000 },
+        }),
+      },
+    ])).toBe(1770000030);
+  });
+});
+
 describe("getHistoryResumeInfo", () => {
   it("returns restart metadata for codex sessions", () => {
     expect(getHistoryResumeInfo("codex", { sessionId: "thread-123" })).toEqual({
       strategy: "restart",
       target: "thread-123",
       targetKind: "session-id",
+      command: "codex resume thread-123",
+      argv: ["codex", "resume", "thread-123"],
     });
   });
 
@@ -270,6 +500,8 @@ describe("getHistoryResumeInfo", () => {
       strategy: "restart",
       target: "claude-123",
       targetKind: "session-id",
+      command: "claude --resume claude-123",
+      argv: ["claude", "--resume", "claude-123"],
     });
   });
 
@@ -278,6 +510,8 @@ describe("getHistoryResumeInfo", () => {
       strategy: "restart",
       target: "copilot-123",
       targetKind: "session-id",
+      command: "copilot --resume=copilot-123",
+      argv: ["copilot", "--resume=copilot-123"],
     });
   });
 
@@ -286,11 +520,195 @@ describe("getHistoryResumeInfo", () => {
       strategy: "switch-in-place",
       target: "/tmp/pi-session.jsonl",
       targetKind: "session-path",
+      command: "pi --session /tmp/pi-session.jsonl --yolo",
+      argv: ["pi", "--session", "/tmp/pi-session.jsonl", "--yolo"],
     });
   });
 
-  it("returns undefined when an agent has no explicit resume contract yet", () => {
-    expect(getHistoryResumeInfo("opencode", { sessionId: "opencode-123" })).toBeUndefined();
+  it("returns restart metadata for opencode sessions", () => {
+    expect(getHistoryResumeInfo("opencode", { sessionId: "opencode-123" })).toEqual({
+      strategy: "restart",
+      target: "opencode-123",
+      targetKind: "session-id",
+      command: "opencode --session opencode-123",
+      argv: ["opencode", "--session", "opencode-123"],
+    });
+  });
+});
+
+describe("resume helpers", () => {
+  it("requires force for every non-idle status", () => {
+    expect(agentStatusRequiresForce("idle")).toBe(false);
+    expect(agentStatusRequiresForce("working")).toBe(true);
+    expect(agentStatusRequiresForce("attention")).toBe(true);
+    expect(agentStatusRequiresForce("question")).toBe(true);
+    expect(agentStatusRequiresForce("stalled")).toBe(true);
+  });
+
+  it("resolves explicit session paths before ids", () => {
+    expect(resolveResumeTarget({ pane: "%1", session: "id", sessionPath: "/tmp/session.jsonl" })).toEqual({
+      target: "/tmp/session.jsonl",
+      targetKind: "session-path",
+    });
+  });
+
+  it("resolves new session requests before persisted targets", () => {
+    expect(resolveResumeTarget({ pane: "%1", newSession: true, session: "id" })).toEqual({
+      target: "new-session",
+      targetKind: "new-session",
+    });
+  });
+
+  it("builds claude, codex, copilot, pi, and opencode resume invocations", () => {
+    expect(agentResumeInvocation("claude", { target: "claude-123", targetKind: "session-id" })).toEqual({
+      strategy: "restart",
+      argv: ["claude", "--resume", "claude-123"],
+    });
+    expect(agentResumeInvocation("codex", { target: "thread-123", targetKind: "session-id" })).toEqual({
+      strategy: "restart",
+      argv: ["codex", "resume", "thread-123"],
+    });
+    expect(agentResumeInvocation("copilot", { target: "copilot-123", targetKind: "session-id" })).toEqual({
+      strategy: "restart",
+      argv: ["copilot", "--resume=copilot-123"],
+    });
+    expect(agentResumeInvocation("pi", { target: "/tmp/pi.jsonl", targetKind: "session-path" })).toEqual({
+      strategy: "switch-in-place",
+      argv: ["pi", "--session", "/tmp/pi.jsonl", "--yolo"],
+    });
+    expect(agentResumeInvocation("opencode", { target: "opencode-123", targetKind: "session-id" })).toEqual({
+      strategy: "restart",
+      argv: ["opencode", "--session", "opencode-123"],
+    });
+  });
+
+  it("builds new session invocations from the matching agent profile", () => {
+    expect(agentResumeInvocation(
+      "codex",
+      { target: "new-session", targetKind: "new-session" },
+      { profile: { command: "codex --dangerously-bypass-approvals-and-sandbox" } },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["codex", "--dangerously-bypass-approvals-and-sandbox"],
+    });
+  });
+
+  it("carries matching profile args into resume invocations", () => {
+    expect(agentResumeInvocation(
+      "codex",
+      { target: "thread-123", targetKind: "session-id" },
+      { profile: { command: "codex --dangerously-bypass-approvals-and-sandbox" } },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["codex", "--dangerously-bypass-approvals-and-sandbox", "resume", "thread-123"],
+    });
+
+    expect(agentResumeInvocation(
+      "claude",
+      { target: "claude-123", targetKind: "session-id" },
+      { profile: { command: "claude --dangerously-skip-permissions" } },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["claude", "--dangerously-skip-permissions", "--resume", "claude-123"],
+    });
+
+    expect(agentResumeInvocation(
+      "copilot",
+      { target: "copilot-123", targetKind: "session-id" },
+      { profile: { command: "copilot --allow-all-tools" } },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["copilot", "--allow-all-tools", "--resume=copilot-123"],
+    });
+  });
+
+  it("does not duplicate profile args already required by resume", () => {
+    expect(agentResumeInvocation(
+      "pi",
+      { target: "/tmp/pi.jsonl", targetKind: "session-path" },
+      { profile: { command: "pi --yolo" } },
+    )).toEqual({
+      strategy: "switch-in-place",
+      argv: ["pi", "--yolo", "--session", "/tmp/pi.jsonl"],
+    });
+  });
+
+  it("ignores a profile for a different agent", () => {
+    expect(agentResumeInvocation(
+      "codex",
+      { target: "thread-123", targetKind: "session-id" },
+      { profile: { command: "claude --dangerously-skip-permissions" } },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["codex", "resume", "thread-123"],
+    });
+  });
+
+  it("clears stale external session ids before starting a new session", () => {
+    const session = `%vitest-new-session-${Date.now()}`;
+    const statePath = join(getStateDir(), `codex-${session}.json`);
+    try {
+      reportState("codex", session, "idle", { externalSessionId: "thread-old" });
+      expect(getAgentStateEntry("codex", session)?.externalSessionId).toBe("thread-old");
+
+      clearStateExternalSessionId("codex", session);
+
+      expect(getAgentStateEntry("codex", session)?.externalSessionId).toBeUndefined();
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+});
+
+describe("matchesHistoryPaneFilter", () => {
+  const pane = makeAgent({
+    pane: "agents:codex.0",
+    paneId: "agents:2",
+    tmuxPaneId: "%52",
+    windowId: "agents:2",
+  });
+
+  it("matches tmux pane ids", () => {
+    expect(matchesHistoryPaneFilter(pane, "%52")).toBe(true);
+  });
+
+  it("matches app-qualified tmux pane ids", () => {
+    expect(matchesHistoryPaneFilter(pane, "local:%52")).toBe(true);
+  });
+
+  it("matches pane and window identifiers", () => {
+    expect(matchesHistoryPaneFilter(pane, "agents:codex.0")).toBe(true);
+    expect(matchesHistoryPaneFilter(pane, "agents:2")).toBe(true);
+  });
+
+  it("rejects unrelated identifiers", () => {
+    expect(matchesHistoryPaneFilter(pane, "%99")).toBe(false);
+  });
+});
+
+describe("shortTitleForHistoryTitle", () => {
+  it("collapses whitespace", () => {
+    expect(shortTitleForHistoryTitle("First line\n\n  second   line")).toBe("First line");
+  });
+
+  it("truncates long titles for compact UI", () => {
+    const shortTitle = shortTitleForHistoryTitle("x".repeat(140));
+    expect(shortTitle).toHaveLength(120);
+    expect(shortTitle.endsWith("...")).toBe(true);
+  });
+});
+
+describe("historyTitleMatchesPaneTitle", () => {
+  it("matches exact stable titles", () => {
+    expect(historyTitleMatchesPaneTitle("Agents Dev", "Agents Dev")).toBe(true);
+  });
+
+  it("matches pi pane titles that include the session title", () => {
+    expect(historyTitleMatchesPaneTitle("Creating GitLab MR", "π - Creating GitLab MR - gateway-graphql")).toBe(true);
+  });
+
+  it("does not match unrelated titles", () => {
+    expect(historyTitleMatchesPaneTitle("Shape Dev", "Agents Dev")).toBe(false);
   });
 });
 

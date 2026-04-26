@@ -6,6 +6,7 @@ import { exec } from "./shell.js";
 export interface AgentSessionHistoryItem {
   sessionId: string;
   title: string;
+  shortTitle?: string;
   titleSource?: "rename" | "summary" | "stored_title" | "session_info" | "first_prompt" | "fallback";
   model?: string;
   updatedAt: number;
@@ -13,22 +14,29 @@ export interface AgentSessionHistoryItem {
   resumeStrategy?: AgentSessionResumeStrategy;
   resumeTarget?: string;
   resumeTargetKind?: AgentSessionResumeTargetKind;
+  resumeCommand?: string;
+  resumeArgv?: string[];
 }
 
 export type AgentSessionResumeStrategy = "restart" | "switch-in-place";
-export type AgentSessionResumeTargetKind = "session-id" | "session-path";
+export type AgentSessionResumeTargetKind = "session-id" | "session-path" | "new-session";
 
 export interface AgentSessionResumeInfo {
   strategy: AgentSessionResumeStrategy;
   target: string;
   targetKind: AgentSessionResumeTargetKind;
+  command?: string;
+  argv?: string[];
 }
 
 const claudeRenameCache = new Map<string, { mtimeMs: number; title?: string }>();
 const codexSessionIndexPath = join(homedir(), ".codex", "session_index.jsonl");
+const codexSessionsRoot = join(homedir(), ".codex", "sessions");
 let codexSessionIndexCache: { mtimeMs: number; entries: Map<string, string> } | null = null;
 let codexStateDbPathCache: string | null | undefined;
 const codexTitleCache = new Map<string, { dbPath?: string; dbMtimeMs?: number; sessionIndexMtimeMs?: number; title?: string }>();
+const codexSessionPathCache = new Map<string, string>();
+const codexConversationActivityCache = new Map<string, { path: string; mtimeMs: number; updatedAt?: number }>();
 
 type ClaudeSessionsIndexEntry = {
   summary?: string;
@@ -36,6 +44,21 @@ type ClaudeSessionsIndexEntry = {
   modifiedAt?: number;
   transcriptPath?: string;
 };
+
+function parseSessionTimestamp(value?: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.round(value > 10_000_000_000 ? value / 1000 : value);
+  }
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const millis = Date.parse(value);
+  if (!Number.isFinite(millis)) return undefined;
+  return Math.round(millis / 1000);
+}
+
+function latestTimestamp(current: number | undefined, candidate: number | undefined): number | undefined {
+  if (candidate === undefined) return current;
+  return current === undefined ? candidate : Math.max(current, candidate);
+}
 
 function sqliteMtimeMs(dbPath: string): number {
   let latest = 0;
@@ -199,29 +222,50 @@ export function getHistoryResumeInfo(
 ): AgentSessionResumeInfo | undefined {
   switch (agent) {
     case "claude":
+      const claudeArgv = ["claude", "--resume", opts.sessionId];
       return {
         strategy: "restart",
         target: opts.sessionId,
         targetKind: "session-id",
+        command: renderShellCommand(claudeArgv),
+        argv: claudeArgv,
       };
     case "codex":
+      const codexArgv = ["codex", "resume", opts.sessionId];
       return {
         strategy: "restart",
         target: opts.sessionId,
         targetKind: "session-id",
+        command: renderShellCommand(codexArgv),
+        argv: codexArgv,
       };
     case "copilot":
+      const copilotArgv = ["copilot", `--resume=${opts.sessionId}`];
       return {
         strategy: "restart",
         target: opts.sessionId,
         targetKind: "session-id",
+        command: renderShellCommand(copilotArgv),
+        argv: copilotArgv,
       };
     case "pi":
       if (!opts.sessionPath) return undefined;
+      const piArgv = ["pi", "--session", opts.sessionPath, "--yolo"];
       return {
         strategy: "switch-in-place",
         target: opts.sessionPath,
         targetKind: "session-path",
+        command: renderShellCommand(piArgv),
+        argv: piArgv,
+      };
+    case "opencode":
+      const opencodeArgv = ["opencode", "--session", opts.sessionId];
+      return {
+        strategy: "restart",
+        target: opts.sessionId,
+        targetKind: "session-id",
+        command: renderShellCommand(opencodeArgv),
+        argv: opencodeArgv,
       };
     default:
       return undefined;
@@ -235,8 +279,170 @@ function resumeInfoFields(agent: string, opts: { sessionId: string; sessionPath?
         resumeStrategy: info.strategy,
         resumeTarget: info.target,
         resumeTargetKind: info.targetKind,
+        ...(info.command ? { resumeCommand: info.command } : {}),
+        ...(info.argv ? { resumeArgv: info.argv } : {}),
       }
     : {};
+}
+
+export function shellQuote(arg: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+export function renderShellCommand(argv: string[]): string {
+  return argv.map(shellQuote).join(" ");
+}
+
+function textFromContent(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const text = value.map(textFromContent).filter(Boolean).join("\n");
+    return text || undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["text", "content", "value", "message", "transformedContent"]) {
+    const text = textFromContent(record[key]);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function contentContainsType(value: unknown, type: string): boolean {
+  if (!value) return false;
+  if (Array.isArray(value)) return value.some((item) => contentContainsType(item, type));
+  if (typeof value !== "object") return false;
+
+  const record = value as Record<string, unknown>;
+  if (record.type === type) return true;
+  return Object.values(record).some((item) => contentContainsType(item, type));
+}
+
+function isClaudeConversationUserEntry(entry: {
+  message?: { role?: string; content?: unknown };
+  content?: unknown;
+}): boolean {
+  if (entry.message?.role && entry.message.role !== "user") return false;
+  const content = entry.message?.content ?? entry.content;
+  if (contentContainsType(content, "tool_result")) return false;
+
+  const text = textFromContent(content);
+  if (!text) return false;
+  if (text.includes("<local-command-caveat>")) return false;
+  if (text.trim().startsWith("Caveat:")) return false;
+  return true;
+}
+
+export function extractLatestClaudeConversationActivityAt(lines: string[]): number | undefined {
+  let latest: number | undefined;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as {
+        type?: string;
+        timestamp?: unknown;
+        message?: { role?: string; content?: unknown };
+        content?: unknown;
+      };
+      if (entry.type === "assistant") {
+        latest = latestTimestamp(latest, parseSessionTimestamp(entry.timestamp));
+      } else if (entry.type === "user" && isClaudeConversationUserEntry(entry)) {
+        latest = latestTimestamp(latest, parseSessionTimestamp(entry.timestamp));
+      }
+    } catch {}
+  }
+  return latest;
+}
+
+function isCodexBootstrapUserText(text?: string): boolean {
+  const trimmed = text?.trim();
+  if (!trimmed) return true;
+  return trimmed.startsWith("# AGENTS.md instructions for ")
+    || trimmed.startsWith("<environment_context>")
+    || trimmed.startsWith("# Instructions");
+}
+
+export function extractLatestCodexConversationActivityAt(lines: string[]): number | undefined {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (!line) continue;
+
+    try {
+      const entry = JSON.parse(line) as {
+        timestamp?: unknown;
+        type?: string;
+        payload?: {
+          type?: string;
+          role?: string;
+          content?: unknown;
+          message?: string;
+          text?: string;
+        };
+      };
+      const timestamp = parseSessionTimestamp(entry.timestamp);
+      if (timestamp === undefined) continue;
+
+      if (entry.type === "response_item" && entry.payload?.type === "message") {
+        if (entry.payload.role === "assistant") return timestamp;
+        if (entry.payload.role === "user" && !isCodexBootstrapUserText(textFromContent(entry.payload.content))) {
+          return timestamp;
+        }
+      }
+
+      if (entry.type === "event_msg" && (entry.payload?.type === "agent_message" || entry.payload?.type === "agent_reasoning")) {
+        return timestamp;
+      }
+    } catch {}
+  }
+  return undefined;
+}
+
+function findCodexSessionPath(sessionId?: string): string | undefined {
+  if (!sessionId || !existsSync(codexSessionsRoot)) return undefined;
+
+  const cached = codexSessionPathCache.get(sessionId);
+  if (cached && existsSync(cached)) return cached;
+
+  const stack = [codexSessionsRoot];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (!dir) continue;
+
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+        if (entry.isFile() && entry.name.endsWith(`${sessionId}.jsonl`)) {
+          codexSessionPathCache.set(sessionId, fullPath);
+          return fullPath;
+        }
+      }
+    } catch {}
+  }
+
+  return undefined;
+}
+
+function codexConversationActivityAt(sessionId: string): number | undefined {
+  const sessionPath = findCodexSessionPath(sessionId);
+  if (!sessionPath) return undefined;
+
+  try {
+    const mtimeMs = statSync(sessionPath).mtimeMs;
+    const cached = codexConversationActivityCache.get(sessionId);
+    if (cached && cached.path === sessionPath && cached.mtimeMs === mtimeMs) return cached.updatedAt;
+
+    const updatedAt = extractLatestCodexConversationActivityAt(readFileSync(sessionPath, "utf-8").split("\n"));
+    codexConversationActivityCache.set(sessionId, { path: sessionPath, mtimeMs, updatedAt });
+    return updatedAt;
+  } catch {
+    return undefined;
+  }
 }
 
 function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
@@ -245,14 +451,15 @@ function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?
 
   try {
     const sqlCwd = cwdRaw.replace(/'/g, "''");
-    const sql = `select id, title, model, updated_at from threads where cwd='${sqlCwd}' order by updated_at desc limit ${limit};`;
+    const queryLimit = Math.max(limit, Math.min(250, limit * 8));
+    const sql = `select id, title, model, updated_at from threads where cwd='${sqlCwd}' order by updated_at desc limit ${queryLimit};`;
     const raw = exec(`sqlite3 -json ${JSON.stringify(dbPath)} ${JSON.stringify(sql)}`);
     if (!raw) return [];
     const rows = JSON.parse(raw) as Array<{ id?: string; title?: string; model?: string; updated_at?: number }>;
     const sessionIndex = readCodexSessionIndex();
     return rows
       .filter((row) => !!row.id)
-      .map((row) => {
+      .map((row): AgentSessionHistoryItem => {
         const indexedTitle = sessionIndex.get(row.id!);
         const isCurrent = !!currentSessionId && row.id === currentSessionId;
         return {
@@ -260,11 +467,13 @@ function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?
           title: indexedTitle || row.title || row.id!,
           titleSource: indexedTitle ? "rename" : row.title ? "stored_title" : "fallback",
           ...(row.model ? { model: row.model } : {}),
-          updatedAt: row.updated_at || 0,
+          updatedAt: codexConversationActivityAt(row.id!) ?? row.updated_at ?? 0,
           ...(isCurrent ? { current: true } : {}),
           ...resumeInfoFields("codex", { sessionId: row.id! }),
         };
-      });
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit);
   } catch {
     return [];
   }
@@ -286,6 +495,58 @@ function summarizeText(raw?: string): string | undefined {
   const first = lines.find((line) => line !== "[object Object]");
   if (!first) return undefined;
   return first.replace(/\s+/g, " ").slice(0, 160);
+}
+
+function isLikelyUUID(raw?: string): boolean {
+  return !!raw?.trim().match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+}
+
+function summarizeReadableText(raw?: string): string | undefined {
+  const title = summarizeText(raw);
+  return title && !isLikelyUUID(title) ? title : undefined;
+}
+
+export function shortTitleForHistoryTitle(raw: string): string {
+  const collapsed = (summarizeText(raw) || raw).replace(/\s+/g, " ").trim();
+  const maxLength = 120;
+  if (collapsed.length <= maxLength) return collapsed;
+  return `${collapsed.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function normalizedHistoryTitle(raw?: string): string {
+  return (summarizeText(raw) || raw || "")
+    .replace(/^[\u2801-\u28FF] */u, "")
+    .replace(/^(?:\u03c0|pi)\s*-\s*/iu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export function historyTitleMatchesPaneTitle(historyTitle: string, paneTitle: string): boolean {
+  const history = normalizedHistoryTitle(historyTitle);
+  const pane = normalizedHistoryTitle(paneTitle);
+  if (!history || !pane) return false;
+  if (history === pane) return true;
+  return history.length >= 12 && pane.includes(history);
+}
+
+function withShortTitle(item: AgentSessionHistoryItem): AgentSessionHistoryItem {
+  return {
+    ...item,
+    shortTitle: shortTitleForHistoryTitle(item.title),
+  };
+}
+
+function withCurrentTitleFallback(items: AgentSessionHistoryItem[], currentTitle?: string): AgentSessionHistoryItem[] {
+  if (!currentTitle || items.some((item) => item.current)) return items;
+
+  const currentIndex = items.findIndex((item) =>
+    historyTitleMatchesPaneTitle(item.title, currentTitle) ||
+    (item.shortTitle ? historyTitleMatchesPaneTitle(item.shortTitle, currentTitle) : false)
+  );
+  if (currentIndex < 0) return items;
+
+  return items.map((item, index) => index === currentIndex ? { ...item, current: true } : item);
 }
 
 function encodeClaudeProjectDir(cwdRaw: string): string {
@@ -331,11 +592,18 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
     const renamedTitle = extractClaudeRenameTitleFromTranscript(lines);
     let firstUserTitle: string | undefined;
     let model: string | undefined;
+    let latestActivityAt: number | undefined;
 
     for (const line of lines) {
       if (!line) continue;
       try {
         const entry = JSON.parse(line) as any;
+        if (entry?.type === "assistant") {
+          latestActivityAt = latestTimestamp(latestActivityAt, parseSessionTimestamp(entry.timestamp));
+        } else if (entry?.type === "user" && isClaudeConversationUserEntry(entry)) {
+          latestActivityAt = latestTimestamp(latestActivityAt, parseSessionTimestamp(entry.timestamp));
+        }
+
         const messageContent = typeof entry?.message?.content === "string"
           ? entry.message.content
           : Array.isArray(entry?.message?.content)
@@ -368,7 +636,7 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
       title: resolvedTitle,
       titleSource,
       ...(model ? { model } : {}),
-      updatedAt: indexEntry?.modifiedAt || Math.round(mtimeMs / 1000),
+      updatedAt: latestActivityAt || indexEntry?.modifiedAt || Math.round(mtimeMs / 1000),
       ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
       ...resumeInfoFields("claude", { sessionId }),
     };
@@ -384,8 +652,6 @@ function listClaudeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
     const indexEntries = readClaudeSessionsIndex(cwdRaw);
     if (indexEntries.size > 0) {
       return [...indexEntries.entries()]
-        .sort((a, b) => (b[1].modifiedAt || 0) - (a[1].modifiedAt || 0))
-        .slice(0, limit)
         .map(([sessionId, entry]): AgentSessionHistoryItem | null => {
           const transcriptPath = entry.transcriptPath || join(dir, `${sessionId}.jsonl`);
           if (existsSync(transcriptPath)) return parseClaudeHistoryEntry(transcriptPath, currentSessionId, entry);
@@ -398,7 +664,9 @@ function listClaudeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
             ...resumeInfoFields("claude", { sessionId }),
           };
         })
-        .filter((item): item is AgentSessionHistoryItem => item !== null);
+        .filter((item): item is AgentSessionHistoryItem => item !== null)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, limit);
     }
 
     return readdirSync(dir)
@@ -413,6 +681,24 @@ function listClaudeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
   }
 }
 
+export function extractLatestPiConversationActivityAt(lines: string[]): number | undefined {
+  let latest: number | undefined;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as {
+        type?: string;
+        timestamp?: unknown;
+        message?: { role?: string; timestamp?: unknown };
+      };
+      if (entry.type === "message" && (entry.message?.role === "user" || entry.message?.role === "assistant")) {
+        latest = latestTimestamp(latest, parseSessionTimestamp(entry.timestamp ?? entry.message?.timestamp));
+      }
+    } catch {}
+  }
+  return latest;
+}
+
 function parsePiHistoryEntry(filePath: string, currentSessionId?: string): AgentSessionHistoryItem | null {
   try {
     const lines = readFileSync(filePath, "utf-8").split("\n");
@@ -421,6 +707,7 @@ function parsePiHistoryEntry(filePath: string, currentSessionId?: string): Agent
     let sessionInfoTitle: string | undefined;
     let model: string | undefined;
     let ts = Math.round(statSync(filePath).mtimeMs / 1000);
+    const latestActivityAt = extractLatestPiConversationActivityAt(lines);
 
     for (const line of lines) {
       if (!line) continue;
@@ -428,10 +715,6 @@ function parsePiHistoryEntry(filePath: string, currentSessionId?: string): Agent
         const entry = JSON.parse(line) as any;
         if (entry?.type === "session") {
           if (typeof entry.id === "string") sessionId = entry.id;
-          if (typeof entry.timestamp === "string") {
-            const parsed = Date.parse(entry.timestamp);
-            if (!Number.isNaN(parsed)) ts = Math.round(parsed / 1000);
-          }
         }
         if (entry?.type === "model_change" && typeof entry.modelId === "string") model = entry.modelId;
         if (entry?.type === "session_info" && typeof entry.name === "string" && entry.name.trim()) {
@@ -455,7 +738,7 @@ function parsePiHistoryEntry(filePath: string, currentSessionId?: string): Agent
       title,
       titleSource: sessionInfoTitle ? "session_info" : firstPromptTitle ? "first_prompt" : "fallback",
       ...(model ? { model } : {}),
-      updatedAt: ts,
+      updatedAt: latestActivityAt || ts,
       ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
       ...resumeInfoFields("pi", { sessionId, sessionPath: filePath }),
     };
@@ -480,46 +763,143 @@ function listPiHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: s
   }
 }
 
-function parseCopilotWorkspaceYaml(filePath: string): { cwd?: string; summary?: string; createdAt?: number; updatedAt?: number } {
+type CopilotWorkspaceMetadata = {
+  cwd?: string;
+  summary?: string;
+  branch?: string;
+  repository?: string;
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+function yamlScalar(content: string, key: string): string | undefined {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = content.match(new RegExp(`^${escapedKey}:\\s*(.*)$`, "m"));
+  if (!match) return undefined;
+
+  const rawValue = match[1]?.trim();
+  if (!rawValue || rawValue === "null" || rawValue === "~") return undefined;
+  if ((rawValue.startsWith('"') && rawValue.endsWith('"')) || (rawValue.startsWith("'") && rawValue.endsWith("'"))) {
+    return rawValue.slice(1, -1).trim() || undefined;
+  }
+  return rawValue;
+}
+
+function parseCopilotWorkspaceYaml(filePath: string): CopilotWorkspaceMetadata {
   try {
     const content = readFileSync(filePath, "utf-8");
-    const cwd = content.match(/^cwd:\s*(.+)$/m)?.[1]?.trim();
-    const summary = content.match(/^summary:\s*(.+)$/m)?.[1]?.trim();
-    const createdAtRaw = content.match(/^created_at:\s*(.+)$/m)?.[1]?.trim();
-    const updatedAtRaw = content.match(/^updated_at:\s*(.+)$/m)?.[1]?.trim();
+    const cwd = yamlScalar(content, "cwd");
+    const summary = yamlScalar(content, "summary");
+    const branch = yamlScalar(content, "branch");
+    const repository = yamlScalar(content, "repository");
+    const createdAtRaw = yamlScalar(content, "created_at");
+    const updatedAtRaw = yamlScalar(content, "updated_at");
     const createdAt = createdAtRaw ? Math.round(Date.parse(createdAtRaw) / 1000) : undefined;
     const updatedAt = updatedAtRaw ? Math.round(Date.parse(updatedAtRaw) / 1000) : undefined;
-    return { cwd, summary, createdAt, updatedAt };
+    return { cwd, summary, branch, repository, createdAt, updatedAt };
   } catch {
     return {};
   }
+}
+
+function copilotEventText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (!value) return undefined;
+  if (Array.isArray(value)) {
+    return value.map(copilotEventText).filter(Boolean).join("\n") || undefined;
+  }
+  if (typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["text", "content", "value", "message", "transformedContent"]) {
+    const text = copilotEventText(record[key]);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+export function extractFirstCopilotUserMessageTitleFromEventLines(lines: string[]): string | undefined {
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: string; data?: Record<string, unknown> };
+      if (entry?.type !== "user.message") continue;
+      const title = summarizeReadableText(
+        copilotEventText(entry.data?.content) || copilotEventText(entry.data?.transformedContent),
+      );
+      if (title) return title;
+    } catch {}
+  }
+  return undefined;
+}
+
+export function extractLatestCopilotConversationActivityAt(lines: string[]): number | undefined {
+  let latest: number | undefined;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: string; timestamp?: unknown };
+      if (entry.type === "user.message" || entry.type === "assistant.message") {
+        latest = latestTimestamp(latest, parseSessionTimestamp(entry.timestamp));
+      }
+    } catch {}
+  }
+  return latest;
+}
+
+export function extractLatestOpenCodeConversationActivityAt(rows: Array<{ timeCreated?: number; timeUpdated?: number; data?: string }>): number | undefined {
+  let latest: number | undefined;
+  for (const row of rows) {
+    try {
+      const data = row.data ? JSON.parse(row.data) as {
+        role?: string;
+        time?: { created?: unknown; completed?: unknown };
+      } : undefined;
+      if (data?.role !== "user" && data?.role !== "assistant") continue;
+
+      const candidate = parseSessionTimestamp(data.time?.completed)
+        ?? parseSessionTimestamp(data.time?.created)
+        ?? parseSessionTimestamp(row.timeUpdated)
+        ?? parseSessionTimestamp(row.timeCreated);
+      latest = latestTimestamp(latest, candidate);
+    } catch {}
+  }
+  return latest;
+}
+
+export function resolveCopilotHistoryTitle(
+  workspaceMeta: Pick<CopilotWorkspaceMetadata, "summary" | "branch" | "repository" | "cwd">,
+  eventLines: string[] = [],
+): { title: string; titleSource: NonNullable<AgentSessionHistoryItem["titleSource"]> } {
+  const summaryTitle = summarizeReadableText(workspaceMeta.summary);
+  if (summaryTitle) return { title: summaryTitle, titleSource: "summary" };
+
+  const firstPromptTitle = extractFirstCopilotUserMessageTitleFromEventLines(eventLines);
+  if (firstPromptTitle) return { title: firstPromptTitle, titleSource: "first_prompt" };
+
+  const sessionInfoTitle =
+    summarizeReadableText(workspaceMeta.branch) ||
+    summarizeReadableText(workspaceMeta.repository) ||
+    summarizeReadableText(workspaceMeta.cwd ? basename(workspaceMeta.cwd) : undefined);
+  if (sessionInfoTitle) return { title: sessionInfoTitle, titleSource: "session_info" };
+
+  return { title: "Copilot session", titleSource: "fallback" };
 }
 
 function parseCopilotHistoryEntry(sessionDir: string, currentSessionId?: string): AgentSessionHistoryItem | null {
   try {
     const sessionId = basename(sessionDir);
     const workspaceMeta = parseCopilotWorkspaceYaml(join(sessionDir, "workspace.yaml"));
-    let title = summarizeText(workspaceMeta.summary);
-    if (!title) {
-      const eventsPath = join(sessionDir, "events.jsonl");
-      if (existsSync(eventsPath)) {
-        for (const line of readFileSync(eventsPath, "utf-8").split("\n")) {
-          if (!line) continue;
-          try {
-            const entry = JSON.parse(line) as any;
-            if (entry?.type === "user.message") {
-              title = summarizeText(entry?.data?.content || entry?.data?.transformedContent);
-              if (title) break;
-            }
-          } catch {}
-        }
-      }
-    }
-    const updatedAt = workspaceMeta.updatedAt || Math.round(statSync(sessionDir).mtimeMs / 1000);
+    const eventsPath = join(sessionDir, "events.jsonl");
+    const eventLines = existsSync(eventsPath) ? readFileSync(eventsPath, "utf-8").split("\n") : [];
+    const { title, titleSource } = resolveCopilotHistoryTitle(workspaceMeta, eventLines);
+    const updatedAt = extractLatestCopilotConversationActivityAt(eventLines)
+      || workspaceMeta.updatedAt
+      || Math.round(statSync(sessionDir).mtimeMs / 1000);
     return {
       sessionId,
-      title: title || sessionId,
-      titleSource: title ? "summary" : "fallback",
+      title,
+      titleSource,
       updatedAt,
       ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
       ...resumeInfoFields("copilot", { sessionId }),
@@ -536,12 +916,11 @@ function listCopilotHistoryForCwd(cwdRaw: string, limit: number, currentSessionI
     return readdirSync(root)
       .map((name) => join(root, name))
       .filter((dir) => existsSync(join(dir, "workspace.yaml")))
-      .map((dir) => ({ dir, meta: parseCopilotWorkspaceYaml(join(dir, "workspace.yaml")) }))
-      .filter(({ meta }) => meta.cwd === cwdRaw)
-      .sort((a, b) => (b.meta.updatedAt || statSync(b.dir).mtimeMs / 1000) - (a.meta.updatedAt || statSync(a.dir).mtimeMs / 1000))
-      .slice(0, limit)
-      .map(({ dir }) => parseCopilotHistoryEntry(dir, currentSessionId))
-      .filter((item): item is AgentSessionHistoryItem => item !== null);
+      .filter((dir) => parseCopilotWorkspaceYaml(join(dir, "workspace.yaml")).cwd === cwdRaw)
+      .map((dir) => parseCopilotHistoryEntry(dir, currentSessionId))
+      .filter((item): item is AgentSessionHistoryItem => item !== null)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit);
   } catch {
     return [];
   }
@@ -552,18 +931,42 @@ function listOpenCodeHistoryForCwd(cwdRaw: string, limit: number, currentSession
   if (!existsSync(dbPath)) return [];
   try {
     const sqlCwd = cwdRaw.replace(/'/g, "''");
-    const sql = `select s.id, s.title, s.time_updated from session s join project p on p.id=s.project_id where p.worktree='${sqlCwd}' order by s.time_updated desc limit ${limit};`;
+    const sql = `
+      select
+        s.id,
+        s.title,
+        coalesce(
+          (
+            select max(coalesce(
+              json_extract(m.data, '$.time.completed'),
+              json_extract(m.data, '$.time.created'),
+              m.time_updated,
+              m.time_created
+            ))
+            from message m
+            where m.session_id = s.id
+              and json_extract(m.data, '$.role') in ('user', 'assistant')
+          ),
+          s.time_updated
+        ) as activity_updated
+      from session s
+      join project p on p.id=s.project_id
+      where p.worktree='${sqlCwd}'
+      order by activity_updated desc
+      limit ${limit};
+    `;
     const raw = exec(`sqlite3 -json ${JSON.stringify(dbPath)} ${JSON.stringify(sql)}`);
     if (!raw) return [];
-    const rows = JSON.parse(raw) as Array<{ id?: string; title?: string; time_updated?: number }>;
+    const rows = JSON.parse(raw) as Array<{ id?: string; title?: string; activity_updated?: number }>;
     return rows
       .filter((row) => !!row.id)
       .map((row) => ({
         sessionId: row.id!,
         title: row.title || row.id!,
         titleSource: row.title ? "stored_title" : "fallback",
-        updatedAt: Math.round((row.time_updated || 0) / 1000),
+        updatedAt: Math.round((row.activity_updated || 0) / 1000),
         ...(currentSessionId && row.id === currentSessionId ? { current: true } : {}),
+        ...resumeInfoFields("opencode", { sessionId: row.id! }),
       }));
   } catch {
     return [];
@@ -614,21 +1017,29 @@ export function normalizeHistoryCwd(cwdRaw: string): string {
   return expandHomePath(cwdRaw) || cwdRaw;
 }
 
-export function loadHistoryForAgent(agent: string, cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
+export function loadHistoryForAgent(agent: string, cwdRaw: string, limit: number, currentSessionId?: string, _currentTitle?: string): AgentSessionHistoryItem[] {
+  let items: AgentSessionHistoryItem[];
   switch (agent) {
     case "claude":
-      return listClaudeHistoryForCwd(cwdRaw, limit, currentSessionId);
+      items = listClaudeHistoryForCwd(cwdRaw, limit, currentSessionId);
+      break;
     case "codex":
-      return listCodexHistoryForCwd(cwdRaw, limit, currentSessionId);
+      items = listCodexHistoryForCwd(cwdRaw, limit, currentSessionId);
+      break;
     case "copilot":
-      return listCopilotHistoryForCwd(cwdRaw, limit, currentSessionId);
+      items = listCopilotHistoryForCwd(cwdRaw, limit, currentSessionId);
+      break;
     case "opencode":
-      return listOpenCodeHistoryForCwd(cwdRaw, limit, currentSessionId);
+      items = listOpenCodeHistoryForCwd(cwdRaw, limit, currentSessionId);
+      break;
     case "pi":
-      return listPiHistoryForCwd(cwdRaw, limit, currentSessionId);
+      items = listPiHistoryForCwd(cwdRaw, limit, currentSessionId);
+      break;
     case "cursor":
-      return listCursorHistoryForCwd(cwdRaw, limit, currentSessionId);
+      items = listCursorHistoryForCwd(cwdRaw, limit, currentSessionId);
+      break;
     default:
       return [];
   }
+  return items.map(withShortTitle);
 }

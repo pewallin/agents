@@ -30,14 +30,65 @@ export interface AgentSessionHistoryGroup {
   pane?: string;
   tmuxPaneId?: string;
   currentSessionId?: string;
+  limit: number;
+  hasMore: boolean;
   sessions: AgentSessionHistoryItem[];
 }
 
 // ── Per-agent detection ──────────────────────────────────────────────
 
-type HistoryTarget = { cwdRaw: string; pane?: string; tmuxPaneId?: string; currentSessionId?: string };
+type HistoryTarget = { cwdRaw: string; pane?: string; tmuxPaneId?: string; currentSessionId?: string; currentTitle?: string };
 
-function collectHistoryTargets(agentFilter?: string, cwdOverride?: string): Map<string, HistoryTarget[]> {
+function processArgv(args?: string): string[] {
+  return (args || "").trim().split(/\s+/).filter(Boolean);
+}
+
+function processTokenBasename(token: string): string {
+  return basename(token.replace(/^['"]+|['"]+$/g, "")).replace(/^-/, "").toLowerCase();
+}
+
+export function externalSessionIdFromProcessArgs(agent: string, args?: string): string | undefined {
+  const argv = processArgv(args);
+  const agentIndex = argv.findIndex((token) => processTokenBasename(token) === agent.toLowerCase());
+  if (agentIndex < 0) return undefined;
+  const agentArgs = argv.slice(agentIndex + 1);
+
+  switch (agent.toLowerCase()) {
+    case "codex": {
+      const resumeIndex = agentArgs.indexOf("resume");
+      if (resumeIndex < 0) return undefined;
+      const target = agentArgs[resumeIndex + 1];
+      return target && !target.startsWith("-") ? target : undefined;
+    }
+    case "opencode": {
+      const sessionIndex = agentArgs.indexOf("--session");
+      const target = sessionIndex >= 0 ? agentArgs[sessionIndex + 1] : undefined;
+      return target && !target.startsWith("-") ? target : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+export function matchesHistoryPaneFilter(
+  pane: Pick<AgentPane, "pane" | "paneId" | "tmuxPaneId" | "windowId">,
+  paneFilter: string,
+): boolean {
+  const normalized = paneFilter.trim();
+  if (!normalized) return false;
+
+  const identifiers = [pane.tmuxPaneId, pane.pane, pane.paneId, pane.windowId].filter(
+    (value): value is string => !!value,
+  );
+  if (identifiers.includes(normalized)) return true;
+
+  return identifiers.some((identifier) => {
+    if (identifier.includes(":")) return false;
+    return normalized.endsWith(`:${identifier}`);
+  });
+}
+
+function collectHistoryTargets(agentFilter?: string, cwdOverride?: string, paneFilter?: string): Map<string, HistoryTarget[]> {
   const agents = ["claude", "codex", "copilot", "opencode", "pi", "cursor"];
   const wantedAgents = agentFilter ? agents.filter((agent) => agent === agentFilter) : agents;
   const targets = new Map<string, HistoryTarget[]>();
@@ -46,9 +97,36 @@ function collectHistoryTargets(agentFilter?: string, cwdOverride?: string): Map<
   const addTarget = (agent: string, target: HistoryTarget) => {
     if (!wantedAgents.includes(agent)) return;
     const list = targets.get(agent) || [];
-    if (!list.some((existing) => existing.cwdRaw === target.cwdRaw)) list.push(target);
+    const exists = list.some((existing) => {
+      if (target.tmuxPaneId || existing.tmuxPaneId) return existing.tmuxPaneId === target.tmuxPaneId;
+      return existing.cwdRaw === target.cwdRaw;
+    });
+    if (!exists) list.push(target);
     targets.set(agent, list);
   };
+
+  if (paneFilter) {
+    for (const pane of scan()) {
+      if (!matchesHistoryPaneFilter(pane, paneFilter)) continue;
+      const agent = pane.agent.toLowerCase();
+      const cwdRaw = stateWorkspaceCwd(agent, pane.tmuxPaneId, stateSnapshot) || (pane.cwd ? normalizeHistoryCwd(pane.cwd) : undefined);
+      if (!cwdRaw) continue;
+      for (const historyAgent of wantedAgents) {
+        if (historyAgent === agent) {
+          addTarget(historyAgent, {
+            cwdRaw,
+            pane: pane.pane,
+            tmuxPaneId: pane.tmuxPaneId,
+            currentSessionId: pane.externalSessionId || stateExternalSessionId(agent, pane.tmuxPaneId, stateSnapshot),
+            currentTitle: pane.title,
+          });
+        } else {
+          addTarget(historyAgent, { cwdRaw });
+        }
+      }
+    }
+    return targets;
+  }
 
   if (cwdOverride) {
     const cwdRaw = normalizeHistoryCwd(cwdOverride);
@@ -64,7 +142,8 @@ function collectHistoryTargets(agentFilter?: string, cwdOverride?: string): Map<
       cwdRaw,
       pane: pane.pane,
       tmuxPaneId: pane.tmuxPaneId,
-      currentSessionId: stateExternalSessionId(agent, pane.tmuxPaneId, stateSnapshot),
+      currentSessionId: pane.externalSessionId || stateExternalSessionId(agent, pane.tmuxPaneId, stateSnapshot),
+      currentTitle: pane.title,
     });
   }
 
@@ -76,15 +155,17 @@ function collectHistoryTargets(agentFilter?: string, cwdOverride?: string): Map<
   return targets;
 }
 
-export function getSessionHistory(opts: { agent?: string; cwd?: string; limit?: number } = {}): AgentSessionHistoryGroup[] {
+export function getSessionHistory(opts: { agent?: string; cwd?: string; pane?: string; limit?: number } = {}): AgentSessionHistoryGroup[] {
   const limit = Math.max(1, Math.min(100, opts.limit ?? 5));
   const agentFilter = opts.agent?.toLowerCase();
   const groups: AgentSessionHistoryGroup[] = [];
-  const targets = collectHistoryTargets(agentFilter, opts.cwd);
+  const targets = collectHistoryTargets(agentFilter, opts.cwd, opts.pane);
 
   for (const [agent, agentTargets] of targets.entries()) {
     for (const target of agentTargets) {
-      const sessions = loadHistoryForAgent(agent, target.cwdRaw, limit, target.currentSessionId);
+      const loadedSessions = loadHistoryForAgent(agent, target.cwdRaw, limit + 1, target.currentSessionId, target.currentTitle);
+      const hasMore = loadedSessions.length > limit;
+      const sessions = loadedSessions.slice(0, limit);
       if (sessions.length === 0) continue;
       groups.push({
         agent,
@@ -92,6 +173,8 @@ export function getSessionHistory(opts: { agent?: string; cwd?: string; limit?: 
         ...(target.pane ? { pane: target.pane } : {}),
         ...(target.tmuxPaneId ? { tmuxPaneId: target.tmuxPaneId } : {}),
         ...(target.currentSessionId ? { currentSessionId: target.currentSessionId } : {}),
+        limit,
+        hasMore,
         sessions,
       });
     }
@@ -273,12 +356,14 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
 
   for (const p of panes) {
     let agentName: string | null = null;
+    let processArgs = p.command;
 
     if (p.pid) {
       // Check the PID itself first — in zellij the returned PID is often
       // the agent process directly (not a shell), and its children may be
       // non-agent subprocesses (e.g. caffeinate, node).
-      agentName = detectAgentProcess("", exec(`ps -p ${p.pid} -o args= 2>/dev/null`));
+      processArgs = exec(`ps -p ${p.pid} -o args= 2>/dev/null`);
+      agentName = detectAgentProcess("", processArgs);
       if (!agentName) {
         const leafCmd = findLeafProcessSync(String(p.pid));
         if (leafCmd) agentName = leafCmd;
@@ -300,7 +385,8 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const titleClean = cleanTitle(p.title);
 
     const zellijCwd = p.cwd?.replace(homedir(), "~") || undefined;
-    const externalSessionId = stateExternalSessionId(agentName, p.id, stateSnapshot);
+    const externalSessionId = externalSessionIdFromProcessArgs(agentName, processArgs)
+      || stateExternalSessionId(agentName, p.id, stateSnapshot);
     const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
@@ -324,6 +410,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       memoryMB: 0,
       detail: finalDetail,
       ...modelInfo,
+      ...(externalSessionId ? { externalSessionId } : {}),
       windowId: paneRef,
       cwd: zellijCwd,
       branch: zellijBranch,
@@ -357,6 +444,7 @@ function scanSync(): AgentPane[] {
     tmuxPaneId: string;
     cwdRaw: string;
     agentName: string;
+    processArgs?: string;
     cpuPercent: number;
     memoryMB: number;
   };
@@ -390,6 +478,7 @@ function scanSync(): AgentPane[] {
       tmuxPaneId,
       cwdRaw,
       agentName,
+      processArgs: matchedProcess.process?.args,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
     });
@@ -414,7 +503,8 @@ function scanSync(): AgentPane[] {
     const titleClean = cleanTitle(p.title);
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
-    const externalSessionId = stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
+    const externalSessionId = externalSessionIdFromProcessArgs(p.agentName, p.processArgs)
+      || stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
     const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
@@ -433,6 +523,7 @@ function scanSync(): AgentPane[] {
       memoryMB: p.memoryMB,
       detail: finalDetail,
       ...modelInfo,
+      ...(externalSessionId ? { externalSessionId } : {}),
       windowId: p.paneId,
       cwd,
       branch,
@@ -485,6 +576,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     tmuxPaneId: string;
     cwdRaw: string;
     agentName: string;
+    processArgs?: string;
     cpuPercent: number;
     memoryMB: number;
   };
@@ -512,6 +604,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
       tmuxPaneId,
       cwdRaw,
       agentName,
+      processArgs: matchedProcess.process?.args,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
     });
@@ -533,7 +626,8 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const titleClean = cleanTitle(p.title);
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
-    const externalSessionId = stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
+    const externalSessionId = externalSessionIdFromProcessArgs(p.agentName, p.processArgs)
+      || stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
     const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
@@ -552,6 +646,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
       memoryMB: p.memoryMB,
       detail: finalDetail,
       ...modelInfo,
+      ...(externalSessionId ? { externalSessionId } : {}),
       windowId: p.paneId,
       cwd,
       branch,

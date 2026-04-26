@@ -165,7 +165,7 @@ function applyProfileEnv(command: string, env?: Record<string, string>): string 
   return `${exports.join("; ")}; ${command}`;
 }
 
-function splitCommandArgv(command: string): string[] {
+export function splitCommandArgv(command: string): string[] {
   const argv: string[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;

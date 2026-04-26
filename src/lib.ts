@@ -1,5 +1,6 @@
 import { loadConfig, getProfileNames, resolveProfile, type Config, type LaunchProfile } from "./config.js";
 import { scan, runtimeStates, getSessionHistory, type AgentPane, type AgentRuntimeState, type AgentSessionHistoryGroup } from "./scanner.js";
+import { resumeAgentSession, type AgentSessionResumeResult, type ResumeAgentSessionOptions } from "./resume.js";
 import type { RuntimeLocator, RuntimeStateEvent, RuntimeStateEventEntity, RuntimeStateEventOperation, RuntimeMux } from "./runtime-events.js";
 import {
   createWorkspaceOrThrow,
@@ -19,6 +20,8 @@ export type {
   AgentPane,
   AgentRuntimeState,
   AgentSessionHistoryGroup,
+  AgentSessionResumeResult,
+  ResumeAgentSessionOptions,
   RuntimeLocator,
   RuntimeMux,
   RuntimeStateEvent,
@@ -58,8 +61,12 @@ export function listAgentRuntimeStates(paneIds?: string[]): AgentRuntimeState[] 
   return runtimeStates(paneIds);
 }
 
-export function listAgentSessionHistory(opts: { agent?: string; cwd?: string; limit?: number } = {}): AgentSessionHistoryGroup[] {
+export function listAgentSessionHistory(opts: { agent?: string; cwd?: string; pane?: string; limit?: number } = {}): AgentSessionHistoryGroup[] {
   return getSessionHistory(opts);
+}
+
+export function resumeAgentSessionInPane(options: ResumeAgentSessionOptions): AgentSessionResumeResult {
+  return resumeAgentSession(options);
 }
 
 export function resolveWorkspaceCommand(options: LaunchWorkspaceOptions = {}): ResolvedWorkspaceLaunch {

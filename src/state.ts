@@ -284,6 +284,16 @@ export function upsertStateSnapshotEntry(snapshot: StateSnapshot, entry: StateEn
   snapshot.provenanceByKey = rebuilt.provenanceByKey;
 }
 
+export function clearStateExternalSessionId(agent: string, session: string): StateEntry | null {
+  const existing = readStateFile(agent, session);
+  if (!existing) return null;
+
+  const { externalSessionId: _externalSessionId, ...entry } = existing;
+  writeStateFile(agent, session, entry);
+  appendRuntimeStateEvent("primary_state", "upsert", agent, session);
+  return entry;
+}
+
 export function deriveModelDisplay(meta?: ModelMetadata): string | undefined {
   if (!meta) return undefined;
   if (meta.provider && meta.modelId) return `${meta.provider}/${meta.modelId}`;

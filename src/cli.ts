@@ -97,6 +97,7 @@ const [
   setupMod,
   workspace,
   config,
+  resumeMod,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -105,6 +106,7 @@ const [
   import("./setup.js"),
   import("./workspace.js"),
   import("./config.js"),
+  import("./resume.js"),
 ]);
 
 const { Command } = commander;
@@ -114,6 +116,7 @@ const { reportState, reportContext, reportContributorState } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
+const { resumeAgentSession } = resumeMod;
 
 async function loadUiModules() {
   const [reactMod, ink, dashboardMod, selectMod, agentTableMod] = await Promise.all([
@@ -245,11 +248,12 @@ program
   .command("history")
   .description("Show persisted session history for supported agents")
   .option("--agent <name>", "Agent backend to query (e.g. codex, pi)")
+  .option("--pane <id>", "tmux pane ID to query")
   .option("--cwd <path>", "Workspace path to query (defaults to live agents, then current directory)")
   .option("--limit <n>", "Maximum sessions per agent/cwd", (value) => parseInt(value, 10), 5)
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const groups = getSessionHistory({ agent: opts.agent, cwd: opts.cwd, limit: opts.limit });
+    const groups = getSessionHistory({ agent: opts.agent, pane: opts.pane, cwd: opts.cwd, limit: opts.limit });
     if (opts.json) {
       console.log(JSON.stringify(groups, null, 2));
       return;
@@ -273,6 +277,48 @@ program
         const model = session.model ? `  ${session.model}` : "";
         console.log(`${marker} ${formatTs(session.updatedAt)}${model}  ${session.title}`);
       }
+    }
+  });
+
+program
+  .command("resume")
+  .description("Resume a persisted agent session in a live pane")
+  .requiredOption("--pane <id>", "tmux pane ID to resume into")
+  .option("--agent <name>", "Agent backend to run when it differs from the live pane")
+  .option("--new-session", "Start a new agent session")
+  .option("--session <id>", "Session ID to resume")
+  .option("--session-path <path>", "Session file path to resume")
+  .option("--target <value>", "Generic resume target")
+  .option("--target-kind <kind>", "Generic resume target kind (session-id, session-path, or new-session)")
+  .option("--force", "Resume even if the live agent is not idle")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const targetKind = opts.targetKind === "session-path" || opts.targetKind === "session-id" || opts.targetKind === "new-session"
+      ? opts.targetKind
+      : undefined;
+    const result = resumeAgentSession({
+      pane: opts.pane,
+      agent: opts.agent,
+      newSession: !!opts.newSession,
+      session: opts.session,
+      sessionPath: opts.sessionPath,
+      target: opts.target,
+      targetKind,
+      force: !!opts.force,
+    });
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (result.ok) {
+      console.log(`Resumed ${result.agent} in ${result.tmuxPaneId}.`);
+    } else if (result.requiresForce) {
+      console.error(result.message || "Agent is not idle; pass --force to resume anyway.");
+    } else {
+      console.error(result.message || "Resume failed.");
+    }
+
+    if (!result.ok && !result.requiresForce) {
+      process.exit(1);
     }
   });
 

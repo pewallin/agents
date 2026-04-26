@@ -18,6 +18,7 @@ export interface AgentPane {
   modelLabel?: string;
   modelSource?: ModelSource;
   model?: string;
+  externalSessionId?: string;
   windowId?: string;
   cwd?: string;
   branch?: string;
