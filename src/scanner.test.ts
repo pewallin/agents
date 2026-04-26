@@ -2,7 +2,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
-import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
+import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget } from "./resume.js";
 import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
@@ -449,6 +449,19 @@ describe("session history activity timestamps", () => {
         message: { role: "toolResult", content: [{ type: "text", text: "ok" }] },
       }),
     ])).toBe(seconds(latestConversationAt));
+  });
+
+  it("reads the latest Pi thinking level from session events", () => {
+    expect(extractLatestPiThinkingLevelFromSessionLines([
+      JSON.stringify({
+        type: "thinking_level_change",
+        thinkingLevel: "medium",
+      }),
+      JSON.stringify({
+        type: "thinking_level_change",
+        thinkingLevel: "high",
+      }),
+    ])).toBe("high");
   });
 
   it("uses Copilot user and assistant messages, not tool execution metadata", () => {

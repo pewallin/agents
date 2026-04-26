@@ -747,6 +747,20 @@ export function extractLatestPiConversationActivityAt(lines: string[]): number |
   return latest;
 }
 
+export function extractLatestPiThinkingLevelFromSessionLines(lines: string[]): string | undefined {
+  let thinkingLevel: string | undefined;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: string; thinkingLevel?: unknown };
+      if (entry.type === "thinking_level_change" && typeof entry.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
+        thinkingLevel = entry.thinkingLevel.trim();
+      }
+    } catch {}
+  }
+  return thinkingLevel;
+}
+
 function parsePiHistoryEntry(filePath: string, currentSessionId?: string): AgentSessionHistoryItem | null {
   try {
     const lines = readFileSync(filePath, "utf-8").split("\n");
@@ -756,6 +770,7 @@ function parsePiHistoryEntry(filePath: string, currentSessionId?: string): Agent
     let model: string | undefined;
     let ts = Math.round(statSync(filePath).mtimeMs / 1000);
     const latestActivityAt = extractLatestPiConversationActivityAt(lines);
+    const reasoningEffort = extractLatestPiThinkingLevelFromSessionLines(lines);
 
     for (const line of lines) {
       if (!line) continue;
@@ -786,6 +801,7 @@ function parsePiHistoryEntry(filePath: string, currentSessionId?: string): Agent
       title,
       titleSource: sessionInfoTitle ? "session_info" : firstPromptTitle ? "first_prompt" : "fallback",
       ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       updatedAt: latestActivityAt || ts,
       ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
       ...resumeInfoFields("pi", { sessionId, sessionPath: filePath }),
@@ -799,10 +815,20 @@ function listPiHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: s
   const dir = join(homedir(), ".pi", "agent", "sessions", encodePiSessionDir(cwdRaw));
   if (!existsSync(dir)) return [];
   try {
-    return readdirSync(dir)
+    const candidateLimit = Math.max(limit, Math.min(250, limit * 4));
+    const sortedFiles = readdirSync(dir)
       .filter((name) => name.endsWith(".jsonl"))
       .map((name) => join(dir, name))
-      .map((filePath) => parsePiHistoryEntry(filePath, currentSessionId))
+      .map((filePath) => ({ filePath, mtimeMs: statSync(filePath).mtimeMs }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const candidateFiles = sortedFiles.slice(0, candidateLimit);
+    if (currentSessionId && !candidateFiles.some(({ filePath }) => basename(filePath, ".jsonl").includes(currentSessionId))) {
+      const currentFile = sortedFiles.find(({ filePath }) => basename(filePath, ".jsonl").includes(currentSessionId));
+      if (currentFile) candidateFiles.push(currentFile);
+    }
+
+    return candidateFiles
+      .map(({ filePath }) => parsePiHistoryEntry(filePath, currentSessionId))
       .filter((item): item is AgentSessionHistoryItem => item !== null)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, limit);
