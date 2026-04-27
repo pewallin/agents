@@ -189,4 +189,17 @@ describe("createWorkspace", () => {
     expect(newWindowCall?.[0]).toContain(JSON.stringify(`'${expectedShell}' -lc 'exec /tmp/agents-launch-fixed-uuid.sh'`));
     expect(execMock).not.toHaveBeenCalledWith(expect.stringContaining(`tmux send-keys -t %42`));
   });
+
+  it("can create a tmux workspace without focusing the attached client", () => {
+    createWorkspace(undefined, undefined, undefined, {
+      profile: "bare",
+      cwd: "/tmp/demo",
+      agentOnly: true,
+      detached: true,
+    });
+
+    const newWindowCall = execMock.mock.calls.find(([command]) => String(command).startsWith("tmux new-window"));
+    expect(newWindowCall?.[0]).toContain("tmux new-window -d");
+    expect(execMock).not.toHaveBeenCalledWith("tmux select-pane -t %42");
+  });
 });

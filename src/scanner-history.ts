@@ -208,13 +208,33 @@ export function resolveCodexFallbackTitleFromHistory(
 }
 
 function getCodexCwdFallbackTitle(cwdRaw: string | undefined, fallbackTitle: string): string | undefined {
-  if (!cwdRaw) return undefined;
-  const history = listCodexHistoryForCwd(cwdRaw, 3);
+  if (!cwdRaw || !isLikelyProjectBasenameTitle(fallbackTitle, cwdRaw)) return undefined;
+  const historyTitles = listCodexHistoryTitlesForCwd(cwdRaw, 3);
   return resolveCodexFallbackTitleFromHistory(
     fallbackTitle,
     cwdRaw,
-    history.map((item) => item.title),
+    historyTitles,
   );
+}
+
+function listCodexHistoryTitlesForCwd(cwdRaw: string, limit: number): string[] {
+  const dbPath = codexStateDbPath();
+  if (!dbPath || !existsSync(dbPath)) return [];
+
+  try {
+    const sqlCwd = cwdRaw.replace(/'/g, "''");
+    const queryLimit = Math.max(limit, Math.min(50, limit * 8));
+    const sql = `select id, title from threads where cwd='${sqlCwd}' order by updated_at desc limit ${queryLimit};`;
+    const raw = exec(`sqlite3 -json ${JSON.stringify(dbPath)} ${JSON.stringify(sql)}`);
+    if (!raw) return [];
+    const rows = JSON.parse(raw) as Array<{ id?: string; title?: string }>;
+    const sessionIndex = readCodexSessionIndex();
+    return rows
+      .map((row) => row.id ? sessionIndex.get(row.id) || row.title || row.id : row.title)
+      .filter((title): title is string => !!title);
+  } catch {
+    return [];
+  }
 }
 
 export function getHistoryResumeInfo(

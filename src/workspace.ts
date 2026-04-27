@@ -42,6 +42,7 @@ export interface CreateWorkspaceOpts {
   profile?: string;
   cwd?: string;
   tmuxSession?: string;  // target tmux session for the new window
+  detached?: boolean;    // tmux-only: create the new window without focusing attached clients
   initProject?: boolean;
   agentOnly?: boolean;   // skip helper pane creation (app creates them on demand)
 }
@@ -414,7 +415,7 @@ function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: st
 }
 
 function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean, argv?: string[], env?: Record<string, string>): void {
-  const shouldFocusNewWindow = detectMultiplexer() === "tmux";
+  const shouldFocusNewWindow = detectMultiplexer() === "tmux" && opts?.detached !== true;
   const cwd = opts?.cwd || process.cwd();
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
