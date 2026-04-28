@@ -5,6 +5,7 @@ import { exec } from "./shell.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { loadConfig, resolveProfile } from "./config.js";
 import { readStates, reportState } from "./state.js";
+import { resolveStateRestoreCommand } from "./agent-restore.js";
 import type { WorkspaceDef, LaunchProfile } from "./config.js";
 import type { StateEntry, WorkspaceSnapshot } from "./state.js";
 
@@ -73,6 +74,7 @@ export interface RestorableWorkspace {
   command: string;
   context?: string;
   sessionName?: string;
+  externalSessionId?: string;
 }
 
 export type WorkspacePathState = "valid" | "creatable" | "invalid";
@@ -125,9 +127,10 @@ export function getRestorableWorkspacesFromStates(entries: StateEntry[]): Restor
       key,
       agent: entry.agent,
       cwd: ws.cwd,
-      command: ws.command,
+      command: resolveStateRestoreCommand(entry) || ws.command,
       context: entry.context,
       sessionName: ws.sessionName,
+      externalSessionId: entry.externalSessionId,
     });
   }
 

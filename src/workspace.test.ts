@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { getWorkspacePathState, prepareWorkspaceDir, getRestorableWorkspacesFromStates } from "./workspace.js";
+import { reloadConfig } from "./config.js";
 import type { StateEntry } from "./state.js";
 
 describe("workspace path helpers", () => {
@@ -129,5 +130,40 @@ describe("getRestorableWorkspacesFromStates", () => {
     const result = getRestorableWorkspacesFromStates(entries);
     expect(result).toHaveLength(1);
     expect(result[0].cwd).toBe("/a"); // first one wins
+  });
+
+  it("restores codex workspaces with the saved session id instead of --last", () => {
+    const previousConfigPath = process.env.AGENTS_CONFIG_PATH;
+    process.env.AGENTS_CONFIG_PATH = join(tmpdir(), `missing-agents-config-${process.pid}.json`);
+    reloadConfig();
+
+    try {
+      const entries: StateEntry[] = [
+        {
+          state: "idle",
+          ts: now,
+          agent: "codex",
+          session: "%1",
+          externalSessionId: "thread-restore-123",
+          workspace: {
+            cwd: "/Users/test/code/myapp",
+            command: "codex resume --last --dangerously-bypass-approvals-and-sandbox",
+          },
+        },
+      ];
+
+      const result = getRestorableWorkspacesFromStates(entries);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].externalSessionId).toBe("thread-restore-123");
+      expect(result[0].command).toBe("codex --dangerously-bypass-approvals-and-sandbox resume thread-restore-123");
+    } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.AGENTS_CONFIG_PATH;
+      } else {
+        process.env.AGENTS_CONFIG_PATH = previousConfigPath;
+      }
+      reloadConfig();
+    }
   });
 });

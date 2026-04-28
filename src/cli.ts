@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import type { ModelSource } from "./state.js";
 import { switchBack } from "./back.js";
 import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
@@ -98,6 +98,7 @@ const [
   workspace,
   config,
   resumeMod,
+  agentRestore,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -107,6 +108,7 @@ const [
   import("./workspace.js"),
   import("./config.js"),
   import("./resume.js"),
+  import("./agent-restore.js"),
 ]);
 
 const { Command } = commander;
@@ -117,6 +119,7 @@ const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
+const { normalizeTmuxResurrectFile, resolveAgentRestoreArgv } = agentRestore;
 
 async function loadUiModules() {
   const [reactMod, ink, dashboardMod, selectMod, agentTableMod] = await Promise.all([
@@ -319,6 +322,44 @@ program
 
     if (!result.ok && !result.requiresForce) {
       process.exit(1);
+    }
+  });
+
+program
+  .command("restore-agent")
+  .description("Run an agent restore command, preferring an explicit persisted session when available")
+  .argument("<agent>", "Agent backend to restore")
+  .argument("[args...]", "Original command arguments after the agent executable")
+  .allowUnknownOption(true)
+  .action((agent: string, args: string[]) => {
+    const originalArgv = [agent, ...(args || [])];
+    const argv = resolveAgentRestoreArgv({
+      agent,
+      cwd: process.cwd(),
+      originalArgv,
+    }) || originalArgv;
+
+    const result = spawnSync(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });
+    if (result.error) {
+      console.error(result.error.message);
+      process.exit(127);
+    }
+    if (result.signal) {
+      process.kill(process.pid, result.signal as NodeJS.Signals);
+      return;
+    }
+    process.exit(result.status ?? 1);
+  });
+
+program
+  .command("normalize-resurrect-file")
+  .description("Rewrite a tmux-resurrect save file to prefer explicit agent session ids")
+  .argument("<file>", "tmux-resurrect save file path")
+  .option("--json", "Output as JSON")
+  .action((file: string, opts) => {
+    const result = normalizeTmuxResurrectFile(file);
+    if (opts.json) {
+      console.log(JSON.stringify({ panes: result.panes, changed: result.changed }, null, 2));
     }
   });
 

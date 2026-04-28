@@ -57,8 +57,20 @@ export function externalSessionIdFromProcessArgs(agent: string, args?: string): 
     case "codex": {
       const resumeIndex = agentArgs.indexOf("resume");
       if (resumeIndex < 0) return undefined;
-      const target = agentArgs[resumeIndex + 1];
-      return target && !target.startsWith("-") ? target : undefined;
+      const tail = agentArgs.slice(resumeIndex + 1);
+      for (let i = 0; i < tail.length; i += 1) {
+        const arg = tail[i];
+        if (arg === "--last") continue;
+        if (arg === "--") return tail[i + 1];
+        if (arg === "-c" || arg === "--config") {
+          i += 1;
+          continue;
+        }
+        if (arg.startsWith("--config=") || arg.startsWith("-c=")) continue;
+        if (arg.startsWith("-")) continue;
+        return arg;
+      }
+      return undefined;
     }
     case "opencode": {
       const sessionIndex = agentArgs.indexOf("--session");

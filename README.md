@@ -153,15 +153,18 @@ set -g @continuum-restore 'on'
 # Headless autosave for tmux-continuum
 run-shell -b '~/.tmux/continuum-headless.sh ensure'
 
-# Restore agent CLIs with explicit resume commands.
-# tmux-resurrect does not reliably preserve agent flags from saved argv/process titles.
+# Rewrite saved agent commands to explicit session ids when agents state has them.
+set -g @resurrect-hook-post-save-layout 'agents normalize-resurrect-file'
+
+# Optional: restore agent CLIs through agents so known session ids beat "latest in cwd" fallbacks.
+# If you already customize @resurrect-processes, merge these entries into your list.
 # Utilities and editors still preserve their original args via *.
 set -g @resurrect-processes '\
-  "~claude -> claude --continue --dangerously-skip-permissions" \
-  "~codex -> codex resume --last --yolo" \
-  "~copilot -> copilot --continue --yolo" \
-  "~opencode -> opencode --continue" \
-  "~pi -> pi --continue --yolo" \
+  "~claude -> agents restore-agent claude *" \
+  "~codex -> agents restore-agent codex *" \
+  "~copilot -> agents restore-agent copilot *" \
+  "~opencode -> agents restore-agent opencode *" \
+  "~pi -> agents restore-agent pi *" \
   "~bv -> bv *" \
   "~lazygit -> lazygit *" \
   "~nvim -> nvim -S Session.vim *" \
@@ -177,7 +180,7 @@ Then press `prefix + I` inside tmux to install the plugins.
 
 ### How it works
 
-`tmux-resurrect` saves all sessions, windows, panes, layouts, and working directories. The `@resurrect-processes` setting tells it which programs to restore and what command to use. The `~` prefix enables fuzzy matching against the saved command string. For agent CLIs, the recommended restore commands are explicit because `tmux-resurrect` does not reliably preserve agent flags from saved argv or process titles, especially for Node-based wrappers. The `*` is still useful for utilities and editors where preserving the original arguments is desirable. `tmux-continuum` still handles restore on tmux server start, but autosave should be driven by a headless helper such as `~/.tmux/continuum-headless.sh` so app-managed sessions can keep `status off`.
+`tmux-resurrect` saves all sessions, windows, panes, layouts, and working directories. The post-save hook rewrites the saved pane command to an explicit agent session id when `agents` can map the saved pane back to live state. The `@resurrect-processes` setting tells tmux-resurrect which programs to restore and what command to use. The `~` prefix enables fuzzy matching against the saved command string. For agent CLIs, the recommended restore commands still go through `agents restore-agent`: it uses the saved process argv plus agents state to resume a concrete session id when possible. If multiple Codex sessions share a cwd and the saved command only says `resume --last`, one pane is mapped to the newest known session id and later ambiguous panes in that cwd start fresh instead of attaching to the same latest session. The `*` is still useful for utilities and editors where preserving the original arguments is desirable. `tmux-continuum` still handles restore on tmux server start, but autosave should be driven by a headless helper such as `~/.tmux/continuum-headless.sh` so app-managed sessions can keep `status off`.
 
 After a reboot, restore happens the first time tmux starts — the app may prompt you to start tmux if no server is running yet.
 
@@ -188,7 +191,7 @@ Flags for running agents without approval prompts and for resuming sessions.
 | Agent | Continue session | Auto-approve | Notes |
 |-------|-----------------|--------------|-------|
 | claude | `--continue` | `--dangerously-skip-permissions` | Resumes most recent session in cwd |
-| codex | `resume --last` | `--yolo` | `resume` is a subcommand, not a flag |
+| codex | `resume <session-id>` or `resume --last` fallback | `--yolo` | `resume` is a subcommand, not a flag |
 | copilot | `--continue` | `--yolo` | Also has `--resume[=id]` for specific sessions |
 | opencode | `--continue` | — | No auto-approve flag |
 | pi | `--continue` | `--yolo` | Also has `--resume` for interactive picker |

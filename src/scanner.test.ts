@@ -65,6 +65,13 @@ describe("externalSessionIdFromProcessArgs", () => {
     )).toBe("thread-123");
   });
 
+  it("reads codex resume targets after resume options", () => {
+    expect(externalSessionIdFromProcessArgs(
+      "codex",
+      "codex --dangerously-bypass-approvals-and-sandbox resume -c model_reasoning_effort=\"xhigh\" thread-123",
+    )).toBe("thread-123");
+  });
+
   it("ignores codex resume --last because it is not a stable session id", () => {
     expect(externalSessionIdFromProcessArgs(
       "codex",
