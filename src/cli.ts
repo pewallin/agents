@@ -288,7 +288,9 @@ program
   .description("Resume a persisted agent session in a live pane")
   .requiredOption("--pane <id>", "tmux pane ID to resume into")
   .option("--agent <name>", "Agent backend to run when it differs from the live pane")
+  .option("--profile <name>", "Profile to use for the restarted agent command")
   .option("--new-session", "Start a new agent session")
+  .option("--prompt <text>", "Initial prompt when starting a new agent session")
   .option("--session <id>", "Session ID to resume")
   .option("--session-path <path>", "Session file path to resume")
   .option("--target <value>", "Generic resume target")
@@ -302,7 +304,9 @@ program
     const result = resumeAgentSession({
       pane: opts.pane,
       agent: opts.agent,
+      profile: opts.profile,
       newSession: !!opts.newSession,
+      prompt: opts.prompt,
       session: opts.session,
       sessionPath: opts.sessionPath,
       target: opts.target,
@@ -484,6 +488,9 @@ program
   .option("--list-profiles", "List available profiles and exit")
   .option("--agent-only", "Skip helper pane creation (app creates them on demand)")
   .option("--direct-agent-launch", "tmux only: launch the main agent pane directly instead of through the shell")
+  .option("--tmux-session <session>", "tmux session to create the workspace window in")
+  .option("--require-discoverable", "Fail unless the launched agent pane becomes visible to agents scanner")
+  .option("--json", "Output launch metadata as JSON")
   .allowUnknownOption()
   .action((profile, overrides, opts) => {
     const profiles = getProfileNames();
@@ -500,13 +507,22 @@ program
       console.error(`Unknown profile "${profile}". Available: ${profiles.join(", ")}`);
       process.exit(1);
     }
-    createWorkspace(undefined, opts.name, opts.layout, {
+    const result = createWorkspace(undefined, opts.name, opts.layout, {
       profile: selectedProfile,
       cwd: process.cwd(),
       agentOnly: opts.agentOnly,
       directAgentLaunch: opts.directAgentLaunch,
+      tmuxSession: opts.tmuxSession,
+      requireDiscoverable: opts.requireDiscoverable,
       overrideArgs: overrides,
     });
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(
+      `Started ${result.windowName} in ${result.sessionName || result.mux || "workspace"} (${result.paneId}).`
+    );
     // New pane shell startups trigger iTerm2/terminal DA queries whose responses
     // leak back to this pane's input buffer. Drain them before exiting.
     if (process.stdin.isTTY) {

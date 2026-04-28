@@ -1,7 +1,7 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget } from "./resume.js";
 import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
@@ -244,6 +244,19 @@ describe("extractLatestCodexOpsFromLogLines", () => {
     const latest = extractLatestCodexOpsFromLogLines(lines);
     expect(latest.get(threadA)).toBe("exec_approval");
     expect(latest.get(threadB)).toBe("user_input");
+  });
+
+  it("keeps interrupt timestamps for stale-working reconciliation", () => {
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const latest = extractLatestCodexOpEntriesFromLogLines([
+      `2026-03-31T14:00:35.250000Z INFO session_loop{thread_id=${thread}}:submission_dispatch{codex.op="user_input"}: start`,
+      `2026-03-31T14:00:39.500000Z INFO session_loop{thread_id=${thread}}:submission_dispatch{codex.op="interrupt"}: start`,
+    ]);
+
+    expect(latest.get(thread)).toEqual({
+      op: "interrupt",
+      at: Date.parse("2026-03-31T14:00:39.500000Z") / 1000,
+    });
   });
 });
 
@@ -638,6 +651,44 @@ describe("resume helpers", () => {
     });
   });
 
+  it("builds prompted new session invocations for supported agents", () => {
+    expect(agentResumeInvocation(
+      "codex",
+      { target: "new-session", targetKind: "new-session" },
+      {
+        profile: { command: "codex --dangerously-bypass-approvals-and-sandbox" },
+        prompt: "Review this item",
+      },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["codex", "--dangerously-bypass-approvals-and-sandbox", "Review this item"],
+    });
+
+    expect(agentResumeInvocation(
+      "copilot",
+      { target: "new-session", targetKind: "new-session" },
+      {
+        profile: { command: "copilot --allow-all-tools" },
+        prompt: "Review this item",
+      },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["copilot", "--allow-all-tools", "-i", "Review this item"],
+    });
+
+    expect(agentResumeInvocation(
+      "opencode",
+      { target: "new-session", targetKind: "new-session" },
+      {
+        profile: { command: "opencode" },
+        prompt: "Review this item",
+      },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["opencode", "--prompt", "Review this item"],
+    });
+  });
+
   it("carries matching profile args into resume invocations", () => {
     expect(agentResumeInvocation(
       "codex",
@@ -813,6 +864,36 @@ describe("shouldTreatCodexWorkingAsIdle", () => {
     }
   });
 
+  it("treats interrupted codex turns as idle as soon as the pane shows a prompt", () => {
+    const session = `%vitest-codex-interrupt-${Date.now()}`;
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const statePath = join(getStateDir(), `codex-${session}.json`);
+    reportState("codex", session, "working", { externalSessionId: thread });
+    try {
+      const entry = getAgentStateEntry("codex", session)!;
+      const codexOps = new Map([[thread, { op: "interrupt", at: entry.ts + 2 }]]);
+
+      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session, undefined, codexOps)).toBe(true);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
+  it("ignores interrupt log entries older than the current working state", () => {
+    const session = `%vitest-codex-old-interrupt-${Date.now()}`;
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const statePath = join(getStateDir(), `codex-${session}.json`);
+    reportState("codex", session, "working", { externalSessionId: thread });
+    try {
+      const entry = getAgentStateEntry("codex", session)!;
+      const codexOps = new Map([[thread, { op: "interrupt", at: entry.ts - 10 }]]);
+
+      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session, undefined, codexOps)).toBe(false);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
   it("does not treat codex approval prompts as idle", () => {
     const session = `%vitest-codex-approval-${Date.now()}`;
     const statePath = join(getStateDir(), `codex-${session}.json`);
@@ -872,6 +953,23 @@ describe("codex hook-first detection", () => {
       }));
 
       reconcileStaleCodexWorkingState(prompt, "agents-app", session);
+      expect(getAgentStateEntry("codex", session)?.state).toBe("idle");
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
+  it("converts interrupted codex working state to idle without waiting for cleanup samples", () => {
+    const session = `%vitest-codex-interrupt-cleanup-${Date.now()}`;
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const statePath = join(getStateDir(), `codex-${session}.json`);
+    const prompt = "› Implement {feature}\n";
+    reportState("codex", session, "working", { externalSessionId: thread });
+    try {
+      const entry = getAgentStateEntry("codex", session)!;
+      const codexOps = new Map([[thread, { op: "interrupt", at: entry.ts + 2 }]]);
+
+      reconcileStaleCodexWorkingState(prompt, "agents-app", session, undefined, codexOps);
       expect(getAgentStateEntry("codex", session)?.state).toBe("idle");
     } finally {
       try { unlinkSync(statePath); } catch {}

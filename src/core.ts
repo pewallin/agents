@@ -46,7 +46,9 @@ export type {
   CreateWorkspaceOpts,
   ResolvedWorkspaceLaunch,
   RestorableWorkspace,
+  WorkspaceLaunchDiscovery,
   WorkspacePathState,
+  WorkspaceLaunchResult,
 } from "./workspace.js";
 export {
   setup,

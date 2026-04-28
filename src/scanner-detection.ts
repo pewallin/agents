@@ -5,7 +5,7 @@ import { join } from "path";
 import { exec } from "./shell.js";
 import { getAgentState, getAgentStateEntry, recordCleanupObservation, reportState, upsertStateSnapshotEntry } from "./state.js";
 import { stateDuration, stateExternalSessionId } from "./scanner-state-runtime.js";
-import type { StateSnapshot } from "./state.js";
+import type { StateEntry, StateSnapshot } from "./state.js";
 import type { AgentStatus } from "./scanner-types.js";
 
 export interface AgentDetector {
@@ -16,32 +16,54 @@ export interface AgentDetector {
 }
 
 const codexLogPath = join(homedir(), ".codex", "log", "codex-tui.log");
-let codexOpCache: { mtimeMs: number; latestOps: Map<string, string> } | null = null;
+export interface CodexOpEntry {
+  op: string;
+  at?: number;
+}
+
+let codexOpCache: { mtimeMs: number; latestOps: Map<string, CodexOpEntry> } | null = null;
 
 const CODEX_STALE_WORKING_MIN_AGE_SECONDS = 120;
 const CODEX_STALE_WORKING_SAMPLE_INTERVAL_SECONDS = 30;
 const CODEX_STALE_WORKING_REQUIRED_SAMPLES = 2;
 
-export function extractLatestCodexOpsFromLogLines(lines: string[]): Map<string, string> {
-  const latestOps = new Map<string, string>();
+function codexLogTimestamp(line: string): number | undefined {
+  const match = line.match(/^(\d{4}-\d{2}-\d{2}T[^\s]+Z)\s/);
+  if (!match) return undefined;
+  const parsed = Date.parse(match[1]);
+  return Number.isFinite(parsed) ? parsed / 1000 : undefined;
+}
+
+export function extractLatestCodexOpEntriesFromLogLines(lines: string[]): Map<string, CodexOpEntry> {
+  const latestOps = new Map<string, CodexOpEntry>();
   for (const line of lines) {
     if (!line) continue;
     const threadMatch = line.match(/thread_id=([0-9a-f-]+)/i) || line.match(/thread\.id=([0-9a-f-]+)/i);
     const opMatch = line.match(/codex\.op="([^"]+)"/i);
     if (!threadMatch || !opMatch) continue;
-    latestOps.set(threadMatch[1], opMatch[1]);
+    const at = codexLogTimestamp(line);
+    latestOps.set(threadMatch[1], {
+      op: opMatch[1],
+      ...(at !== undefined ? { at } : {}),
+    });
   }
   return latestOps;
 }
 
-function latestCodexOps(): Map<string, string> {
+export function extractLatestCodexOpsFromLogLines(lines: string[]): Map<string, string> {
+  return new Map(
+    [...extractLatestCodexOpEntriesFromLogLines(lines).entries()].map(([threadId, entry]) => [threadId, entry.op]),
+  );
+}
+
+function latestCodexOpEntries(): Map<string, CodexOpEntry> {
   if (!existsSync(codexLogPath)) return new Map();
   try {
     const mtimeMs = statSync(codexLogPath).mtimeMs;
     if (codexOpCache?.mtimeMs === mtimeMs) return codexOpCache.latestOps;
 
     const tail = exec(`tail -n 4000 ${JSON.stringify(codexLogPath)} 2>/dev/null`);
-    const latestOps = extractLatestCodexOpsFromLogLines(tail.split("\n"));
+    const latestOps = extractLatestCodexOpEntriesFromLogLines(tail.split("\n"));
     codexOpCache = { mtimeMs, latestOps };
     return latestOps;
   } catch {
@@ -49,10 +71,28 @@ function latestCodexOps(): Map<string, string> {
   }
 }
 
-function isCodexApprovalPending(paneId?: string, snapshot?: StateSnapshot): boolean {
+function isCodexApprovalPending(
+  paneId?: string,
+  snapshot?: StateSnapshot,
+  codexOps: Map<string, CodexOpEntry> = latestCodexOpEntries(),
+): boolean {
   const externalSessionId = stateExternalSessionId("codex", paneId, snapshot);
   if (!externalSessionId) return false;
-  return latestCodexOps().get(externalSessionId) === "exec_approval";
+  return codexOps.get(externalSessionId)?.op === "exec_approval";
+}
+
+function isCodexInterruptedAfterState(
+  entry: StateEntry | null,
+  paneId?: string,
+  snapshot?: StateSnapshot,
+  codexOps: Map<string, CodexOpEntry> = latestCodexOpEntries(),
+): boolean {
+  if (!entry || entry.state !== "working") return false;
+  const externalSessionId = entry.externalSessionId || stateExternalSessionId("codex", paneId, snapshot);
+  if (!externalSessionId) return false;
+  const op = codexOps.get(externalSessionId);
+  if (op?.op !== "interrupt" || op.at === undefined) return false;
+  return op.at >= entry.ts + 1;
 }
 
 const genericDetector: AgentDetector = {
@@ -142,19 +182,32 @@ function cleanupContentHash(content: string): string {
   return createHash("sha1").update(content).digest("hex");
 }
 
-export function shouldTreatCodexWorkingAsIdle(content: string, title: string, paneId?: string, snapshot?: StateSnapshot): boolean {
+export function shouldTreatCodexWorkingAsIdle(
+  content: string,
+  title: string,
+  paneId?: string,
+  snapshot?: StateSnapshot,
+  codexOps: Map<string, CodexOpEntry> = latestCodexOpEntries(),
+): boolean {
   if (!paneId) return false;
   const entry = getAgentStateEntry("codex", paneId, snapshot);
-  if (entry?.state === "working") {
+  const interrupted = isCodexInterruptedAfterState(entry, paneId, snapshot, codexOps);
+  if (entry?.state === "working" && !interrupted) {
     const age = Math.floor(Date.now() / 1000) - entry.ts;
     if (age < CODEX_STALE_WORKING_MIN_AGE_SECONDS) return false;
   }
-  if (isCodexApprovalPending(paneId, snapshot)) return false;
+  if (isCodexApprovalPending(paneId, snapshot, codexOps)) return false;
   if (genericDetector.isApproval(content, paneId)) return false;
   return genericDetector.isIdle(content, title, paneId);
 }
 
-export function reconcileStaleCodexWorkingState(content: string, title: string, paneId?: string, snapshot?: StateSnapshot): void {
+export function reconcileStaleCodexWorkingState(
+  content: string,
+  title: string,
+  paneId?: string,
+  snapshot?: StateSnapshot,
+  codexOps: Map<string, CodexOpEntry> = latestCodexOpEntries(),
+): void {
   if (!paneId) return;
   const entry = getAgentStateEntry("codex", paneId, snapshot);
   if (!entry || entry.state !== "working") {
@@ -163,7 +216,7 @@ export function reconcileStaleCodexWorkingState(content: string, title: string, 
     return;
   }
 
-  if (!shouldTreatCodexWorkingAsIdle(content, title, paneId, snapshot)) {
+  if (!shouldTreatCodexWorkingAsIdle(content, title, paneId, snapshot, codexOps)) {
     const updated = recordCleanupObservation("codex", paneId, null);
     if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
     return;
@@ -179,6 +232,7 @@ export function reconcileStaleCodexWorkingState(content: string, title: string, 
   const now = Math.floor(Date.now() / 1000);
   const nextHash = cleanupContentHash(normalized);
   const previous = entry.cleanup;
+  const interrupted = isCodexInterruptedAfterState(entry, paneId, snapshot, codexOps);
 
   if (previous?.contentHash === nextHash
       && previous.observedAt
@@ -190,7 +244,7 @@ export function reconcileStaleCodexWorkingState(content: string, title: string, 
     ? (previous.unchangedSamples ?? 1) + 1
     : 1;
 
-  if (unchangedSamples >= CODEX_STALE_WORKING_REQUIRED_SAMPLES) {
+  if (interrupted || unchangedSamples >= CODEX_STALE_WORKING_REQUIRED_SAMPLES) {
     const updated = reportState("codex", paneId, "idle", {
       ...(entry.provider ? { provider: entry.provider } : {}),
       ...(entry.modelId ? { modelId: entry.modelId } : {}),

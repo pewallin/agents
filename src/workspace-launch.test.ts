@@ -1,13 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const execMock = vi.fn((command: string) => {
+function defaultExecMock(command: string) {
   if (command.startsWith("tmux new-window")) return "%42";
   if (command.includes("display-message -t %42 -p '#{session_name}'")) return "agents";
+  if (command.includes("display-message -p '#S'")) return "agents";
+  if (command.includes("list-sessions")) return "agents";
   return "";
-});
+}
+
+const execMock = vi.fn(defaultExecMock);
 const reportStateMock = vi.fn();
 const writeFileSyncMock = vi.fn();
 const randomUUIDMock = vi.fn(() => "fixed-uuid");
+const scanMock = vi.fn(() => []);
 
 vi.mock("fs", async () => {
   const actual = await vi.importActual<typeof import("fs")>("fs");
@@ -86,16 +91,27 @@ vi.mock("./state.js", () => ({
   reportState: reportStateMock,
 }));
 
+vi.mock("./scanner.js", () => ({
+  scan: scanMock,
+}));
+
 vi.mock("./multiplexer.js", () => ({
   detectMultiplexer: () => "tmux",
   getMux: vi.fn(),
 }));
 
-const { createWorkspace, resolveWorkspaceLaunch } = await import("./workspace.js");
+const { createWorkspace, createWorkspaceOrThrow, resolveWorkspaceLaunch } = await import("./workspace.js");
 
 beforeEach(() => {
-  execMock.mockClear();
+  execMock.mockReset();
+  execMock.mockImplementation(defaultExecMock);
   reportStateMock.mockClear();
+  scanMock.mockReset();
+  scanMock.mockReturnValue([]);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("resolveWorkspaceLaunch", () => {
@@ -147,10 +163,18 @@ describe("createWorkspace", () => {
   });
 
   it("uses the underlying agent command for window naming and seeded state", () => {
-    createWorkspace(undefined, undefined, undefined, { profile: "bare", cwd: "/tmp/demo", agentOnly: true });
+    const result = createWorkspace(undefined, undefined, undefined, { profile: "bare", cwd: "/tmp/demo", agentOnly: true });
 
     const renameCall = execMock.mock.calls.find(([command]) => String(command).includes("tmux rename-window -t %42"));
     expect(renameCall?.[0]).not.toContain(`"export:demo"`);
+    expect(result).toEqual(expect.objectContaining({
+      cwd: "/tmp/demo",
+      mux: "tmux",
+      paneId: "%42",
+      tmuxPaneId: "%42",
+      sessionName: "agents",
+      windowName: "bare:demo",
+    }));
     expect(execMock).toHaveBeenCalledWith(expect.stringContaining(`tmux send-keys -t %42 "export FEATURE_FLAG='1'; claude --dangerously-skip-permissions" Enter`));
     expect(reportStateMock).toHaveBeenCalledWith(
       "claude",
@@ -201,5 +225,76 @@ describe("createWorkspace", () => {
     const newWindowCall = execMock.mock.calls.find(([command]) => String(command).startsWith("tmux new-window"));
     expect(newWindowCall?.[0]).toContain("tmux new-window -d");
     expect(execMock).not.toHaveBeenCalledWith("tmux select-pane -t %42");
+  });
+
+  it("rejects internal linked tmux sessions as explicit workspace targets", () => {
+    expect(() => createWorkspaceOrThrow(undefined, undefined, undefined, {
+      profile: "bare",
+      cwd: "/tmp/demo",
+      agentOnly: true,
+      tmuxSession: "_agents_123_shape",
+    })).toThrow(/internal linked tmux session/);
+  });
+
+  it("retargets an implicit launch from an internal linked tmux session to a real session", () => {
+    vi.stubEnv("TMUX", "/tmp/tmux-sock,123,0");
+    execMock.mockImplementation((command: string) => {
+      if (command.startsWith("tmux new-window")) return "%42";
+      if (command.includes("display-message -p '#S'")) return "_agents_123_shape";
+      if (command.includes("list-sessions")) return "_agents_123_shape\nshape\nagents";
+      if (command.includes("display-message -t %42 -p '#{session_name}'")) return "shape";
+      return "";
+    });
+
+    const result = createWorkspace(undefined, undefined, undefined, {
+      profile: "bare",
+      cwd: "/tmp/demo",
+      agentOnly: true,
+    });
+
+    const newWindowCall = execMock.mock.calls.find(([command]) => String(command).startsWith("tmux new-window"));
+    expect(newWindowCall?.[0]).toContain(`-t "shape:"`);
+    expect(result.sessionName).toBe("shape");
+  });
+
+  it("can require the launched pane to become discoverable by the scanner", () => {
+    scanMock.mockReturnValueOnce([
+      {
+        pane: "agents:bare:demo.0",
+        paneId: "agents:1",
+        tmuxPaneId: "%42",
+        title: "demo",
+        agent: "Claude",
+        status: "idle",
+        cpuPercent: 0,
+        memoryMB: 0,
+        cwd: "/tmp/demo",
+      },
+    ]);
+
+    const result = createWorkspace(undefined, undefined, undefined, {
+      profile: "bare",
+      cwd: "/tmp/demo",
+      agentOnly: true,
+      requireDiscoverable: true,
+      discoveryTimeoutMs: 0,
+    });
+
+    expect(result.discovered).toEqual(expect.objectContaining({
+      tmuxPaneId: "%42",
+      agent: "Claude",
+      status: "idle",
+      cwd: "/tmp/demo",
+    }));
+  });
+
+  it("fails a required discovery launch when the scanner cannot find the pane", () => {
+    expect(() => createWorkspaceOrThrow(undefined, undefined, undefined, {
+      profile: "bare",
+      cwd: "/tmp/demo",
+      agentOnly: true,
+      requireDiscoverable: true,
+      discoveryTimeoutMs: 0,
+    })).toThrow(/did not become discoverable/);
   });
 });

@@ -1,0 +1,5 @@
+node_modules/
+*.tgz
+bridge-plugin/target/
+storage.sqlite3*
+.shape/

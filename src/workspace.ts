@@ -6,6 +6,7 @@ import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { loadConfig, resolveProfile } from "./config.js";
 import { readStates, reportState } from "./state.js";
 import { resolveStateRestoreCommand } from "./agent-restore.js";
+import { scan } from "./scanner.js";
 import type { WorkspaceDef, LaunchProfile } from "./config.js";
 import type { StateEntry, WorkspaceSnapshot } from "./state.js";
 
@@ -20,6 +21,9 @@ const DEFAULT_LAYOUTS: Record<string, WorkspaceDef[]> = {
     { command: "bv", split: "below", of: "lazygit", size: "40%" },
   ],
 };
+
+const DEFAULT_DISCOVERY_TIMEOUT_MS = 5000;
+const DEFAULT_DISCOVERY_POLL_MS = 150;
 
 function resolveLayout(config: ReturnType<typeof loadConfig>, layout?: string): WorkspaceDef[] {
   const ws = config.workspace;
@@ -46,6 +50,9 @@ export interface CreateWorkspaceOpts {
   detached?: boolean;    // tmux-only: create the new window without focusing attached clients
   initProject?: boolean;
   agentOnly?: boolean;   // skip helper pane creation (app creates them on demand)
+  requireDiscoverable?: boolean; // wait until scanner can see the launched agent pane
+  discoveryTimeoutMs?: number;
+  discoveryPollMs?: number;
 }
 
 export interface ResolvedWorkspaceLaunch {
@@ -64,7 +71,25 @@ export interface WorkspaceLaunchResult {
   cwd: string;
   mux: "tmux" | "zellij" | null;
   windowName: string;
+  paneId: string;
+  tmuxPaneId?: string;
+  sessionName?: string;
+  discovered?: WorkspaceLaunchDiscovery;
   resolved: ResolvedWorkspaceLaunch;
+}
+
+interface CreatedWorkspacePane {
+  paneId: string;
+  sessionName?: string;
+}
+
+export interface WorkspaceLaunchDiscovery {
+  pane?: string;
+  paneId?: string;
+  tmuxPaneId?: string;
+  agent?: string;
+  status?: string;
+  cwd?: string;
 }
 
 export interface RestorableWorkspace {
@@ -260,6 +285,76 @@ function shellLaunchCommand(scriptPath: string): string {
   return `${shellQuote(shell)} -lc ${shellQuote(`exec ${scriptPath}`)}`;
 }
 
+function isLinkedTmuxSessionName(name: string | undefined): boolean {
+  return !!name && name.startsWith("_agents_");
+}
+
+function listVisibleTmuxSessions(): string[] {
+  const raw = exec("tmux list-sessions -F '#{session_name}' 2>/dev/null");
+  return raw.split("\n").map((line) => line.trim()).filter((line) => line && !isLinkedTmuxSessionName(line));
+}
+
+function currentTmuxSessionName(): string | undefined {
+  if (!process.env.TMUX) return undefined;
+  return exec("tmux display-message -p '#S' 2>/dev/null").trim() || undefined;
+}
+
+function resolveTmuxSessionTarget(requestedSession?: string): string | undefined {
+  const trimmed = requestedSession?.trim();
+  if (trimmed) {
+    if (isLinkedTmuxSessionName(trimmed)) {
+      throw new Error(`Cannot create an agent workspace in internal linked tmux session "${trimmed}". Use a real tmux session instead.`);
+    }
+    return trimmed;
+  }
+
+  const currentSession = currentTmuxSessionName();
+  if (!isLinkedTmuxSessionName(currentSession)) return undefined;
+
+  const fallbackSession = listVisibleTmuxSessions()[0];
+  if (!fallbackSession) {
+    throw new Error(`Cannot create an agent workspace from internal linked tmux session "${currentSession}" because no real tmux session is available.`);
+  }
+  return fallbackSession;
+}
+
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function findDiscoveredWorkspacePane(paneId: string): WorkspaceLaunchDiscovery | undefined {
+  const found = scan().find((agent) => (
+    agent.tmuxPaneId === paneId ||
+    agent.paneId === paneId ||
+    agent.pane === paneId
+  ));
+  if (!found) return undefined;
+  return {
+    pane: found.pane,
+    paneId: found.paneId,
+    tmuxPaneId: found.tmuxPaneId,
+    agent: found.agent,
+    status: found.status,
+    cwd: found.cwd,
+  };
+}
+
+function waitForWorkspaceDiscovery(paneId: string, opts?: Partial<CreateWorkspaceOpts>): WorkspaceLaunchDiscovery {
+  const timeoutMs = opts?.discoveryTimeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
+  const pollMs = opts?.discoveryPollMs ?? DEFAULT_DISCOVERY_POLL_MS;
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+
+  while (true) {
+    const discovered = findDiscoveredWorkspacePane(paneId);
+    if (discovered) return discovered;
+    if (Date.now() >= deadline) {
+      throw new Error(`Created workspace pane ${paneId}, but it did not become discoverable by agents scanner.`);
+    }
+    sleepSync(Math.min(Math.max(1, pollMs), deadline - Date.now()));
+  }
+}
+
 export function resolveWorkspaceLaunch(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): ResolvedWorkspaceLaunch {
   const config = loadConfig();
   const profileName = opts?.profile;
@@ -322,18 +417,28 @@ export function createWorkspaceOrThrow(agentCmd?: string, name?: string, layout?
     sessionName: opts?.tmuxSession || undefined,
   };
 
+  let createdPane: CreatedWorkspacePane;
   if (muxKind === "zellij") {
-    createWorkspaceZellij(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
+    createdPane = createWorkspaceZellij(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
   } else {
-    createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen, argv, launchEnv);
+    createdPane = createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen, argv, launchEnv);
   }
 
-  return {
+  const result: WorkspaceLaunchResult = {
     cwd,
     mux: muxKind,
     windowName,
+    paneId: createdPane.paneId,
+    ...(muxKind === "tmux" ? { tmuxPaneId: createdPane.paneId } : {}),
+    ...(createdPane.sessionName ? { sessionName: createdPane.sessionName } : {}),
     resolved,
   };
+
+  if (opts?.requireDiscoverable) {
+    result.discovered = waitForWorkspaceDiscovery(createdPane.paneId, opts);
+  }
+
+  return result;
 }
 
 export function createWorkspace(agentCmd?: string, name?: string, layout?: string, opts?: Partial<CreateWorkspaceOpts>): WorkspaceLaunchResult {
@@ -360,7 +465,7 @@ function seedWorkspaceState(agentPaneId: string, agentCommand: string, snapshot:
   reportState(agent, agentPaneId, "idle", undefined, snapshot);
 }
 
-function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): void {
+function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): CreatedWorkspacePane {
   const mux = getMux();
 
   // Create tab — getMux().createTab returns the tab name, not pane ID
@@ -415,18 +520,25 @@ function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: st
 
   // Focus the agent pane
   mux.focusPane(agentPaneId);
+
+  return {
+    paneId: agentPaneId,
+    ...(newPane?.session ? { sessionName: newPane.session } : {}),
+  };
 }
 
-function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean, argv?: string[], env?: Record<string, string>): void {
+function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean, argv?: string[], env?: Record<string, string>): CreatedWorkspacePane {
   const shouldFocusNewWindow = detectMultiplexer() === "tmux" && opts?.detached !== true;
   const cwd = opts?.cwd || process.cwd();
+  const targetSession = resolveTmuxSessionTarget(opts?.tmuxSession);
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
   if (!shouldFocusNewWindow) {
     newWindowCmd += " -d";
   }
-  if (opts?.tmuxSession) {
-    newWindowCmd += ` -t ${JSON.stringify(opts.tmuxSession + ":")}`;
+  if (targetSession) {
+    newWindowCmd += ` -t ${JSON.stringify(targetSession + ":")}`;
+    if (wsSnapshot) wsSnapshot.sessionName = targetSession;
   }
   newWindowCmd += ` -n ${JSON.stringify(windowName)} -P -F '#{pane_id}'`;
   if (cwd) {
@@ -482,4 +594,10 @@ function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: stri
   if (shouldFocusNewWindow) {
     exec(`tmux select-pane -t ${agentPaneId}`);
   }
+
+  const sessionName = exec(`tmux display-message -t ${agentPaneId} -p '#{session_name}' 2>/dev/null`).trim() || targetSession;
+  return {
+    paneId: agentPaneId,
+    ...(sessionName ? { sessionName } : {}),
+  };
 }

@@ -34,7 +34,10 @@ export interface AgentSessionResumeResult {
 export interface ResumeAgentSessionOptions {
   pane: string;
   agent?: string;
+  profile?: string;
   newSession?: boolean;
+  prompt?: string;
+  overrideArgs?: string[];
   session?: string;
   sessionPath?: string;
   target?: string;
@@ -55,6 +58,8 @@ interface ResumeInvocation {
 interface ResumeInvocationOptions {
   profile?: LaunchProfile;
   reasoningEffort?: string;
+  prompt?: string;
+  overrideArgs?: string[];
 }
 
 export function agentStatusRequiresForce(status?: AgentStatus): boolean {
@@ -86,7 +91,10 @@ export function agentResumeInvocation(
   if (target.targetKind === "new-session") {
     return {
       strategy: "restart",
-      argv: baseArgv ?? [agent.toLowerCase()],
+      argv: buildResumeArgv(baseArgv ?? [agent.toLowerCase()], [
+        ...promptArgsForAgent(agent, options.prompt),
+        ...(options.overrideArgs || []),
+      ]),
     };
   }
 
@@ -150,6 +158,23 @@ function buildResumeArgv(baseArgv: string[], resumeArgs: string[]): string[] {
   return merged;
 }
 
+function promptArgsForAgent(agent: string, prompt?: string): string[] {
+  const trimmed = prompt?.trim();
+  if (!trimmed) return [];
+
+  switch (agent.toLowerCase()) {
+    case "copilot":
+      return ["-i", trimmed];
+    case "opencode":
+      return ["--prompt", trimmed];
+    case "claude":
+    case "codex":
+    case "pi":
+    default:
+      return [trimmed];
+  }
+}
+
 export function resolveResumePane(paneFilter: string, panes: AgentPane[] = scan()): AgentPane | undefined {
   return panes.find((pane) => matchesHistoryPaneFilter(pane, paneFilter));
 }
@@ -197,8 +222,10 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     ? codexReasoningEffortForSession(target.target)
     : undefined;
   const invocation = agentResumeInvocation(resumeAgent, target, {
-    profile: resolveProfile(resumeAgent),
+    profile: resolveProfile(options.profile || resumeAgent),
     reasoningEffort,
+    prompt: options.prompt,
+    overrideArgs: options.overrideArgs,
   });
   if (!invocation) {
     return {

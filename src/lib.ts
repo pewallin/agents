@@ -12,6 +12,7 @@ import {
   type CreateWorkspaceOpts,
   type ResolvedWorkspaceLaunch,
   type WorkspaceLaunchResult,
+  type WorkspaceLaunchDiscovery,
   type RestorableWorkspace,
   type WorkspacePathState,
 } from "./workspace.js";
@@ -32,6 +33,7 @@ export type {
   CreateWorkspaceOpts,
   ResolvedWorkspaceLaunch,
   WorkspaceLaunchResult,
+  WorkspaceLaunchDiscovery,
   RestorableWorkspace,
   WorkspacePathState,
 };
