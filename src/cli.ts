@@ -99,6 +99,7 @@ const [
   config,
   resumeMod,
   agentRestore,
+  implementationRuntime,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -109,6 +110,7 @@ const [
   import("./config.js"),
   import("./resume.js"),
   import("./agent-restore.js"),
+  import("./implementation-runtime.js"),
 ]);
 
 const { Command } = commander;
@@ -120,6 +122,15 @@ const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
 const { normalizeTmuxResurrectFile, resolveAgentRestoreArgv } = agentRestore;
+const {
+  AgentsRuntimeError,
+  listImplementationTargets,
+  createImplementationCheckout,
+  getImplementationCheckoutStatus,
+  startImplementationSession,
+  resumeImplementationSession,
+  listTargetAgentSessions,
+} = implementationRuntime;
 
 function runResurrectAgent(agent: string, args: string[]): never {
   const originalArgv = [agent, ...(args || [])];
@@ -146,6 +157,33 @@ function normalizeResurrectFile(file: string, opts: { json?: boolean }): void {
   if (opts.json) {
     console.log(JSON.stringify({ panes: result.panes, changed: result.changed }, null, 2));
   }
+}
+
+function printRuntimeResult(result: unknown, opts: { json?: boolean }, fallback: string): void {
+  if (opts.json || !process.stdout.isTTY) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(fallback);
+}
+
+function handleRuntimeError(error: unknown, opts: { json?: boolean }): never {
+  if (error instanceof AgentsRuntimeError) {
+    if (opts.json || !process.stderr.isTTY) {
+      console.error(JSON.stringify(error.toJSON(), null, 2));
+    } else {
+      console.error(error.message);
+    }
+    process.exit(1);
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (opts.json || !process.stderr.isTTY) {
+    console.error(JSON.stringify({ ok: false, phase: "complete", code: "unexpected_error", message, retryable: true }, null, 2));
+  } else {
+    console.error(message);
+  }
+  process.exit(1);
 }
 
 async function loadUiModules() {
@@ -345,6 +383,188 @@ program
 
     if (!result.ok && !result.requiresForce) {
       process.exit(1);
+    }
+  });
+
+const targetCommand = program
+  .command("target")
+  .description("List and resolve reusable execution targets");
+
+targetCommand
+  .command("list")
+  .description("List configured local and remote execution targets")
+  .option("--repo-root <path>", "Repo path used to derive the local repo root", process.cwd())
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const result = listImplementationTargets({ repoRoot: opts.repoRoot });
+      printRuntimeResult(result, opts, result.targets.map((target) => `${target.id}\t${target.kind}\t${target.displayName}`).join("\n"));
+    } catch (error) {
+      handleRuntimeError(error, opts);
+    }
+  });
+
+const checkoutCommand = program
+  .command("checkout")
+  .description("Create and inspect implementation checkouts");
+
+checkoutCommand
+  .command("create")
+  .description("Create a local or remote implementation checkout")
+  .requiredOption("--name <name>", "Stable checkout name seed")
+  .option("--target <id>", "Execution target id", "local")
+  .option("--repo-root <path>", "Repo path used for target config and source repo", process.cwd())
+  .option("--source-repo <path>", "Source git repo path (defaults to --repo-root)")
+  .option("--repo <name>", "Repository name override")
+  .option("--remote-url <url>", "Canonical source remote URL")
+  .option("--base <ref>", "Explicit base ref")
+  .option("--branch <name>", "Branch name override")
+  .option("--no-clone-if-missing", "Fail instead of cloning when the target repo is missing")
+  .option("--local-landing", "Create a local landing checkout for remote execution")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const result = createImplementationCheckout({
+        targetId: opts.target,
+        repoRoot: opts.repoRoot,
+        sourceRepoPath: opts.sourceRepo,
+        repoName: opts.repo,
+        remoteUrl: opts.remoteUrl,
+        baseRef: opts.base,
+        branch: opts.branch,
+        name: opts.name,
+        cloneIfMissing: opts.cloneIfMissing,
+        localLanding: !!opts.localLanding,
+      });
+      printRuntimeResult(result, opts, `Created ${result.executionCheckout.checkoutId} at ${result.executionCheckout.path}`);
+    } catch (error) {
+      handleRuntimeError(error, opts);
+    }
+  });
+
+checkoutCommand
+  .command("status")
+  .description("Report implementation checkout status")
+  .option("--target <id>", "Execution target id", "local")
+  .option("--repo-root <path>", "Repo path used for target config", process.cwd())
+  .option("--repo <name>", "Repository name")
+  .option("--checkout-id <id>", "Checkout id")
+  .option("--path <path>", "Checkout path", process.cwd())
+  .option("--branch <name>", "Branch name")
+  .option("--base <ref>", "Base ref")
+  .option("--base-commit <sha>", "Base commit")
+  .option("--role <role>", "Checkout role: landing or execution")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const result = getImplementationCheckoutStatus({
+        targetId: opts.target,
+        repoRoot: opts.repoRoot,
+        repoName: opts.repo,
+        checkoutId: opts.checkoutId,
+        path: opts.path,
+        branch: opts.branch,
+        baseRef: opts.base,
+        baseCommit: opts.baseCommit,
+        role: opts.role,
+      });
+      printRuntimeResult(
+        result,
+        opts,
+        result.checkouts.map((checkout) => `${checkout.checkoutId}\t${checkout.branch || ""}\t${checkout.path}`).join("\n"),
+      );
+    } catch (error) {
+      handleRuntimeError(error, opts);
+    }
+  });
+
+const sessionCommand = program
+  .command("session")
+  .description("Start or resume tmux-backed implementation sessions");
+
+sessionCommand
+  .command("list")
+  .description("List agent sessions for a local or remote target")
+  .option("--target <id>", "Execution target id", "local")
+  .option("--repo-root <path>", "Repo path used for target config", process.cwd())
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const result = listTargetAgentSessions({
+        targetId: opts.target,
+        repoRoot: opts.repoRoot,
+      });
+      printRuntimeResult(
+        result,
+        opts,
+        result.sessions.map((session) => `${session.tmuxPaneId || session.paneId || session.pane || ""}\t${session.status || ""}\t${session.cwd || ""}`).join("\n"),
+      );
+    } catch (error) {
+      handleRuntimeError(error, opts);
+    }
+  });
+
+sessionCommand
+  .command("start")
+  .description("Start an agent session in an implementation checkout")
+  .requiredOption("--checkout-id <id>", "Implementation checkout id")
+  .requiredOption("--path <path>", "Execution checkout path")
+  .requiredOption("--profile <name>", "Agent profile")
+  .option("--target <id>", "Execution target id", "local")
+  .option("--repo-root <path>", "Repo path used for target config", process.cwd())
+  .option("--name <name>", "Session/window name")
+  .option("--tmux-session <session>", "tmux session to create the workspace window in")
+  .option("--json", "Output as JSON")
+  .argument("[overrides...]", "Override agent command arguments")
+  .allowUnknownOption()
+  .action((overrides, opts) => {
+    try {
+      const name = opts.name || String(opts.checkoutId).split(":").pop() || "agent";
+      const result = startImplementationSession({
+        targetId: opts.target,
+        repoRoot: opts.repoRoot,
+        checkoutId: opts.checkoutId,
+        path: opts.path,
+        profile: opts.profile,
+        name,
+        tmuxSession: opts.tmuxSession,
+        overrides,
+      });
+      printRuntimeResult(result, opts, `Started ${result.session.sessionId} (${result.session.paneId || "pending"}).`);
+    } catch (error) {
+      handleRuntimeError(error, opts);
+    }
+  });
+
+sessionCommand
+  .command("resume")
+  .description("Resume or start a follow-up session in an existing agent pane")
+  .requiredOption("--session <id>", "Session id")
+  .option("--target <id>", "Execution target id", "local")
+  .option("--repo-root <path>", "Repo path used for target config", process.cwd())
+  .option("--checkout-id <id>", "Implementation checkout id")
+  .option("--path <path>", "Checkout path")
+  .option("--profile <name>", "Agent profile")
+  .option("--pane <id>", "Known tmux pane id")
+  .option("--prompt <text>", "Prompt for a new follow-up session")
+  .option("--new-session", "Start a new agent session in the existing pane")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const result = resumeImplementationSession({
+        targetId: opts.target,
+        repoRoot: opts.repoRoot,
+        sessionId: opts.session,
+        checkoutId: opts.checkoutId,
+        path: opts.path,
+        profile: opts.profile,
+        pane: opts.pane,
+        prompt: opts.prompt,
+        newSession: !!opts.newSession,
+      });
+      printRuntimeResult(result, opts, result.message || `Resolved ${result.sessionId}.`);
+    } catch (error) {
+      handleRuntimeError(error, opts);
     }
   });
 

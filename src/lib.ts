@@ -3,6 +3,33 @@ import { scan, runtimeStates, getSessionHistory, type AgentPane, type AgentRunti
 import { resumeAgentSession, type AgentSessionResumeResult, type ResumeAgentSessionOptions } from "./resume.js";
 import type { RuntimeLocator, RuntimeStateEvent, RuntimeStateEventEntity, RuntimeStateEventOperation, RuntimeMux } from "./runtime-events.js";
 import {
+  listImplementationTargets,
+  resolveImplementationTarget,
+  createImplementationCheckout,
+  getImplementationCheckoutStatus,
+  startImplementationSession,
+  resumeImplementationSession,
+  listTargetAgentSessions,
+  AgentsRuntimeError,
+  type CheckoutCreateOptions,
+  type CheckoutCreateResult,
+  type CheckoutStatusOptions,
+  type CheckoutStatusResult,
+  type ImplementationCheckout,
+  type ImplementationTarget,
+  type RuntimeFailureShape,
+  type RuntimePhase,
+  type SessionResumeOptions,
+  type SessionResumeResult,
+  type SessionStartOptions,
+  type SessionStartResult,
+  type TargetListOptions,
+  type ResolveTargetOptions,
+  type TargetAgentSessionEntry,
+  type TargetAgentSessionsOptions,
+  type TargetAgentSessionsResult,
+} from "./implementation-runtime.js";
+import {
   createWorkspaceOrThrow,
   resolveWorkspaceLaunch,
   getRestorableWorkspaces,
@@ -36,6 +63,23 @@ export type {
   WorkspaceLaunchDiscovery,
   RestorableWorkspace,
   WorkspacePathState,
+  CheckoutCreateOptions,
+  CheckoutCreateResult,
+  CheckoutStatusOptions,
+  CheckoutStatusResult,
+  ImplementationCheckout,
+  ImplementationTarget,
+  RuntimeFailureShape,
+  RuntimePhase,
+  SessionResumeOptions,
+  SessionResumeResult,
+  SessionStartOptions,
+  SessionStartResult,
+  TargetListOptions,
+  ResolveTargetOptions,
+  TargetAgentSessionEntry,
+  TargetAgentSessionsOptions,
+  TargetAgentSessionsResult,
 };
 
 export interface LaunchWorkspaceOptions extends Partial<CreateWorkspaceOpts> {
@@ -82,6 +126,14 @@ export function launchWorkspace(options: LaunchWorkspaceOptions = {}): Workspace
 }
 
 export {
+  AgentsRuntimeError,
+  listImplementationTargets,
+  resolveImplementationTarget,
+  createImplementationCheckout,
+  getImplementationCheckoutStatus,
+  startImplementationSession,
+  resumeImplementationSession,
+  listTargetAgentSessions,
   getRestorableWorkspaces,
   getRestorableWorkspacesFromStates,
   getWorkspacePathState,
