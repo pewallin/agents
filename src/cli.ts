@@ -121,6 +121,33 @@ const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
 const { normalizeTmuxResurrectFile, resolveAgentRestoreArgv } = agentRestore;
 
+function runResurrectAgent(agent: string, args: string[]): never {
+  const originalArgv = [agent, ...(args || [])];
+  const argv = resolveAgentRestoreArgv({
+    agent,
+    cwd: process.cwd(),
+    originalArgv,
+  }) || originalArgv;
+
+  const result = spawnSync(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });
+  if (result.error) {
+    console.error(result.error.message);
+    process.exit(127);
+  }
+  if (result.signal) {
+    process.kill(process.pid, result.signal as NodeJS.Signals);
+    process.exit(1);
+  }
+  process.exit(result.status ?? 1);
+}
+
+function normalizeResurrectFile(file: string, opts: { json?: boolean }): void {
+  const result = normalizeTmuxResurrectFile(file);
+  if (opts.json) {
+    console.log(JSON.stringify({ panes: result.panes, changed: result.changed }, null, 2));
+  }
+}
+
 async function loadUiModules() {
   const [reactMod, ink, dashboardMod, selectMod, agentTableMod] = await Promise.all([
     import("react"),
@@ -180,7 +207,7 @@ program
   });
 
 program
-  .command("watch", { isDefault: true })
+  .command("watch")
   .alias("w")
   .description("Live dashboard with auto-refresh")
   .argument("[seconds]", "Refresh interval", "2")
@@ -199,14 +226,6 @@ program
       process.stdout.write("\x1b[2J\x1b[H");
       process.exit(0);
     });
-  });
-
-program
-  .command("count")
-  .alias("c")
-  .description("Print number of running agents")
-  .action(() => {
-    console.log(scan().length);
   });
 
 program
@@ -329,42 +348,27 @@ program
     }
   });
 
-program
-  .command("restore-agent")
-  .description("Run an agent restore command, preferring an explicit persisted session when available")
+const resurrect = program
+  .command("resurrect")
+  .description("tmux-resurrect integration helpers");
+
+resurrect
+  .command("agent")
+  .description("Run an agent command during tmux-resurrect restore")
   .argument("<agent>", "Agent backend to restore")
   .argument("[args...]", "Original command arguments after the agent executable")
   .allowUnknownOption(true)
   .action((agent: string, args: string[]) => {
-    const originalArgv = [agent, ...(args || [])];
-    const argv = resolveAgentRestoreArgv({
-      agent,
-      cwd: process.cwd(),
-      originalArgv,
-    }) || originalArgv;
-
-    const result = spawnSync(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });
-    if (result.error) {
-      console.error(result.error.message);
-      process.exit(127);
-    }
-    if (result.signal) {
-      process.kill(process.pid, result.signal as NodeJS.Signals);
-      return;
-    }
-    process.exit(result.status ?? 1);
+    runResurrectAgent(agent, args);
   });
 
-program
-  .command("normalize-resurrect-file")
+resurrect
+  .command("normalize")
   .description("Rewrite a tmux-resurrect save file to prefer explicit agent session ids")
   .argument("<file>", "tmux-resurrect save file path")
   .option("--json", "Output as JSON")
   .action((file: string, opts) => {
-    const result = normalizeTmuxResurrectFile(file);
-    if (opts.json) {
-      console.log(JSON.stringify({ panes: result.panes, changed: result.changed }, null, 2));
-    }
+    normalizeResurrectFile(file, opts);
   });
 
 program
@@ -583,4 +587,8 @@ program
     }
   });
 
-program.parse();
+if (args.length === 0) {
+  program.parse([process.argv[0], process.argv[1], "watch"]);
+} else {
+  program.parse();
+}

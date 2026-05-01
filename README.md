@@ -47,10 +47,10 @@ agents ls               One-shot agent list
 agents ws               Create workspace using configured default profile
 agents ws claude        Create workspace using named profile
 agents ws --list-profiles  List available launch profiles
-agents count            Number of running agents
 agents back             Jump back after enter-from-dashboard
 agents setup            Install hooks/extensions
 agents uninstall        Remove hooks/extensions
+agents resurrect ...    tmux-resurrect integration helpers
 ```
 
 If launched outside tmux, `agents` auto-creates and attaches a tmux session.
@@ -154,17 +154,17 @@ set -g @continuum-restore 'on'
 run-shell -b '~/.tmux/continuum-headless.sh ensure'
 
 # Rewrite saved agent commands to explicit session ids when agents state has them.
-set -g @resurrect-hook-post-save-layout 'agents normalize-resurrect-file'
+set -g @resurrect-hook-post-save-layout 'agents resurrect normalize'
 
 # Optional: restore agent CLIs through agents so known session ids beat "latest in cwd" fallbacks.
 # If you already customize @resurrect-processes, merge these entries into your list.
 # Utilities and editors still preserve their original args via *.
 set -g @resurrect-processes '\
-  "~claude -> agents restore-agent claude *" \
-  "~codex -> agents restore-agent codex *" \
-  "~copilot -> agents restore-agent copilot *" \
-  "~opencode -> agents restore-agent opencode *" \
-  "~pi -> agents restore-agent pi *" \
+  "~claude -> agents resurrect agent claude *" \
+  "~codex -> agents resurrect agent codex *" \
+  "~copilot -> agents resurrect agent copilot *" \
+  "~opencode -> agents resurrect agent opencode *" \
+  "~pi -> agents resurrect agent pi *" \
   "~bv -> bv *" \
   "~lazygit -> lazygit *" \
   "~nvim -> nvim -S Session.vim *" \
@@ -180,7 +180,7 @@ Then press `prefix + I` inside tmux to install the plugins.
 
 ### How it works
 
-`tmux-resurrect` saves all sessions, windows, panes, layouts, and working directories. The post-save hook rewrites the saved pane command to an explicit agent session id when `agents` can map the saved pane back to live state. The `@resurrect-processes` setting tells tmux-resurrect which programs to restore and what command to use. The `~` prefix enables fuzzy matching against the saved command string. For agent CLIs, the recommended restore commands still go through `agents restore-agent`: it uses the saved process argv plus agents state to resume a concrete session id when possible. If multiple Codex sessions share a cwd and the saved command only says `resume --last`, one pane is mapped to the newest known session id and later ambiguous panes in that cwd start fresh instead of attaching to the same latest session. The `*` is still useful for utilities and editors where preserving the original arguments is desirable. `tmux-continuum` still handles restore on tmux server start, but autosave should be driven by a headless helper such as `~/.tmux/continuum-headless.sh` so app-managed sessions can keep `status off`.
+`tmux-resurrect` saves all sessions, windows, panes, layouts, and working directories. The post-save hook rewrites the saved pane command to an explicit agent session id when `agents` can map the saved pane back to live state. The `@resurrect-processes` setting tells tmux-resurrect which programs to restore and what command to use. The `~` prefix enables fuzzy matching against the saved command string. For agent CLIs, the recommended restore commands go through `agents resurrect agent`: it uses the saved process argv plus agents state to resume a concrete session id when possible. This is separate from `agents resume`, which respawns an already-live pane from the dashboard/app. If multiple Codex sessions share a cwd and the saved command only says `resume --last`, one pane is mapped to the newest known session id and later ambiguous panes in that cwd start fresh instead of attaching to the same latest session. The `*` is still useful for utilities and editors where preserving the original arguments is desirable. `tmux-continuum` still handles restore on tmux server start, but autosave should be driven by a headless helper such as `~/.tmux/continuum-headless.sh` so app-managed sessions can keep `status off`.
 
 After a reboot, restore happens the first time tmux starts — the app may prompt you to start tmux if no server is running yet.
 
