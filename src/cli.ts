@@ -449,7 +449,7 @@ checkoutCommand
   .option("--repo-root <path>", "Repo path used for target config", process.cwd())
   .option("--repo <name>", "Repository name")
   .option("--checkout-id <id>", "Checkout id")
-  .option("--path <path>", "Checkout path", process.cwd())
+  .option("--path <path>", "Inspect a single checkout path instead of discovering implementation checkouts")
   .option("--branch <name>", "Branch name")
   .option("--base <ref>", "Base ref")
   .option("--base-commit <sha>", "Base commit")

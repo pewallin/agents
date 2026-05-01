@@ -171,6 +171,12 @@ export interface TargetAgentSessionsResult {
   sessions: TargetAgentSessionEntry[];
 }
 
+interface WorktreeEntry {
+  path: string;
+  branch?: string;
+  headSha?: string;
+}
+
 interface RemoteHostEndpoint {
   kind?: string;
   username?: string;
@@ -410,6 +416,82 @@ function parseKeyValueOutput(output: string): Record<string, string> {
   return result;
 }
 
+function parseWorktreeListOutput(output: string): WorktreeEntry[] {
+  const entries: WorktreeEntry[] = [];
+  let current: WorktreeEntry | undefined;
+
+  function pushCurrent(): void {
+    if (current?.path) entries.push(current);
+    current = undefined;
+  }
+
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) {
+      pushCurrent();
+      continue;
+    }
+
+    if (line.startsWith("worktree ")) {
+      pushCurrent();
+      current = { path: line.slice("worktree ".length) };
+      continue;
+    }
+
+    if (!current) continue;
+    if (line.startsWith("HEAD ")) {
+      current.headSha = line.slice("HEAD ".length);
+    } else if (line.startsWith("branch refs/heads/")) {
+      current.branch = line.slice("branch refs/heads/".length);
+    }
+  }
+
+  pushCurrent();
+  return entries;
+}
+
+function isPathInside(childPath: string, parentPath: string): boolean {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function runtimeFailureFromJson(raw: string): RuntimeFailureShape | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+
+  const candidates = [trimmed];
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as Partial<RuntimeFailureShape>;
+      if (
+        parsed.ok === false &&
+        typeof parsed.phase === "string" &&
+        typeof parsed.code === "string" &&
+        typeof parsed.message === "string"
+      ) {
+        return {
+          ok: false,
+          phase: parsed.phase as RuntimePhase,
+          code: parsed.code,
+          message: parsed.message,
+          ...(typeof parsed.targetId === "string" ? { targetId: parsed.targetId } : {}),
+          retryable: typeof parsed.retryable === "boolean" ? parsed.retryable : true,
+          ...(parsed.details && typeof parsed.details === "object" ? { details: parsed.details } : {}),
+        };
+      }
+    } catch {
+      // Keep looking for a structured JSON failure in the remaining candidates.
+    }
+  }
+
+  return undefined;
+}
+
 function runFile(args: {
   command: string;
   argv: string[];
@@ -625,6 +707,21 @@ function checkRemoteRuntime(target: ImplementationTarget): void {
   });
 }
 
+function remoteRepoPathForStatus(target: ImplementationTarget, repoName: string): string {
+  const remoteRepoRoot = target.repoRoots[0];
+  if (!remoteRepoRoot) {
+    fail({
+      phase: "resolve_repo_root",
+      code: "repo_root_missing",
+      message: `Target "${target.displayName}" does not have a repo root configured.`,
+      targetId: target.id,
+      retryable: true,
+    });
+  }
+
+  return path.join(remoteRepoRoot, repoName);
+}
+
 function buildSshRepoUrl(targetId: string, remoteRepoPath: string): string {
   const target = parseSshTargetId(targetId);
   const normalizedPath = remoteRepoPath.startsWith("/") ? remoteRepoPath : `/${remoteRepoPath}`;
@@ -814,14 +911,6 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
     };
   }
 
-  createLocalWorktree({
-    repoRoot,
-    checkoutPath: identity.path,
-    branch: identity.branch,
-    baseRef,
-    phase: "create_landing_checkout",
-  });
-
   const remoteRepoRoot = target.repoRoots[0];
   if (!remoteRepoRoot) {
     fail({
@@ -835,6 +924,15 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
 
   checkRemoteRuntime(target);
   const originRemoteUrl = getOriginRemoteUrl(repoRoot, options.remoteUrl);
+
+  createLocalWorktree({
+    repoRoot,
+    checkoutPath: identity.path,
+    branch: identity.branch,
+    baseRef,
+    phase: "create_landing_checkout",
+  });
+
   const remoteRepo = ensureRemoteRepo({
     target,
     repoRoot: remoteRepoRoot,
@@ -904,8 +1002,43 @@ function sessionsForPath(checkoutPath: string): string[] {
     .filter(Boolean);
 }
 
-function statusForLocalCheckout(options: CheckoutStatusOptions, targetId: string): CheckoutStatusResult {
-  const checkoutPath = path.resolve(options.path ?? process.cwd());
+function resolveStatusRepoRoot(sourcePath: string): string {
+  return runGit(
+    sourcePath,
+    ["rev-parse", "--show-toplevel"],
+    "refresh_status",
+    "Agents could not inspect checkout status because the path is not a git checkout.",
+    "status_repo_missing",
+  );
+}
+
+function resolveStatusBaseRef(
+  checkoutPath: string,
+  explicitBaseRef: string | undefined,
+  warnings: Array<{ phase: RuntimePhase; message: string }>,
+): string | undefined {
+  if (explicitBaseRef?.trim()) return explicitBaseRef.trim();
+
+  for (const candidate of ["origin/main", "origin/master", "main", "master"]) {
+    const result = runGitMaybe(checkoutPath, ["rev-parse", "--verify", `${candidate}^{commit}`]);
+    if (result.ok && result.stdout) return candidate;
+  }
+
+  warnings.push({ phase: "refresh_status", message: "Could not resolve a base ref for ahead/behind and merged status." });
+  return undefined;
+}
+
+function inspectLocalCheckout(input: {
+  checkoutPath: string;
+  targetId: string;
+  repoName?: string;
+  checkoutId?: string;
+  branch?: string;
+  baseRef?: string;
+  baseCommit?: string;
+  role?: ImplementationCheckoutRole;
+}): { checkout: ImplementationCheckout; warnings: Array<{ phase: RuntimePhase; message: string }> } {
+  const checkoutPath = path.resolve(input.checkoutPath);
   const repoRoot = runGit(
     checkoutPath,
     ["rev-parse", "--show-toplevel"],
@@ -913,37 +1046,120 @@ function statusForLocalCheckout(options: CheckoutStatusOptions, targetId: string
     "Agents could not inspect checkout status because the path is not a git checkout.",
     "status_repo_missing",
   );
-  const repoName = options.repoName?.trim() || path.basename(repoRoot);
-  const branch = options.branch || runGit(checkoutPath, ["rev-parse", "--abbrev-ref", "HEAD"], "refresh_status", "Agents could not resolve the checkout branch.");
+  const repoName = input.repoName?.trim() || path.basename(repoRoot);
+  const branch = input.branch || runGit(checkoutPath, ["rev-parse", "--abbrev-ref", "HEAD"], "refresh_status", "Agents could not resolve the checkout branch.");
   const headSha = runGit(checkoutPath, ["rev-parse", "HEAD"], "refresh_status", "Agents could not resolve the checkout head commit.");
   const dirty = runGitMaybe(checkoutPath, ["status", "--porcelain"]).stdout.length > 0;
+  const warnings: Array<{ phase: RuntimePhase; message: string }> = [];
+  const baseRef = resolveStatusBaseRef(checkoutPath, input.baseRef, warnings);
+  const baseCommit = input.baseCommit || (baseRef ? runGitMaybe(checkoutPath, ["rev-parse", "--verify", `${baseRef}^{commit}`]).stdout || undefined : undefined);
   const checkout: ImplementationCheckout = {
-    checkoutId: options.checkoutId || buildCheckoutId(targetId, repoName, slugifySegment(branch.replace(/^shape\//, ""))),
-    targetId,
-    role: options.role || "execution",
+    checkoutId: input.checkoutId || buildCheckoutId(input.targetId, repoName, path.basename(checkoutPath)),
+    targetId: input.targetId,
+    role: input.role || "execution",
     repoPath: repoRoot,
     path: checkoutPath,
     branch,
-    baseRef: options.baseRef,
-    baseCommit: options.baseCommit,
+    baseRef,
+    baseCommit,
     headSha,
     dirty,
     sessions: sessionsForPath(checkoutPath),
   };
-  const warnings: Array<{ phase: RuntimePhase; message: string }> = [];
 
-  if (options.baseRef) {
-    const counts = runGitMaybe(checkoutPath, ["rev-list", "--left-right", "--count", `${options.baseRef}...HEAD`]);
+  if (baseRef) {
+    const counts = runGitMaybe(checkoutPath, ["rev-list", "--left-right", "--count", `${baseRef}...HEAD`]);
     if (counts.ok) {
       const [behindRaw, aheadRaw] = counts.stdout.split(/\s+/);
       checkout.behind = Number(behindRaw) || 0;
       checkout.ahead = Number(aheadRaw) || 0;
     } else {
-      warnings.push({ phase: "refresh_status", message: `Could not compute ahead/behind against ${options.baseRef}.` });
+      warnings.push({ phase: "refresh_status", message: `Could not compute ahead/behind against ${baseRef}.` });
     }
 
-    const merged = runGitMaybe(checkoutPath, ["merge-base", "--is-ancestor", "HEAD", options.baseRef]);
+    const merged = runGitMaybe(checkoutPath, ["merge-base", "--is-ancestor", "HEAD", baseRef]);
     checkout.merged = merged.ok;
+  }
+
+  return { checkout, warnings };
+}
+
+function implementationWorktreeRoots(repoRoot: string, repoName: string): string[] {
+  return [
+    path.join(path.dirname(repoRoot), ".shape-worktrees", repoName),
+    `${repoRoot}.worktrees`,
+  ];
+}
+
+function discoverImplementationWorktrees(repoRoot: string, repoName: string): WorktreeEntry[] {
+  const roots = implementationWorktreeRoots(repoRoot, repoName);
+  const output = runGit(
+    repoRoot,
+    ["worktree", "list", "--porcelain"],
+    "refresh_status",
+    "Agents could not list implementation checkouts for this repo.",
+    "status_worktree_list_failed",
+  );
+
+  return parseWorktreeListOutput(output).filter((entry) => {
+    const normalizedPath = path.resolve(entry.path);
+    if (normalizedPath === path.resolve(repoRoot)) return false;
+    return roots.some((root) => isPathInside(normalizedPath, root));
+  });
+}
+
+function statusForLocalCheckout(options: CheckoutStatusOptions, targetId: string): CheckoutStatusResult {
+  if (options.path) {
+    const inspected = inspectLocalCheckout({
+      checkoutPath: options.path,
+      targetId,
+      repoName: options.repoName,
+      checkoutId: options.checkoutId,
+      branch: options.branch,
+      baseRef: options.baseRef,
+      baseCommit: options.baseCommit,
+      role: options.role,
+    });
+
+    return {
+      ok: true,
+      phase: "refresh_status",
+      targetId,
+      repoName: options.repoName?.trim() || path.basename(inspected.checkout.repoPath),
+      checkouts: [inspected.checkout],
+      ...(inspected.warnings.length ? { warnings: inspected.warnings } : {}),
+    };
+  }
+
+  const repoRoot = resolveStatusRepoRoot(path.resolve(options.repoRoot ?? process.cwd()));
+  const repoName = options.repoName?.trim() || path.basename(repoRoot);
+  const warnings: Array<{ phase: RuntimePhase; message: string }> = [];
+  const checkouts: ImplementationCheckout[] = [];
+
+  for (const entry of discoverImplementationWorktrees(repoRoot, repoName)) {
+    const checkoutId = buildCheckoutId(targetId, repoName, path.basename(entry.path));
+    if (options.checkoutId && options.checkoutId !== checkoutId) continue;
+    if (options.branch && options.branch !== entry.branch) continue;
+
+    try {
+      const inspected = inspectLocalCheckout({
+        checkoutPath: entry.path,
+        targetId,
+        repoName,
+        checkoutId,
+        branch: options.branch || entry.branch,
+        baseRef: options.baseRef,
+        baseCommit: options.baseCommit,
+        role: options.role,
+      });
+      checkouts.push(inspected.checkout);
+      warnings.push(...inspected.warnings);
+    } catch (error) {
+      warnings.push({
+        phase: "refresh_status",
+        message: error instanceof Error ? error.message : `Could not inspect implementation checkout at ${entry.path}.`,
+      });
+    }
   }
 
   return {
@@ -951,7 +1167,7 @@ function statusForLocalCheckout(options: CheckoutStatusOptions, targetId: string
     phase: "refresh_status",
     targetId,
     repoName,
-    checkouts: [checkout],
+    checkouts,
     ...(warnings.length ? { warnings } : {}),
   };
 }
@@ -959,15 +1175,49 @@ function statusForLocalCheckout(options: CheckoutStatusOptions, targetId: string
 function runRemoteAgentsJson<T>(target: ImplementationTarget, args: string[], phase: RuntimePhase): T {
   checkRemoteRuntime(target);
   const command = shellJoin(["agents", ...args]);
-  const output = runSsh({
+  const result = runSshRaw({
     target,
     command,
     phase,
     code: `${phase}_failed`,
     message: `Remote agents ${phase} command failed on ${target.displayName}.`,
   });
+  if (!result.ok) {
+    const remoteFailure = runtimeFailureFromJson(result.stdout) ?? runtimeFailureFromJson(result.stderr);
+    if (remoteFailure) {
+      fail({
+        phase: remoteFailure.phase,
+        code: remoteFailure.code,
+        message: remoteFailure.message,
+        targetId: target.id,
+        retryable: remoteFailure.retryable,
+        details: {
+          ...(remoteFailure.details ?? {}),
+          remoteTargetId: remoteFailure.targetId,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          status: result.status,
+        },
+      });
+    }
+
+    fail({
+      phase,
+      code: `${phase}_failed`,
+      message: `Remote agents ${phase} command failed on ${target.displayName}.`,
+      targetId: target.id,
+      retryable: true,
+      details: {
+        command: ["ssh", ...buildSshArgs(target.id, command)].join(" "),
+        stderr: result.stderr,
+        stdout: result.stdout,
+        status: result.status,
+      },
+    });
+  }
+
   try {
-    return JSON.parse(output) as T;
+    return JSON.parse(result.stdout) as T;
   } catch (error) {
     fail({
       phase,
@@ -975,7 +1225,7 @@ function runRemoteAgentsJson<T>(target: ImplementationTarget, args: string[], ph
       message: `Remote agents ${phase} command on ${target.displayName} did not return valid JSON.`,
       targetId: target.id,
       retryable: true,
-      details: { output, error: error instanceof Error ? error.message : String(error) },
+      details: { output: result.stdout, error: error instanceof Error ? error.message : String(error) },
     });
   }
 }
@@ -983,6 +1233,8 @@ function runRemoteAgentsJson<T>(target: ImplementationTarget, args: string[], ph
 export function getImplementationCheckoutStatus(options: CheckoutStatusOptions = {}): CheckoutStatusResult {
   const target = resolveImplementationTarget(options);
   if (target.kind === "ssh") {
+    const repoName = options.repoName?.trim() || path.basename(resolveStatusRepoRoot(path.resolve(options.repoRoot ?? process.cwd())));
+    const remoteRepoPath = options.path ? undefined : remoteRepoPathForStatus(target, repoName);
     const remoteResult = runRemoteAgentsJson<CheckoutStatusResult>(
       target,
       [
@@ -990,6 +1242,7 @@ export function getImplementationCheckoutStatus(options: CheckoutStatusOptions =
         "status",
         "--target",
         "local",
+        ...(remoteRepoPath ? ["--repo-root", remoteRepoPath] : []),
         ...(options.repoName ? ["--repo", options.repoName] : []),
         ...(options.checkoutId ? ["--checkout-id", options.checkoutId] : []),
         ...(options.path ? ["--path", options.path] : []),
@@ -1006,6 +1259,7 @@ export function getImplementationCheckoutStatus(options: CheckoutStatusOptions =
       targetId: target.id,
       checkouts: remoteResult.checkouts.map((checkout) => ({
         ...checkout,
+        checkoutId: checkout.checkoutId.startsWith("local:") ? `${target.id}:${checkout.checkoutId.slice("local:".length)}` : checkout.checkoutId,
         targetId: target.id,
       })),
     };
