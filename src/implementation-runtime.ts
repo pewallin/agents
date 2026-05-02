@@ -32,6 +32,7 @@ export interface RuntimeFailureShape {
   targetId?: string;
   retryable: boolean;
   details?: Record<string, unknown>;
+  partialResult?: RuntimePartialResultShape;
 }
 
 export class AgentsRuntimeError extends Error {
@@ -41,6 +42,7 @@ export class AgentsRuntimeError extends Error {
   readonly targetId?: string;
   readonly retryable: boolean;
   readonly details?: Record<string, unknown>;
+  readonly partialResult?: RuntimePartialResultShape;
 
   constructor(input: {
     phase: RuntimePhase;
@@ -49,6 +51,7 @@ export class AgentsRuntimeError extends Error {
     targetId?: string;
     retryable?: boolean;
     details?: Record<string, unknown>;
+    partialResult?: RuntimePartialResultShape;
   }) {
     super(input.message);
     this.name = "AgentsRuntimeError";
@@ -57,6 +60,7 @@ export class AgentsRuntimeError extends Error {
     this.targetId = input.targetId;
     this.retryable = input.retryable ?? true;
     this.details = input.details;
+    this.partialResult = input.partialResult;
   }
 
   toJSON(): RuntimeFailureShape {
@@ -68,6 +72,7 @@ export class AgentsRuntimeError extends Error {
       ...(this.targetId ? { targetId: this.targetId } : {}),
       retryable: this.retryable,
       ...(this.details ? { details: this.details } : {}),
+      ...(this.partialResult ? { partialResult: this.partialResult } : {}),
     };
   }
 }
@@ -105,6 +110,20 @@ export interface ImplementationCheckout {
   merged?: boolean;
   dirty?: boolean;
   sessions?: string[];
+}
+
+export interface CheckoutCreatePartialResult {
+  targetId: string;
+  repoName: string;
+  branch: string;
+  baseRef: string;
+  baseCommit?: string;
+  landingCheckout?: ImplementationCheckout;
+  executionCheckout?: ImplementationCheckout;
+}
+
+export interface RuntimePartialResultShape {
+  checkout?: CheckoutCreatePartialResult;
 }
 
 export interface CheckoutCreateResult {
@@ -181,6 +200,7 @@ interface RemoteHostEndpoint {
   kind?: string;
   username?: string;
   hostname?: string;
+  connectionAddress?: string;
   port?: number;
 }
 
@@ -212,6 +232,7 @@ export interface CheckoutCreateOptions extends TargetListOptions {
   branch?: string;
   cloneIfMissing?: boolean;
   localLanding?: boolean;
+  reuseExisting?: boolean;
 }
 
 export interface CheckoutStatusOptions extends TargetListOptions {
@@ -275,10 +296,10 @@ function defaultLocalRepoRoot(repoRoot: string): string {
 
 function targetIdForEndpoint(endpoint: RemoteHostEndpoint): string | null {
   const username = endpoint.username?.trim();
-  const hostname = endpoint.hostname?.trim();
-  if (!hostname) return null;
+  const connectHost = endpoint.connectionAddress?.trim() || endpoint.hostname?.trim();
+  if (!connectHost) return null;
 
-  const host = username ? `${username}@${hostname}` : hostname;
+  const host = username ? `${username}@${connectHost}` : connectHost;
   return endpoint.port && endpoint.port !== 22 ? `${host}:${endpoint.port}` : host;
 }
 
@@ -482,6 +503,9 @@ function runtimeFailureFromJson(raw: string): RuntimeFailureShape | undefined {
           ...(typeof parsed.targetId === "string" ? { targetId: parsed.targetId } : {}),
           retryable: typeof parsed.retryable === "boolean" ? parsed.retryable : true,
           ...(parsed.details && typeof parsed.details === "object" ? { details: parsed.details } : {}),
+          ...(parsed.partialResult && typeof parsed.partialResult === "object"
+            ? { partialResult: parsed.partialResult as RuntimePartialResultShape }
+            : {}),
         };
       }
     } catch {
@@ -554,6 +578,12 @@ function branchExists(repoRoot: string, branchName: string): boolean {
   return runGitMaybe(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`]).ok;
 }
 
+function checkoutPathUsesBranch(checkoutPath: string, branchName: string): boolean {
+  if (!existsSync(checkoutPath)) return false;
+  const result = runGitMaybe(checkoutPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  return result.ok && result.stdout.trim() === branchName;
+}
+
 function resolveBaseRef(repoRoot: string, baseRef?: string): { baseRef: string; baseCommit: string } {
   const candidates = baseRef?.trim() ? [baseRef.trim()] : ["origin/main", "origin/master", "main", "master"];
   for (const candidate of candidates) {
@@ -579,6 +609,7 @@ function chooseCheckoutIdentity(input: {
   repoName: string;
   name: string;
   branch?: string;
+  reuseExisting?: boolean;
 }): { worktreeName: string; branch: string; path: string } {
   const baseName = slugifySegment(input.name).slice(0, 72);
   const worktreeRoot = path.join(path.dirname(input.repoRoot), ".shape-worktrees", input.repoName);
@@ -596,6 +627,13 @@ function chooseCheckoutIdentity(input: {
     const suffix = attempt === 1 ? "" : `-${attempt}`;
     const branch = `shape/${baseName}${suffix}`;
     const checkoutPath = path.join(worktreeRoot, `${baseName}${suffix}`);
+    if (input.reuseExisting && attempt === 1 && checkoutPathUsesBranch(checkoutPath, branch)) {
+      return {
+        worktreeName: `${baseName}${suffix}`,
+        branch,
+        path: checkoutPath,
+      };
+    }
     if (branchExists(input.repoRoot, branch) || existsSync(checkoutPath)) continue;
     return {
       worktreeName: `${baseName}${suffix}`,
@@ -619,6 +657,7 @@ function createLocalWorktree(input: {
   baseRef: string;
   phase: "create_landing_checkout" | "create_execution_checkout";
 }): void {
+  if (checkoutPathUsesBranch(input.checkoutPath, input.branch)) return;
   mkdirSync(path.dirname(input.checkoutPath), { recursive: true });
   runGit(
     input.repoRoot,
@@ -879,6 +918,7 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
     repoName,
     name: options.name,
     branch: options.branch,
+    reuseExisting: options.reuseExisting,
   });
 
   if (target.kind === "local") {
@@ -933,53 +973,57 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
     phase: "create_landing_checkout",
   });
 
-  const remoteRepo = ensureRemoteRepo({
-    target,
-    repoRoot: remoteRepoRoot,
-    repoName,
-    remoteUrl: originRemoteUrl,
-    cloneIfMissing: options.cloneIfMissing,
-  });
-  const remoteName = `agents-${slugifySegment(target.displayName).slice(0, 40) || "target"}`;
-  const targetRemoteUrl = buildSshRepoUrl(target.id, remoteRepo.repoPath);
-  addOrUpdateRemote({
-    landingPath: identity.path,
-    remoteName,
-    remoteUrl: targetRemoteUrl,
-  });
-  pushBranchToTarget({
-    landingPath: identity.path,
-    remoteName,
+  const landingCheckout: ImplementationCheckout = {
+    checkoutId: buildCheckoutId("local", repoName, identity.worktreeName),
+    targetId: "local",
+    role: "landing",
+    repoPath: repoRoot,
+    path: identity.path,
     branch: identity.branch,
-  });
-  const executionCheckout = createRemoteExecutionCheckout({
-    target,
-    remoteRepoPath: remoteRepo.repoPath,
-    worktreeName: identity.worktreeName,
-    branch: identity.branch,
-  });
+    baseRef,
+    baseCommit,
+  };
+  let executionCheckoutMetadata: ImplementationCheckout | undefined;
 
-  return {
-    ok: true,
-    phase: "complete",
+  const partialCheckoutResult = (): CheckoutCreatePartialResult => ({
     targetId: target.id,
     repoName,
     branch: identity.branch,
     baseRef,
     baseCommit,
-    landingCheckout: {
-      checkoutId: buildCheckoutId("local", repoName, identity.worktreeName),
-      targetId: "local",
-      role: "landing",
-      repoPath: repoRoot,
-      path: identity.path,
-      branch: identity.branch,
-      baseRef,
-      baseCommit,
+    landingCheckout,
+    ...(executionCheckoutMetadata ? { executionCheckout: executionCheckoutMetadata } : {}),
+  });
+
+  try {
+    const remoteRepo = ensureRemoteRepo({
+      target,
+      repoRoot: remoteRepoRoot,
+      repoName,
+      remoteUrl: originRemoteUrl,
+      cloneIfMissing: options.cloneIfMissing,
+    });
+    const remoteName = `agents-${slugifySegment(target.displayName).slice(0, 40) || "target"}`;
+    const targetRemoteUrl = buildSshRepoUrl(target.id, remoteRepo.repoPath);
+    landingCheckout.remoteName = remoteName;
+    landingCheckout.remoteUrl = targetRemoteUrl;
+    addOrUpdateRemote({
+      landingPath: identity.path,
       remoteName,
       remoteUrl: targetRemoteUrl,
-    },
-    executionCheckout: {
+    });
+    pushBranchToTarget({
+      landingPath: identity.path,
+      remoteName,
+      branch: identity.branch,
+    });
+    const executionCheckout = createRemoteExecutionCheckout({
+      target,
+      remoteRepoPath: remoteRepo.repoPath,
+      worktreeName: identity.worktreeName,
+      branch: identity.branch,
+    });
+    executionCheckoutMetadata = {
       checkoutId: buildCheckoutId(target.id, repoName, identity.worktreeName),
       targetId: target.id,
       role: "execution",
@@ -990,7 +1034,46 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
       baseCommit,
       cloned: remoteRepo.cloned,
       headSha: executionCheckout.headSha,
-    },
+    };
+  } catch (error) {
+    if (error instanceof AgentsRuntimeError) {
+      throw new AgentsRuntimeError({
+        phase: error.phase,
+        code: error.code,
+        message: error.message,
+        targetId: error.targetId,
+        retryable: error.retryable,
+        details: error.details,
+        partialResult: {
+          ...(error.partialResult ?? {}),
+          checkout: partialCheckoutResult(),
+        },
+      });
+    }
+    throw error;
+  }
+
+  if (!executionCheckoutMetadata) {
+    fail({
+      phase: "create_execution_checkout",
+      code: "execution_checkout_missing",
+      message: `Created the remote execution checkout on ${target.displayName}, but no checkout metadata was produced.`,
+      targetId: target.id,
+      retryable: true,
+      partialResult: { checkout: partialCheckoutResult() },
+    });
+  }
+
+  return {
+    ok: true,
+    phase: "complete",
+    targetId: target.id,
+    repoName,
+    branch: identity.branch,
+    baseRef,
+    baseCommit,
+    landingCheckout,
+    executionCheckout: executionCheckoutMetadata,
   };
 }
 
@@ -1198,6 +1281,7 @@ function runRemoteAgentsJson<T>(target: ImplementationTarget, args: string[], ph
           stderr: result.stderr,
           status: result.status,
         },
+        partialResult: remoteFailure.partialResult,
       });
     }
 
@@ -1303,6 +1387,7 @@ export function startImplementationSession(options: SessionStartOptions): Sessio
   }
 
   const startedAt = new Date();
+  const tmuxSession = options.tmuxSession || (process.env.TMUX ? undefined : "agents");
   let launch: WorkspaceLaunchResult;
   try {
     launch = createWorkspaceOrThrow(undefined, options.name, undefined, {
@@ -1312,7 +1397,8 @@ export function startImplementationSession(options: SessionStartOptions): Sessio
       directAgentLaunch: true,
       detached: true,
       requireDiscoverable: true,
-      tmuxSession: options.tmuxSession,
+      tmuxSession,
+      createTmuxSessionIfMissing: Boolean(tmuxSession),
       overrideArgs: options.overrides ?? [],
     });
   } catch (error) {
@@ -1335,7 +1421,7 @@ export function startImplementationSession(options: SessionStartOptions): Sessio
       checkoutId: options.checkoutId,
       profile: options.profile,
       transport: "tmux",
-      tmuxSession: launch.sessionName ?? options.tmuxSession,
+      tmuxSession: launch.sessionName ?? tmuxSession,
       paneId,
       startedAt: startedAt.toISOString(),
     },

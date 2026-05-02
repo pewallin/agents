@@ -421,6 +421,7 @@ checkoutCommand
   .option("--branch <name>", "Branch name override")
   .option("--no-clone-if-missing", "Fail instead of cloning when the target repo is missing")
   .option("--local-landing", "Create a local landing checkout for remote execution")
+  .option("--reuse-existing", "Reuse the stable checkout path when it already exists on the requested branch")
   .option("--json", "Output as JSON")
   .action((opts) => {
     try {
@@ -435,6 +436,7 @@ checkoutCommand
         name: opts.name,
         cloneIfMissing: opts.cloneIfMissing,
         localLanding: !!opts.localLanding,
+        reuseExisting: !!opts.reuseExisting,
       });
       printRuntimeResult(result, opts, `Created ${result.executionCheckout.checkoutId} at ${result.executionCheckout.path}`);
     } catch (error) {

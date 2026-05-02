@@ -47,6 +47,7 @@ export interface CreateWorkspaceOpts {
   profile?: string;
   cwd?: string;
   tmuxSession?: string;  // target tmux session for the new window
+  createTmuxSessionIfMissing?: boolean; // tmux-only: create target session before adding the window
   detached?: boolean;    // tmux-only: create the new window without focusing attached clients
   initProject?: boolean;
   agentOnly?: boolean;   // skip helper pane creation (app creates them on demand)
@@ -318,6 +319,13 @@ function resolveTmuxSessionTarget(requestedSession?: string): string | undefined
   return fallbackSession;
 }
 
+function ensureTmuxSessionExists(sessionName: string): void {
+  const quoted = JSON.stringify(sessionName);
+  const exists = exec(`tmux has-session -t ${quoted} 2>/dev/null && printf yes`);
+  if (exists.trim() === "yes") return;
+  exec(`tmux new-session -d -s ${quoted} -n agents`);
+}
+
 function sleepSync(ms: number): void {
   if (ms <= 0) return;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -531,6 +539,9 @@ function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: stri
   const shouldFocusNewWindow = detectMultiplexer() === "tmux" && opts?.detached !== true;
   const cwd = opts?.cwd || process.cwd();
   const targetSession = resolveTmuxSessionTarget(opts?.tmuxSession);
+  if (targetSession && opts?.createTmuxSessionIfMissing) {
+    ensureTmuxSessionExists(targetSession);
+  }
   // Build new-window command with optional target session and cwd
   let newWindowCmd = "tmux new-window";
   if (!shouldFocusNewWindow) {

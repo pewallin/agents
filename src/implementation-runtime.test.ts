@@ -18,11 +18,18 @@ vi.mock("./scanner.js", () => ({
   ],
 }));
 
+const createWorkspaceOrThrowMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./workspace.js", () => ({
+  createWorkspaceOrThrow: createWorkspaceOrThrowMock,
+}));
+
 const {
   AgentsRuntimeError,
   createImplementationCheckout,
   getImplementationCheckoutStatus,
   listImplementationTargets,
+  startImplementationSession,
 } = await import("./implementation-runtime.js");
 
 const execFileAsync = promisify(execFile);
@@ -75,6 +82,7 @@ async function stubSsh(sandboxRoot: string, scriptBody: string): Promise<void> {
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  createWorkspaceOrThrowMock.mockReset();
   await Promise.all(cleanupPaths.splice(0).map((target) => rm(target, { recursive: true, force: true })));
 });
 
@@ -110,6 +118,42 @@ describe("implementation runtime targets", () => {
 
     expect(result.targets.map((target) => target.id)).toEqual(["local", "peter@mac-mini"]);
     expect(result.targets[1]?.repoRoots).toEqual(["/Users/peter/dev"]);
+  });
+
+  it("uses agents-app connection addresses as shared SSH target ids", async () => {
+    const sandboxRoot = await mkdtemp(path.join(tmpdir(), "agents-targets-connection-"));
+    cleanupPaths.push(sandboxRoot);
+    const configPath = path.join(sandboxRoot, "remote-hosts.json");
+    await writeFile(
+      configPath,
+      JSON.stringify([
+        {
+          id: "host-1",
+          displayName: "Dev Box",
+          endpoint: {
+            kind: "ssh",
+            username: "peter",
+            hostname: "devbox.tailnet.ts.net",
+            connectionAddress: "100.64.0.20",
+            port: 2200,
+          },
+          isEnabled: true,
+        },
+      ]),
+      "utf8",
+    );
+
+    const result = listImplementationTargets({
+      repoRoot: "/Users/peter/code/shape",
+      homeDir: "/Users/peter",
+      configPath,
+    });
+
+    expect(result.targets[1]).toEqual(expect.objectContaining({
+      id: "peter@100.64.0.20:2200",
+      displayName: "Dev Box",
+      sourceConfigId: "host-1",
+    }));
   });
 
   it("surfaces malformed shared target config as a structured runtime error", async () => {
@@ -263,6 +307,79 @@ describe("implementation checkout runtime", () => {
     expect(existsSync(path.join(sandbox.sandboxRoot, ".shape-worktrees", "repo", "remote-runtime-order"))).toBe(false);
   });
 
+  it("preserves local landing checkout metadata when later remote setup fails", async () => {
+    const sandbox = await createCommittedRepo();
+    cleanupPaths.push(sandbox.sandboxRoot);
+    const configPath = await writeRemoteTargetConfig(sandbox.sandboxRoot);
+    await stubSsh(
+      sandbox.sandboxRoot,
+      [
+        'cmd="${@: -1}"',
+        'if [[ "$cmd" == *"command -v agents"* ]]; then exit 0; fi',
+        'echo "clone failed" >&2',
+        "exit 42",
+      ].join("\n"),
+    );
+
+    expect(() =>
+      createImplementationCheckout({
+        sourceRepoPath: sandbox.repoRoot,
+        name: "Remote partial setup",
+        targetId: "peter@mac-mini",
+        baseRef: "main",
+        remoteUrl: "git@example.com:test/repo.git",
+        configPath,
+        cloneIfMissing: true,
+        localLanding: true,
+      }),
+    ).toThrow(AgentsRuntimeError);
+
+    try {
+      createImplementationCheckout({
+        sourceRepoPath: sandbox.repoRoot,
+        name: "Remote partial setup",
+        targetId: "peter@mac-mini",
+        baseRef: "main",
+        remoteUrl: "git@example.com:test/repo.git",
+        configPath,
+        cloneIfMissing: true,
+        localLanding: true,
+        reuseExisting: true,
+      });
+    } catch (error) {
+      expect(error).toMatchObject({
+        phase: "clone_repo",
+        code: "clone_repo_failed",
+        partialResult: {
+          checkout: {
+            targetId: "peter@mac-mini",
+            repoName: "repo",
+            branch: "shape/remote-partial-setup",
+            baseRef: "main",
+            landingCheckout: {
+              checkoutId: "local:repo:remote-partial-setup",
+              targetId: "local",
+              role: "landing",
+            },
+          },
+        },
+      });
+      const runtimeError = error as {
+        partialResult?: {
+          checkout?: {
+            landingCheckout?: {
+              path?: string;
+            };
+          };
+        };
+      };
+      expect(runtimeError.partialResult?.checkout?.landingCheckout?.path).toContain(
+        path.join(".shape-worktrees", "repo", "remote-partial-setup"),
+      );
+      expect(existsSync(runtimeError.partialResult?.checkout?.landingCheckout?.path ?? "")).toBe(true);
+    }
+  });
+
   it("preserves structured remote agents failures from stderr", async () => {
     const sandbox = await createCommittedRepo();
     cleanupPaths.push(sandbox.sandboxRoot);
@@ -310,5 +427,48 @@ describe("implementation checkout runtime", () => {
         },
       });
     }
+  });
+});
+
+describe("implementation session runtime", () => {
+  it("creates detached sessions in a concrete tmux session when launched outside tmux", () => {
+    vi.stubEnv("TMUX", "");
+    createWorkspaceOrThrowMock.mockReturnValueOnce({
+      cwd: "/tmp/checkout",
+      mux: "tmux",
+      windowName: "takeoff:item",
+      paneId: "%42",
+      tmuxPaneId: "%42",
+      sessionName: "agents",
+      resolved: {
+        command: "codex",
+        agentCommand: "codex",
+        argv: ["codex"],
+      },
+    });
+
+    const result = startImplementationSession({
+      targetId: "local",
+      checkoutId: "local:shape:item",
+      path: "/tmp/checkout",
+      profile: "codex",
+      name: "takeoff:item",
+    });
+
+    expect(createWorkspaceOrThrowMock).toHaveBeenCalledWith(
+      undefined,
+      "takeoff:item",
+      undefined,
+      expect.objectContaining({
+        detached: true,
+        tmuxSession: "agents",
+        createTmuxSessionIfMissing: true,
+      }),
+    );
+    expect(result.session).toEqual(expect.objectContaining({
+      sessionId: "takeoff:item",
+      tmuxSession: "agents",
+      paneId: "%42",
+    }));
   });
 });
