@@ -201,6 +201,53 @@ describe("implementation checkout runtime", () => {
     await expect(runGit(result.executionCheckout.path, ["cat-file", "-e", "HEAD:dirty.txt"])).rejects.toThrow();
   });
 
+  it("can start implementation checkouts from HEAD while keeping a separate comparison base", async () => {
+    const sandbox = await createCommittedRepo();
+    cleanupPaths.push(sandbox.sandboxRoot);
+    await runGit(sandbox.repoRoot, ["checkout", "-b", "feature/in-progress"]);
+    await writeFile(path.join(sandbox.repoRoot, "FEATURE.md"), "feature branch only\n", "utf8");
+    await runGit(sandbox.repoRoot, ["add", "FEATURE.md"]);
+    await runGit(sandbox.repoRoot, ["commit", "-m", "feature"]);
+    await writeFile(path.join(sandbox.repoRoot, "dirty.txt"), "dirty\n", "utf8");
+    const featureCommit = await runGit(sandbox.repoRoot, ["rev-parse", "HEAD"]);
+
+    const result = createImplementationCheckout({
+      sourceRepoPath: sandbox.repoRoot,
+      name: "Start from head",
+      targetId: "local",
+      baseRef: "main",
+      startRef: "HEAD",
+    });
+
+    expect(result.baseRef).toBe("main");
+    expect(result.startRef).toBe("HEAD");
+    expect(result.startCommit).toBe(featureCommit);
+    expect(await runGit(result.executionCheckout.path, ["cat-file", "-p", "HEAD:FEATURE.md"])).toBe("feature branch only");
+    await expect(runGit(result.executionCheckout.path, ["cat-file", "-e", "HEAD:dirty.txt"])).rejects.toThrow();
+  });
+
+  it("snapshots selected dirty context paths into the implementation branch", async () => {
+    const sandbox = await createCommittedRepo();
+    cleanupPaths.push(sandbox.sandboxRoot);
+    await mkdir(path.join(sandbox.repoRoot, ".shape", "plans", "item"), { recursive: true });
+    await writeFile(path.join(sandbox.repoRoot, ".shape", "plans", "item", "prd.md"), "# PRD\n\nCurrent local artifact.\n", "utf8");
+    await writeFile(path.join(sandbox.repoRoot, "notes.txt"), "not included\n", "utf8");
+
+    const result = createImplementationCheckout({
+      sourceRepoPath: sandbox.repoRoot,
+      name: "Snapshot context",
+      targetId: "local",
+      baseRef: "main",
+      startRef: "HEAD",
+      snapshotPaths: [".shape/plans/item/prd.md"],
+    });
+
+    expect(await runGit(result.executionCheckout.path, ["cat-file", "-p", "HEAD:.shape/plans/item/prd.md"])).toContain("Current local artifact");
+    await expect(runGit(result.executionCheckout.path, ["cat-file", "-e", "HEAD:notes.txt"])).rejects.toThrow();
+    expect(await runGit(result.executionCheckout.path, ["log", "--format=%s", "-1"])).toBe("Agents: snapshot checkout context");
+    expect(await runGit(sandbox.repoRoot, ["status", "--short", "--", ".shape/plans/item/prd.md", "notes.txt"])).toContain("?? .shape/");
+  });
+
   it("reports checkout status with branch, head, ahead/behind, dirty state, and sessions", async () => {
     const sandbox = await createCommittedRepo();
     cleanupPaths.push(sandbox.sandboxRoot);

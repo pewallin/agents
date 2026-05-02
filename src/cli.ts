@@ -418,10 +418,12 @@ checkoutCommand
   .option("--repo <name>", "Repository name override")
   .option("--remote-url <url>", "Canonical source remote URL")
   .option("--base <ref>", "Explicit base ref")
+  .option("--start <ref>", "Explicit start ref for the implementation branch")
   .option("--branch <name>", "Branch name override")
   .option("--no-clone-if-missing", "Fail instead of cloning when the target repo is missing")
   .option("--local-landing", "Create a local landing checkout for remote execution")
   .option("--reuse-existing", "Reuse the stable checkout path when it already exists on the requested branch")
+  .option("--snapshot-path <path>", "Repo-relative context path to snapshot into the implementation branch", (value, previous: string[] = []) => [...previous, value], [])
   .option("--json", "Output as JSON")
   .action((opts) => {
     try {
@@ -432,11 +434,13 @@ checkoutCommand
         repoName: opts.repo,
         remoteUrl: opts.remoteUrl,
         baseRef: opts.base,
+        startRef: opts.start,
         branch: opts.branch,
         name: opts.name,
         cloneIfMissing: opts.cloneIfMissing,
         localLanding: !!opts.localLanding,
         reuseExisting: !!opts.reuseExisting,
+        snapshotPaths: opts.snapshotPath,
       });
       printRuntimeResult(result, opts, `Created ${result.executionCheckout.checkoutId} at ${result.executionCheckout.path}`);
     } catch (error) {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "fs";
 import { homedir } from "os";
 import path from "path";
 import { scan } from "./scanner.js";
@@ -15,7 +15,9 @@ export type RuntimePhase =
   | "resolve_repo_root"
   | "clone_repo"
   | "resolve_base_ref"
+  | "resolve_start_ref"
   | "create_landing_checkout"
+  | "snapshot_context"
   | "add_target_remote"
   | "push_branch_to_target"
   | "create_execution_checkout"
@@ -101,6 +103,8 @@ export interface ImplementationCheckout {
   branch?: string;
   baseRef?: string;
   baseCommit?: string;
+  startRef?: string;
+  startCommit?: string;
   remoteName?: string;
   remoteUrl?: string;
   cloned?: boolean;
@@ -118,6 +122,8 @@ export interface CheckoutCreatePartialResult {
   branch: string;
   baseRef: string;
   baseCommit?: string;
+  startRef?: string;
+  startCommit?: string;
   landingCheckout?: ImplementationCheckout;
   executionCheckout?: ImplementationCheckout;
 }
@@ -134,6 +140,8 @@ export interface CheckoutCreateResult {
   branch: string;
   baseRef: string;
   baseCommit: string;
+  startRef?: string;
+  startCommit?: string;
   landingCheckout?: ImplementationCheckout;
   executionCheckout: ImplementationCheckout;
 }
@@ -228,11 +236,13 @@ export interface CheckoutCreateOptions extends TargetListOptions {
   repoName?: string;
   remoteUrl?: string;
   baseRef?: string;
+  startRef?: string;
   name: string;
   branch?: string;
   cloneIfMissing?: boolean;
   localLanding?: boolean;
   reuseExisting?: boolean;
+  snapshotPaths?: string[];
 }
 
 export interface CheckoutStatusOptions extends TargetListOptions {
@@ -604,6 +614,22 @@ function resolveBaseRef(repoRoot: string, baseRef?: string): { baseRef: string; 
   });
 }
 
+function resolveStartRef(repoRoot: string, startRef: string | undefined, fallbackRef: string): { startRef: string; startCommit: string } {
+  const candidate = startRef?.trim() || fallbackRef;
+  const result = runGitMaybe(repoRoot, ["rev-parse", "--verify", `${candidate}^{commit}`]);
+  if (result.ok && result.stdout) {
+    return { startRef: candidate, startCommit: result.stdout };
+  }
+
+  fail({
+    phase: "resolve_start_ref",
+    code: "start_ref_not_found",
+    message: `Agents could not resolve start ref "${candidate}".`,
+    retryable: true,
+    details: { startRef: candidate },
+  });
+}
+
 function chooseCheckoutIdentity(input: {
   repoRoot: string;
   repoName: string;
@@ -654,19 +680,93 @@ function createLocalWorktree(input: {
   repoRoot: string;
   checkoutPath: string;
   branch: string;
-  baseRef: string;
+  startRef: string;
   phase: "create_landing_checkout" | "create_execution_checkout";
 }): void {
   if (checkoutPathUsesBranch(input.checkoutPath, input.branch)) return;
   mkdirSync(path.dirname(input.checkoutPath), { recursive: true });
   runGit(
     input.repoRoot,
-    ["worktree", "add", "-b", input.branch, input.checkoutPath, input.baseRef],
+    ["worktree", "add", "-b", input.branch, input.checkoutPath, input.startRef],
     input.phase,
     input.phase === "create_landing_checkout"
       ? "Agents could not create the local landing checkout."
       : "Agents could not create the implementation checkout.",
     "worktree_create_failed",
+  );
+}
+
+function toRepoRelativeSnapshotPath(repoRoot: string, inputPath: string): string {
+  const trimmed = inputPath.trim();
+  const absolutePath = path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(repoRoot, trimmed);
+  const relativePath = path.relative(repoRoot, absolutePath);
+  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    fail({
+      phase: "snapshot_context",
+      code: "snapshot_path_outside_repo",
+      message: `Snapshot path "${inputPath}" is outside the source repository.`,
+      retryable: false,
+      details: { path: inputPath, repoRoot },
+    });
+  }
+
+  return relativePath.split(path.sep).join("/");
+}
+
+function normalizeSnapshotPaths(repoRoot: string, snapshotPaths: string[] | undefined): string[] {
+  const normalized = new Set<string>();
+  for (const inputPath of snapshotPaths ?? []) {
+    if (!inputPath.trim()) continue;
+    normalized.add(toRepoRelativeSnapshotPath(repoRoot, inputPath));
+  }
+
+  return [...normalized];
+}
+
+function snapshotContextPaths(input: {
+  sourceRepoRoot: string;
+  checkoutPath: string;
+  snapshotPaths?: string[];
+}): void {
+  const snapshotPaths = normalizeSnapshotPaths(input.sourceRepoRoot, input.snapshotPaths);
+  if (snapshotPaths.length === 0) return;
+
+  for (const gitPath of snapshotPaths) {
+    const sourcePath = path.join(input.sourceRepoRoot, gitPath);
+    const checkoutPath = path.join(input.checkoutPath, gitPath);
+    if (existsSync(sourcePath)) {
+      mkdirSync(path.dirname(checkoutPath), { recursive: true });
+      cpSync(sourcePath, checkoutPath, { recursive: true, force: true });
+      runGit(
+        input.checkoutPath,
+        ["add", "--", gitPath],
+        "snapshot_context",
+        "Agents could not stage a snapshot context path in the implementation checkout.",
+        "snapshot_stage_failed",
+      );
+    } else {
+      rmSync(checkoutPath, { recursive: true, force: true });
+      runGit(
+        input.checkoutPath,
+        ["rm", "-r", "--ignore-unmatch", "--", gitPath],
+        "snapshot_context",
+        "Agents could not stage a removed snapshot context path in the implementation checkout.",
+        "snapshot_stage_failed",
+      );
+    }
+  }
+
+  const hasSnapshotDiff = !runGitMaybe(input.checkoutPath, ["diff", "--cached", "--quiet", "--", ...snapshotPaths]).ok;
+  if (!hasSnapshotDiff) return;
+
+  runGit(
+    input.checkoutPath,
+    ["commit", "-m", "Agents: snapshot checkout context"],
+    "snapshot_context",
+    "Agents could not commit snapshot context paths in the implementation checkout.",
+    "snapshot_commit_failed",
   );
 }
 
@@ -914,6 +1014,7 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
   const repoName = options.repoName?.trim() || path.basename(repoRoot);
   const target = resolveImplementationTarget({ ...options, repoRoot });
   const { baseRef, baseCommit } = resolveBaseRef(repoRoot, options.baseRef);
+  const { startRef, startCommit } = resolveStartRef(repoRoot, options.startRef, baseRef);
   const identity = chooseCheckoutIdentity({
     repoRoot,
     repoName,
@@ -927,9 +1028,15 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
       repoRoot,
       checkoutPath: identity.path,
       branch: identity.branch,
-      baseRef,
+      startRef,
       phase: "create_execution_checkout",
     });
+    snapshotContextPaths({
+      sourceRepoRoot: repoRoot,
+      checkoutPath: identity.path,
+      snapshotPaths: options.snapshotPaths,
+    });
+    const headSha = runGit(identity.path, ["rev-parse", "HEAD"], "snapshot_context", "Agents could not resolve implementation checkout HEAD after snapshot context setup.");
 
     return {
       ok: true,
@@ -939,6 +1046,8 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
       branch: identity.branch,
       baseRef,
       baseCommit,
+      startRef,
+      startCommit,
       executionCheckout: {
         checkoutId: buildCheckoutId(target.id, repoName, identity.worktreeName),
         targetId: target.id,
@@ -948,6 +1057,9 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
         branch: identity.branch,
         baseRef,
         baseCommit,
+        startRef,
+        startCommit,
+        headSha,
       },
     };
   }
@@ -970,8 +1082,13 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
     repoRoot,
     checkoutPath: identity.path,
     branch: identity.branch,
-    baseRef,
+    startRef,
     phase: "create_landing_checkout",
+  });
+  snapshotContextPaths({
+    sourceRepoRoot: repoRoot,
+    checkoutPath: identity.path,
+    snapshotPaths: options.snapshotPaths,
   });
 
   const landingCheckout: ImplementationCheckout = {
@@ -983,6 +1100,9 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
     branch: identity.branch,
     baseRef,
     baseCommit,
+    startRef,
+    startCommit,
+    headSha: runGit(identity.path, ["rev-parse", "HEAD"], "snapshot_context", "Agents could not resolve landing checkout HEAD after snapshot context setup."),
   };
   let executionCheckoutMetadata: ImplementationCheckout | undefined;
 
@@ -992,6 +1112,8 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
     branch: identity.branch,
     baseRef,
     baseCommit,
+    startRef,
+    startCommit,
     landingCheckout,
     ...(executionCheckoutMetadata ? { executionCheckout: executionCheckoutMetadata } : {}),
   });
@@ -1033,6 +1155,8 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
       branch: identity.branch,
       baseRef,
       baseCommit,
+      startRef,
+      startCommit,
       cloned: remoteRepo.cloned,
       headSha: executionCheckout.headSha,
     };
@@ -1073,6 +1197,8 @@ export function createImplementationCheckout(options: CheckoutCreateOptions): Ch
     branch: identity.branch,
     baseRef,
     baseCommit,
+    startRef,
+    startCommit,
     landingCheckout,
     executionCheckout: executionCheckoutMetadata,
   };
