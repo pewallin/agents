@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { execFile } from "child_process";
@@ -80,6 +80,10 @@ async function stubSsh(sandboxRoot: string, scriptBody: string): Promise<void> {
   vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   createWorkspaceOrThrowMock.mockReset();
@@ -117,7 +121,7 @@ describe("implementation runtime targets", () => {
     });
 
     expect(result.targets.map((target) => target.id)).toEqual(["local", "peter@mac-mini"]);
-    expect(result.targets[1]?.repoRoots).toEqual(["/Users/peter/dev"]);
+    expect(result.targets[1]?.repoRoots).toEqual(["~/dev"]);
   });
 
   it("uses agents-app connection addresses as shared SSH target ids", async () => {
@@ -378,6 +382,66 @@ describe("implementation checkout runtime", () => {
       );
       expect(existsSync(runtimeError.partialResult?.checkout?.landingCheckout?.path ?? "")).toBe(true);
     }
+  });
+
+  it("expands tilde repo roots on the remote when preparing repos", async () => {
+    const sandbox = await createCommittedRepo();
+    cleanupPaths.push(sandbox.sandboxRoot);
+    const configPath = path.join(sandbox.sandboxRoot, "remote-hosts.json");
+    await writeFile(
+      configPath,
+      JSON.stringify([
+        {
+          displayName: "mac-mini",
+          endpoint: { kind: "ssh", username: "peter", hostname: "mac-mini", port: 22 },
+          isEnabled: true,
+          repoRoots: ["~/dev"],
+        },
+      ]),
+      "utf8",
+    );
+    const remoteHome = path.join(sandbox.sandboxRoot, "remote-home");
+    await mkdir(remoteHome, { recursive: true });
+    const commandStdout = path.join(sandbox.sandboxRoot, "remote-command.stdout");
+    const commandStderr = path.join(sandbox.sandboxRoot, "remote-command.stderr");
+    const commandLog = path.join(sandbox.sandboxRoot, "remote-command.log");
+    await stubSsh(
+      sandbox.sandboxRoot,
+      [
+        'cmd="${@: -1}"',
+        'if [[ "$cmd" == *"command -v agents"* ]]; then exit 0; fi',
+        `REMOTE_HOME=${shellQuote(remoteHome)}`,
+        `COMMAND_STDOUT=${shellQuote(commandStdout)}`,
+        `COMMAND_STDERR=${shellQuote(commandStderr)}`,
+        `COMMAND_LOG=${shellQuote(commandLog)}`,
+        'printf "%s\\n" "$cmd" >"$COMMAND_LOG"',
+        'HOME="$REMOTE_HOME" /bin/sh -c "$cmd" >"$COMMAND_STDOUT" 2>"$COMMAND_STDERR"',
+        "status=$?",
+        'cat "$COMMAND_STDOUT"',
+        'cat "$COMMAND_STDERR" >&2',
+        'exit "$status"',
+      ].join("\n"),
+    );
+
+    expect(() =>
+      createImplementationCheckout({
+        sourceRepoPath: sandbox.repoRoot,
+        name: "Remote tilde root",
+        targetId: "peter@mac-mini",
+        baseRef: "main",
+        remoteUrl: "git@example.com:test/repo.git",
+        configPath,
+        cloneIfMissing: false,
+        localLanding: true,
+      }),
+    ).toThrow(AgentsRuntimeError);
+
+    const stdout = await readFile(commandStdout, "utf8");
+    const stderr = await readFile(commandStderr, "utf8");
+    const command = await readFile(commandLog, "utf8");
+    expect(command).toContain('repo_root_input=\'~/dev\'');
+    expect(`${stdout}\n${stderr}\n${command}`).toContain(`repoPath=${path.join(remoteHome, "dev", "repo")}`);
+    expect(stdout).not.toContain(`${remoteHome}/~/dev`);
   });
 
   it("preserves structured remote agents failures from stderr", async () => {

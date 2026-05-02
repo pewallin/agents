@@ -306,7 +306,7 @@ function targetIdForEndpoint(endpoint: RemoteHostEndpoint): string | null {
 function repoRootsForHost(entry: RemoteHostConfigEntry, fallbackRoot: string, homeDir: string): string[] {
   const roots = entry.repoRoots?.map((repoRoot) => repoRoot.trim()).filter(Boolean) ?? [];
   const normalizedRoots = roots.length > 0 ? roots : [fallbackRoot];
-  return normalizedRoots.map((repoRoot) => expandHomePath(repoRoot, homeDir));
+  return normalizedRoots.map((repoRoot) => (repoRoot.startsWith("~") ? repoRoot : expandHomePath(repoRoot, homeDir)));
 }
 
 function readRemoteHostConfig(options: TargetListOptions): RemoteHostConfigEntry[] {
@@ -420,7 +420,7 @@ function shellQuote(value: string): string {
 }
 
 function shellQuoteIfNeeded(value: string): string {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : shellQuote(value);
+  return /^[A-Za-z0-9_~./:@%+=,-]+$/.test(value) ? value : shellQuote(value);
 }
 
 function shellJoin(args: string[]): string {
@@ -776,7 +776,8 @@ function ensureRemoteRepo(input: {
 }): { repoPath: string; cloned: boolean } {
   const script = [
     "set -e",
-    `repo_root=${shellQuote(input.repoRoot)}`,
+    `repo_root_input=${shellQuote(input.repoRoot)}`,
+    'case "$repo_root_input" in "~") repo_root="$HOME" ;; "~/"*) repo_root="$HOME/${repo_root_input#\\~/}" ;; *) repo_root="$repo_root_input" ;; esac',
     `repo_name=${shellQuote(input.repoName)}`,
     `remote_url=${shellQuote(input.remoteUrl)}`,
     'mkdir -p "$repo_root"',
@@ -795,7 +796,7 @@ function ensureRemoteRepo(input: {
     "fi",
     'cd "$repo_path"',
     'printf "repoPath=%s\\ncloned=%s\\n" "$(pwd -P)" "$cloned"',
-  ].join("; ");
+  ].join("\n");
 
   const result = runSshRaw({
     target: input.target,
