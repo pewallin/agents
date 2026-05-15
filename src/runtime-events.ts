@@ -1,4 +1,4 @@
-import { appendFileSync } from "fs";
+import { appendFileSync, existsSync, renameSync, rmSync, statSync } from "fs";
 import { getRuntimeStateEventsPath, ensureAgentsDirs } from "./paths.js";
 
 export type RuntimeMux = "tmux" | "zellij";
@@ -18,6 +18,10 @@ export interface RuntimeStateEvent extends RuntimeLocator {
   agent: string;
   reporter?: string;
 }
+
+const DEFAULT_RUNTIME_STATE_EVENTS_MAX_BYTES = 5 * 1024 * 1024;
+const MIN_RUNTIME_STATE_EVENTS_MAX_BYTES = 256 * 1024;
+const MAX_RUNTIME_STATE_EVENTS_MAX_BYTES = 25 * 1024 * 1024;
 
 export function runtimeLocatorForSurface(surfaceId: string): RuntimeLocator {
   if (surfaceId.startsWith("%")) {
@@ -48,6 +52,32 @@ export function appendRuntimeStateEvent(
     ...(reporter ? { reporter } : {}),
   };
 
-  appendFileSync(getRuntimeStateEventsPath(), `${JSON.stringify(event)}\n`);
+  const eventPath = getRuntimeStateEventsPath();
+  rotateRuntimeStateEventsIfNeeded(eventPath);
+  appendFileSync(eventPath, `${JSON.stringify(event)}\n`);
   return event;
+}
+
+function rotateRuntimeStateEventsIfNeeded(eventPath: string): void {
+  const maxBytes = runtimeStateEventsMaxBytes();
+  if (!existsSync(eventPath)) return;
+  if (statSync(eventPath).size < maxBytes) return;
+
+  const archivePath = `${eventPath}.1`;
+  rmSync(archivePath, { force: true });
+  renameSync(eventPath, archivePath);
+}
+
+function runtimeStateEventsMaxBytes(): number {
+  const rawValue = process.env.AGENTS_RUNTIME_STATE_EVENTS_MAX_BYTES;
+  if (!rawValue) return DEFAULT_RUNTIME_STATE_EVENTS_MAX_BYTES;
+
+  const parsedValue = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return DEFAULT_RUNTIME_STATE_EVENTS_MAX_BYTES;
+  }
+  return Math.min(
+    Math.max(parsedValue, MIN_RUNTIME_STATE_EVENTS_MAX_BYTES),
+    MAX_RUNTIME_STATE_EVENTS_MAX_BYTES,
+  );
 }
