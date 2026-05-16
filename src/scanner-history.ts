@@ -290,6 +290,15 @@ export function getHistoryResumeInfo(
         command: renderShellCommand(opencodeArgv),
         argv: opencodeArgv,
       };
+    case "kiro":
+      const kiroArgv = ["kiro-cli", "chat", "--tui", "--resume-id", opts.sessionId];
+      return {
+        strategy: "restart",
+        target: opts.sessionId,
+        targetKind: "session-id",
+        command: renderShellCommand(kiroArgv),
+        argv: kiroArgv,
+      };
     default:
       return undefined;
   }

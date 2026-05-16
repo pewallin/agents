@@ -29,4 +29,10 @@ describe("integration specs", () => {
     expect(missingLifecycleCapabilities(spec)).toEqual(["approval"]);
     expect(spec.optionalCapabilities?.approval).toBe(true);
   });
+
+  it("captures kiro as hook-only without approval metadata", () => {
+    const spec = integrationSpec("kiro");
+    expect(missingLifecycleCapabilities(spec)).toEqual(["approval"]);
+    expect(missingMetadataCapabilities(spec)).toEqual(["provider", "modelId", "modelLabel", "contextUsage"]);
+  });
 });

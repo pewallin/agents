@@ -8,7 +8,7 @@ import { BACK_ENV, switchBack } from "./back.js";
 import type { ModelMetadata, ModelSource, StateSnapshot } from "./state.js";
 import type { MuxPaneInfo } from "./multiplexer.js";
 import { inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, runtimeStateFromAgent } from "./scanner-runtime.js";
-import { isHookAuthoritativeAgent, mergedContextTokens, resolveModelInfo, stateContext, stateDetail, stateDuration, stateExternalSessionId, stateProvenance, stateTokens, stateWorkspaceCwd } from "./scanner-state-runtime.js";
+import { mergedContextTokens, resolveModelInfo, stateContext, stateDetail, stateExternalSessionId, stateProvenance, stateTokens, stateWorkspaceCwd } from "./scanner-state-runtime.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
 import { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
 import type { SiblingPane, WindowSnapshot } from "./pane-ops.js";
@@ -47,9 +47,15 @@ function processTokenBasename(token: string): string {
   return basename(token.replace(/^['"]+|['"]+$/g, "")).replace(/^-/, "").toLowerCase();
 }
 
+function processTokenAgentName(token: string): string {
+  const normalized = processTokenBasename(token);
+  if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
+  return normalized;
+}
+
 export function externalSessionIdFromProcessArgs(agent: string, args?: string): string | undefined {
   const argv = processArgv(args);
-  const agentIndex = argv.findIndex((token) => processTokenBasename(token) === agent.toLowerCase());
+  const agentIndex = argv.findIndex((token) => processTokenAgentName(token) === agent.toLowerCase());
   if (agentIndex < 0) return undefined;
   const agentArgs = argv.slice(agentIndex + 1);
 
@@ -75,6 +81,13 @@ export function externalSessionIdFromProcessArgs(agent: string, args?: string): 
     case "opencode": {
       const sessionIndex = agentArgs.indexOf("--session");
       const target = sessionIndex >= 0 ? agentArgs[sessionIndex + 1] : undefined;
+      return target && !target.startsWith("-") ? target : undefined;
+    }
+    case "kiro": {
+      const resumeIdArg = agentArgs.find((arg) => arg.startsWith("--resume-id="));
+      if (resumeIdArg) return resumeIdArg.slice("--resume-id=".length) || undefined;
+      const resumeIdIndex = agentArgs.indexOf("--resume-id");
+      const target = resumeIdIndex >= 0 ? agentArgs[resumeIdIndex + 1] : undefined;
       return target && !target.startsWith("-") ? target : undefined;
     }
     default:
@@ -231,46 +244,6 @@ export function resolveAgentIntentTitle(paneTitle: string, displayTitle?: string
   return normalizedPaneTitle;
 }
 
-interface PaneContentSnapshot {
-  tail?: string;
-  full?: string;
-}
-
-function normalizePaneContent(raw: string): string {
-  return raw.replace(/\n{3,}/g, "\n\n");
-}
-
-function capturePaneTailSync(target: string): string {
-  return normalizePaneContent(exec(`tmux capture-pane -t ${JSON.stringify(target)} -p -S -20 2>/dev/null`));
-}
-
-async function capturePaneTailAsync(target: string): Promise<string> {
-  return normalizePaneContent(await execAsync(`tmux capture-pane -t ${JSON.stringify(target)} -p -S -20 2>/dev/null`));
-}
-
-function capturePaneFullSync(target: string): string {
-  return exec(`tmux capture-pane -t ${JSON.stringify(target)} -p 2>/dev/null`);
-}
-
-async function capturePaneFullAsync(target: string): Promise<string> {
-  return execAsync(`tmux capture-pane -t ${JSON.stringify(target)} -p 2>/dev/null`);
-}
-
-async function detectStatus(
-  paneRef: string,
-  title: string,
-  windowActivity: number,
-  agent: string,
-  tmuxPaneId?: string,
-  snapshot?: StateSnapshot,
-  content?: PaneContentSnapshot,
-): Promise<{ status: AgentStatus; detail?: string }> {
-  const captureTarget = tmuxPaneId || paneRef;
-  const tailContent = content?.tail ?? await capturePaneTailAsync(captureTarget);
-  const fullPane = content?.full ?? await capturePaneFullAsync(captureTarget);
-  return resolveStatusFromContent(title, windowActivity, agent, tailContent, tmuxPaneId, snapshot, fullPane);
-}
-
 // Sync version for CLI commands that don't need async
 export function scan(): AgentPane[] {
   if (detectMultiplexer() === "zellij") {
@@ -320,22 +293,19 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
     const resolvedTitle = isTitleUseful(title) ? title : winname || title;
     const intent = resolveAgentIntentTitle(resolvedTitle);
     const wact = parseInt(wactStr, 10) || 0;
-    const usesHookRuntime = isHookAuthoritativeAgent(agentName);
-    const tailContent = usesHookRuntime ? "" : capturePaneTailSync(tmuxPaneId);
-    const { status, detail } = usesHookRuntime
-      ? resolveStatusFromContent(resolvedTitle, wact, agentName, "", tmuxPaneId, stateSnapshot, "")
-      : detectStatusSync(pane, resolvedTitle, wact, agentName, tmuxPaneId, stateSnapshot, { tail: tailContent });
+    const content = "";
+    const { status, detail } = resolveStatusFromContent(resolvedTitle, wact, agentName, content, tmuxPaneId, stateSnapshot);
     const richDetail = stateDetail(agentName, tmuxPaneId, stateSnapshot);
     const context = stateContext(agentName, tmuxPaneId, stateSnapshot);
     const provenance = stateProvenance(agentName, tmuxPaneId, stateSnapshot);
     const storedTokens = stateTokens(agentName, tmuxPaneId, stateSnapshot);
-    const modelInfo = resolveModelInfo(agentName, tmuxPaneId, tailContent, stateSnapshot);
+    const modelInfo = resolveModelInfo(agentName, tmuxPaneId, content, stateSnapshot);
     const tokenInfo = storedTokens.contextTokens !== undefined || storedTokens.contextMax !== undefined
       ? storedTokens
       : mergedContextTokens(
         agentName,
         tmuxPaneId,
-        tailContent,
+        content,
         stateSnapshot,
       );
 
@@ -362,7 +332,6 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
 // Single implementation used by both sync and async entry points.
 
 function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
-  const mux = getMux();
   const results: AgentPane[] = [];
   const stateSnapshot = readStateSnapshot();
 
@@ -389,9 +358,8 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
 
     if (!agentName) continue;
 
-    const usesHookRuntime = isHookAuthoritativeAgent(agentName);
-    const content = usesHookRuntime ? "" : mux.getPaneContent(p.id, 20);
-    const { status, detail } = resolveStatusFromContent(p.title, 0, agentName, content, p.id, stateSnapshot, content);
+    const content = "";
+    const { status, detail } = resolveStatusFromContent(p.title, 0, agentName, content, p.id, stateSnapshot);
 
     const paneRef = `${p.session}:${p.tab}`;
     const titleClean = cleanTitle(p.title);
@@ -504,11 +472,8 @@ function scanSync(): AgentPane[] {
   const results: AgentPane[] = [];
   for (const p of agentPanes) {
     const wact = parseInt(p.wactStr, 10) || 0;
-    const usesHookRuntime = isHookAuthoritativeAgent(p.agentName);
-    const tailContent = usesHookRuntime ? "" : capturePaneTailSync(p.tmuxPaneId);
-    const { status, detail } = usesHookRuntime
-      ? resolveStatusFromContent(p.title, wact, p.agentName, "", p.tmuxPaneId, stateSnapshot, "")
-      : detectStatusSync(p.pane, p.title, wact, p.agentName, p.tmuxPaneId, stateSnapshot, { tail: tailContent });
+    const content = "";
+    const { status, detail } = resolveStatusFromContent(p.title, wact, p.agentName, content, p.tmuxPaneId, stateSnapshot);
     const richDetail = stateDetail(p.agentName, p.tmuxPaneId, stateSnapshot);
     const finalDetail = richDetail || detail;
     const paneShort = p.pane.replace(/\.\d+$/, "");
@@ -517,8 +482,8 @@ function scanSync(): AgentPane[] {
     const branch = branchCache.get(p.cwdRaw);
     const externalSessionId = externalSessionIdFromProcessArgs(p.agentName, p.processArgs)
       || stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
-    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
-    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
+    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, content, stateSnapshot);
+    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, content, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
     const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
     const intent = resolveAgentIntentTitle(p.title, displayTitle, p.cwdRaw);
@@ -547,21 +512,6 @@ function scanSync(): AgentPane[] {
 
   results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
   return results;
-}
-
-function detectStatusSync(
-  paneRef: string,
-  title: string,
-  windowActivity: number,
-  agent: string,
-  tmuxPaneId?: string,
-  snapshot?: StateSnapshot,
-  contentSnapshot?: PaneContentSnapshot,
-): { status: AgentStatus; detail?: string } {
-  const captureTarget = tmuxPaneId || paneRef;
-  const tailContent = contentSnapshot?.tail ?? capturePaneTailSync(captureTarget);
-  const fullPane = contentSnapshot?.full ?? capturePaneFullSync(captureTarget);
-  return resolveStatusFromContent(title, windowActivity, agent, tailContent, tmuxPaneId, snapshot, fullPane);
 }
 
 // Async version for watch mode — doesn't block the Ink render loop
@@ -627,11 +577,8 @@ export async function scanAsync(): Promise<AgentPane[]> {
 
   const promises = agentPanes.map(async (p) => {
     const wact = parseInt(p.wactStr, 10) || 0;
-    const usesHookRuntime = isHookAuthoritativeAgent(p.agentName);
-    const tailContent = usesHookRuntime ? "" : await capturePaneTailAsync(p.tmuxPaneId);
-    const { status, detail } = usesHookRuntime
-      ? resolveStatusFromContent(p.title, wact, p.agentName, "", p.tmuxPaneId, stateSnapshot, "")
-      : await detectStatus(p.pane, p.title, wact, p.agentName, p.tmuxPaneId, stateSnapshot, { tail: tailContent });
+    const content = "";
+    const { status, detail } = resolveStatusFromContent(p.title, wact, p.agentName, content, p.tmuxPaneId, stateSnapshot);
     const richDetail = stateDetail(p.agentName, p.tmuxPaneId, stateSnapshot);
     const finalDetail = richDetail || detail;
     const paneShort = p.pane.replace(/\.\d+$/, "");
@@ -640,8 +587,8 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const branch = branchCache.get(p.cwdRaw);
     const externalSessionId = externalSessionIdFromProcessArgs(p.agentName, p.processArgs)
       || stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
-    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
-    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, tailContent, stateSnapshot);
+    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, content, stateSnapshot);
+    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, content, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
     const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
     const intent = resolveAgentIntentTitle(p.title, displayTitle, p.cwdRaw);

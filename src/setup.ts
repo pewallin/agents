@@ -7,6 +7,7 @@
  *   - Copilot CLI: symlinks extension to ~/.copilot/extensions/agents-reporting/
  *   - Pi: symlinks extension to ~/.pi/agent/extensions/agents-reporting/
  *   - OpenCode: symlinks plugin to ~/.config/opencode/node_modules/ and patches config.json
+ *   - Kiro CLI: writes ~/.kiro/agents/agents-reporting.json with hook commands
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, unlinkSync, lstatSync, readdirSync, rmdirSync, realpathSync } from "fs";
 import { createHash } from "crypto";
@@ -142,6 +143,15 @@ function applyCapabilityOverrides(
     missingLifecycle: LIFECYCLE_CAPABILITIES.filter((capability) => !capabilities[capability]),
     missingMetadata: METADATA_CAPABILITIES.filter((capability) => !capabilities[capability]),
   };
+}
+
+function commandExists(command: string): boolean {
+  try {
+    execSync(`command -v ${command}`, { encoding: "utf-8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function setupClaude(): SetupResult {
@@ -654,6 +664,152 @@ function uninstallOpencode(): SetupResult {
     detail: removed ? "removed plugin from ~/.config/opencode/" : undefined };
 }
 
+// ── Kiro CLI ────────────────────────────────────────────────────────
+
+const KIRO_AGENT_NAME = "agents-reporting";
+const KIRO_AGENT_PATH = join(homedir(), ".kiro", "agents", `${KIRO_AGENT_NAME}.json`);
+const KIRO_SETTINGS_PATH = join(homedir(), ".kiro", "settings", "cli.json");
+const KIRO_REPORT_SCRIPT = join(EXTENSIONS_DIR, "kiro", "report-state.sh");
+
+function kiroHookEntries(): Record<string, any[]> {
+  const base = { command: KIRO_REPORT_SCRIPT, timeout_ms: 10000, max_output_size: 1024 };
+  return {
+    agentSpawn: [base],
+    userPromptSubmit: [base],
+    preToolUse: [{ ...base, matcher: "*" }],
+    postToolUse: [{ ...base, matcher: "*" }],
+    stop: [base],
+  };
+}
+
+function kiroAgentConfig(): Record<string, any> {
+  return {
+    name: KIRO_AGENT_NAME,
+    description: "Reports Kiro CLI lifecycle state to the agents dashboard.",
+    tools: ["*"],
+    hooks: kiroHookEntries(),
+    includeMcpJson: true,
+  };
+}
+
+function isOurKiroAgentConfig(config: any): boolean {
+  const text = JSON.stringify(config);
+  return config?.name === KIRO_AGENT_NAME && (
+    text.includes(KIRO_REPORT_SCRIPT)
+    || text.includes("extensions/kiro/")
+    || text.includes("--agent kiro")
+  );
+}
+
+function readKiroSettings(): { settings: Record<string, any>; error?: string } {
+  if (!existsSync(KIRO_SETTINGS_PATH)) {
+    return { settings: {} };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(KIRO_SETTINGS_PATH, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { settings: {}, error: "could not parse ~/.kiro/settings/cli.json" };
+    }
+    return { settings: parsed };
+  } catch {
+    return { settings: {}, error: "could not parse ~/.kiro/settings/cli.json" };
+  }
+}
+
+function kiroDefaultAgentStatus(): { active: boolean; detail?: string; current?: string } {
+  const { settings, error } = readKiroSettings();
+  if (error) {
+    return { active: false, detail: `${error}; launch Kiro with --agent ${KIRO_AGENT_NAME}` };
+  }
+
+  const current = settings["chat.defaultAgent"];
+  if (current === KIRO_AGENT_NAME) {
+    return { active: true, current, detail: `default agent ${KIRO_AGENT_NAME}` };
+  }
+  if (typeof current === "string" && current.length > 0) {
+    return { active: false, current, detail: `default agent is ${current}; launch Kiro with --agent ${KIRO_AGENT_NAME}` };
+  }
+  return { active: false, detail: `default agent not set; launch Kiro with --agent ${KIRO_AGENT_NAME}` };
+}
+
+function ensureKiroDefaultAgent(): string | undefined {
+  const { settings, error } = readKiroSettings();
+  if (error) {
+    return `${error}; launch Kiro with --agent ${KIRO_AGENT_NAME}`;
+  }
+
+  const current = settings["chat.defaultAgent"];
+  if (current === KIRO_AGENT_NAME) {
+    return `default agent ${KIRO_AGENT_NAME}`;
+  }
+  if (typeof current === "string" && current.length > 0) {
+    return `default agent is ${current}; launch Kiro with --agent ${KIRO_AGENT_NAME}`;
+  }
+
+  mkdirSync(dirname(KIRO_SETTINGS_PATH), { recursive: true });
+  settings["chat.defaultAgent"] = KIRO_AGENT_NAME;
+  writeFileSync(KIRO_SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n");
+  return `set default agent to ${KIRO_AGENT_NAME}`;
+}
+
+function setupKiro(): SetupResult {
+  const kiroDir = join(homedir(), ".kiro");
+  if (!existsSync(kiroDir) && !commandExists("kiro-cli")) {
+    return { agent: "kiro", action: "skipped", detail: "~/.kiro/ not found and kiro-cli is not on PATH" };
+  }
+  if (!existsSync(KIRO_REPORT_SCRIPT)) {
+    return { agent: "kiro", action: "skipped", detail: "extension source not found in repo" };
+  }
+
+  if (existsSync(KIRO_AGENT_PATH)) {
+    let existing: any;
+    try {
+      existing = JSON.parse(readFileSync(KIRO_AGENT_PATH, "utf-8"));
+    } catch {
+      return { agent: "kiro", action: "skipped", detail: "could not parse ~/.kiro/agents/agents-reporting.json" };
+    }
+    if (!isOurKiroAgentConfig(existing)) {
+      return { agent: "kiro", action: "skipped", detail: "~/.kiro/agents/agents-reporting.json exists and is not managed by agents" };
+    }
+    const next = kiroAgentConfig();
+    if (JSON.stringify(existing) === JSON.stringify(next)) {
+      return { agent: "kiro", action: "installed", detail: mergeDetail("agent config present", ensureKiroDefaultAgent()) };
+    }
+  }
+
+  mkdirSync(dirname(KIRO_AGENT_PATH), { recursive: true });
+  writeFileSync(KIRO_AGENT_PATH, JSON.stringify(kiroAgentConfig(), null, 2) + "\n");
+  return { agent: "kiro", action: "installed", detail: mergeDetail("wrote ~/.kiro/agents/agents-reporting.json", ensureKiroDefaultAgent()) };
+}
+
+function uninstallKiro(): SetupResult {
+  if (!existsSync(KIRO_AGENT_PATH)) {
+    return { agent: "kiro", action: "not-installed" };
+  }
+
+  let existing: any;
+  try {
+    existing = JSON.parse(readFileSync(KIRO_AGENT_PATH, "utf-8"));
+  } catch {
+    return { agent: "kiro", action: "skipped", detail: "could not parse ~/.kiro/agents/agents-reporting.json" };
+  }
+  if (!isOurKiroAgentConfig(existing)) {
+    return { agent: "kiro", action: "skipped", detail: "agent config doesn't look like ours" };
+  }
+
+  unlinkSync(KIRO_AGENT_PATH);
+
+  let detail = "removed ~/.kiro/agents/agents-reporting.json";
+  const { settings } = readKiroSettings();
+  if (settings["chat.defaultAgent"] === KIRO_AGENT_NAME) {
+    delete settings["chat.defaultAgent"];
+    mkdirSync(dirname(KIRO_SETTINGS_PATH), { recursive: true });
+    writeFileSync(KIRO_SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n");
+    detail = mergeDetail(detail, `cleared default agent ${KIRO_AGENT_NAME}`) || detail;
+  }
+  return { agent: "kiro", action: "uninstalled", detail };
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 export function setup(quiet: boolean = false): SetupResult[] {
@@ -664,13 +820,13 @@ export function setup(quiet: boolean = false): SetupResult[] {
     if (!quiet) console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
   }
 
-  const results = [setupClaude(), setupCodex(), setupCopilot(), setupPi(), setupOpencode()];
+  const results = [setupClaude(), setupCodex(), setupCopilot(), setupPi(), setupOpencode(), setupKiro()];
   saveSetupHash();
   return results;
 }
 
 export function uninstall(): SetupResult[] {
-  return [uninstallClaude(), uninstallCodex(), uninstallCopilot(), uninstallPi(), uninstallOpencode()];
+  return [uninstallClaude(), uninstallCodex(), uninstallCopilot(), uninstallPi(), uninstallOpencode(), uninstallKiro()];
 }
 
 function doctorClaude(spec: AgentIntegrationSpec): DoctorResult {
@@ -881,6 +1037,43 @@ function doctorOpencode(spec: AgentIntegrationSpec): DoctorResult {
   );
 }
 
+function doctorKiro(spec: AgentIntegrationSpec): DoctorResult {
+  const kiroDir = join(homedir(), ".kiro");
+  if (!existsSync(kiroDir) && !commandExists("kiro-cli")) {
+    return doctorResult(spec, "unavailable", "~/.kiro/ not found and kiro-cli is not on PATH", []);
+  }
+  if (!existsSync(KIRO_AGENT_PATH)) {
+    return doctorResult(spec, "not-installed", "~/.kiro/agents/agents-reporting.json not found", []);
+  }
+
+  let config: any;
+  try {
+    config = JSON.parse(readFileSync(KIRO_AGENT_PATH, "utf-8"));
+  } catch {
+    return doctorResult(spec, "broken", "could not parse ~/.kiro/agents/agents-reporting.json", []);
+  }
+  if (!isOurKiroAgentConfig(config)) {
+    return doctorResult(spec, "broken", "~/.kiro/agents/agents-reporting.json is not managed by agents", []);
+  }
+
+  const installedEvents: string[] = [];
+  const hooksRoot = config.hooks || {};
+  const expected = kiroHookEntries();
+  for (const event of Object.keys(expected)) {
+    const existing = Array.isArray(hooksRoot[event]) ? hooksRoot[event] : [];
+    if (expected[event].every((group) => existing.some((candidate: any) => matchesHookDef(candidate, group)))) {
+      installedEvents.push(event);
+    }
+  }
+
+  const verdict = detailFromMissingEvents(spec.configuredEvents, installedEvents, "Kiro hooks are incomplete");
+  const defaultStatus = kiroDefaultAgentStatus();
+  if (verdict.status === "installed" && !defaultStatus.active) {
+    return doctorResult(spec, "partial", defaultStatus.detail, installedEvents);
+  }
+  return doctorResult(spec, verdict.status, verdict.detail, installedEvents);
+}
+
 function doctorResult(
   spec: AgentIntegrationSpec,
   status: DoctorResult["status"],
@@ -917,6 +1110,8 @@ export function doctor(): DoctorResult[] {
         return doctorPi(spec);
       case "opencode":
         return doctorOpencode(spec);
+      case "kiro":
+        return doctorKiro(spec);
     }
   });
 }
@@ -930,7 +1125,9 @@ function computeSetupHash(): string {
   const h = createHash("sha256");
   h.update(JSON.stringify(CLAUDE_HOOKS));
   h.update(JSON.stringify(codexHooksConfig()));
-  for (const ext of ["codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs"]) {
+  h.update(JSON.stringify(kiroAgentConfig()));
+  h.update("kiro-default-agent-v1");
+  for (const ext of ["codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs", "kiro/report-state.sh"]) {
     const p = join(EXTENSIONS_DIR, ext);
     try { h.update(readFileSync(p)); } catch {}
   }

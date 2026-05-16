@@ -62,4 +62,16 @@ describe("findAgentOnTtyProcessInTree", () => {
       process: processTree.byPid.get(69927),
     });
   });
+
+  it("normalizes kiro-cli-chat process names", () => {
+    const processTree = tree([
+      proc(71000, 1, "zsh", "ttys030", 0, 8, "zsh"),
+      proc(71042, 71000, "kiro-cli-chat", "ttys030", 2, 90, "kiro-cli-chat chat --tui"),
+    ]);
+
+    expect(findAgentOnTtyProcessInTree("/dev/ttys030", processTree)).toEqual({
+      agentName: "kiro",
+      process: processTree.byPid.get(71042),
+    });
+  });
 });

@@ -62,6 +62,16 @@ interface ResumeInvocationOptions {
   overrideArgs?: string[];
 }
 
+function normalizeAgentName(agent: string): string {
+  const normalized = agent.split("/").pop()?.toLowerCase() || agent.toLowerCase();
+  if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
+  return normalized;
+}
+
+function defaultBaseArgv(agent: string): string[] {
+  return normalizeAgentName(agent) === "kiro" ? ["kiro-cli", "chat", "--tui"] : [normalizeAgentName(agent)];
+}
+
 export function agentStatusRequiresForce(status?: AgentStatus): boolean {
   return status !== "idle";
 }
@@ -87,18 +97,19 @@ export function agentResumeInvocation(
   target: ResolvedResumeTarget,
   options: ResumeInvocationOptions = {},
 ): ResumeInvocation | undefined {
-  const baseArgv = profileArgvForAgent(agent, options.profile);
+  const agentName = normalizeAgentName(agent);
+  const baseArgv = profileArgvForAgent(agentName, options.profile);
   if (target.targetKind === "new-session") {
     return {
       strategy: "restart",
-      argv: buildResumeArgv(baseArgv ?? [agent.toLowerCase()], [
-        ...promptArgsForAgent(agent, options.prompt),
+      argv: buildResumeArgv(baseArgv ?? defaultBaseArgv(agentName), [
+        ...promptArgsForAgent(agentName, options.prompt),
         ...(options.overrideArgs || []),
       ]),
     };
   }
 
-  switch (agent.toLowerCase()) {
+  switch (agentName) {
     case "claude":
       if (target.targetKind !== "session-id") return undefined;
       return {
@@ -133,6 +144,12 @@ export function agentResumeInvocation(
         strategy: "restart",
         argv: buildResumeArgv(baseArgv ?? ["opencode"], ["--session", target.target]),
       };
+    case "kiro":
+      if (target.targetKind !== "session-id") return undefined;
+      return {
+        strategy: "restart",
+        argv: buildResumeArgv(baseArgv ?? defaultBaseArgv("kiro"), ["--resume-id", target.target]),
+      };
     default:
       return undefined;
   }
@@ -142,8 +159,8 @@ function profileArgvForAgent(agent: string, profile?: LaunchProfile): string[] |
   if (!profile?.command) return undefined;
   try {
     const argv = splitCommandArgv(profile.command);
-    const executable = argv[0]?.split("/").pop()?.toLowerCase();
-    return executable === agent.toLowerCase() ? argv : undefined;
+    const executable = argv[0] || "";
+    return normalizeAgentName(executable) === normalizeAgentName(agent) ? argv : undefined;
   } catch {
     return undefined;
   }
@@ -217,7 +234,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     };
   }
 
-  const resumeAgent = options.agent?.toLowerCase() || pane.agent;
+  const resumeAgent = normalizeAgentName(options.agent || pane.agent);
   const reasoningEffort = resumeAgent === "codex" && target.targetKind === "session-id"
     ? codexReasoningEffortForSession(target.target)
     : undefined;

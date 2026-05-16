@@ -3,7 +3,7 @@ import { inferContextFromContent, inferModelMetadataFromContent, readCodexTokenU
 import type { ModelMetadata, StateSnapshot } from "./state.js";
 import type { AgentRuntimeState } from "./scanner-types.js";
 
-const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode"]);
+const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode", "kiro"]);
 const CODEX_SESSION_USAGE_MAX_SKEW_SECONDS = 300;
 
 export function isHookAuthoritativeAgent(agent: string): boolean {

@@ -22,9 +22,14 @@ interface AgentProcessMatch extends AgentLeafProcess {
   depth: number;
 }
 
-const AGENT_PROC_NAMES = ["claude", "copilot", "opencode", "codex", "cursor", "pi"] as const;
+const AGENT_PROC_NAMES = ["claude", "copilot", "opencode", "codex", "cursor", "pi", "kiro", "kiro-cli", "kiro-cli-chat"] as const;
 const AGENT_PROCS = new RegExp(`^(${AGENT_PROC_NAMES.join("|")})$`, "i");
 const WRAPPER_PROCS = new Set(["node", "bun", "bunx", "deno", "tsx", "ts-node", "env", "npm", "npx", "pnpm", "yarn"]);
+const AGENT_PROC_ALIASES: Record<string, string> = {
+  "kiro": "kiro",
+  "kiro-cli": "kiro",
+  "kiro-cli-chat": "kiro",
+};
 
 function normalizeProcessToken(token: string): string {
   if (!token) return "";
@@ -48,7 +53,9 @@ export function detectAgentProcess(comm: string, args: string): string | null {
   }
 
   for (const candidate of candidates) {
-    if (AGENT_PROCS.test(candidate)) return candidate.toLowerCase();
+    if (!AGENT_PROCS.test(candidate)) continue;
+    const normalized = candidate.toLowerCase();
+    return AGENT_PROC_ALIASES[normalized] || normalized;
   }
   return null;
 }

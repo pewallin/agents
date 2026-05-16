@@ -27,6 +27,13 @@ describe("getDetector", () => {
     expect(d.isQuestion("Open Questions\n- Should this happen?\n› Summarize recent commits", "%missing-codex")).toBe(false);
   });
 
+  it("returns hook-only detector for kiro", () => {
+    const d = getDetector("kiro");
+    expect(d).toBeDefined();
+    expect(d.isWorking("⠋ Working...", "", "%missing-kiro")).toBe(false);
+    expect(d.isApproval("Do you want to run this command? (Y/n)", "%missing-kiro")).toBe(false);
+  });
+
   it("is case-insensitive", () => {
     const a = getDetector("Claude");
     const b = getDetector("claude");
@@ -54,6 +61,11 @@ describe("detectAgentProcess", () => {
 
   it("detects codex from a truncated comm using full args", () => {
     expect(detectAgentProcess("/Users/peter/.nv", "/Users/peter/.nvm/versions/node/v22.20.0/lib/node_modules/@openai/codex/vendor/codex/codex --full-auto")).toBe("codex");
+  });
+
+  it("normalizes kiro cli process names", () => {
+    expect(detectAgentProcess("kiro-cli", "kiro-cli chat --tui")).toBe("kiro");
+    expect(detectAgentProcess("kiro-cli-chat", "kiro-cli-chat chat --tui")).toBe("kiro");
   });
 });
 
@@ -84,6 +96,17 @@ describe("externalSessionIdFromProcessArgs", () => {
       "opencode",
       "opencode --session opencode-123",
     )).toBe("opencode-123");
+  });
+
+  it("reads kiro resume-id targets", () => {
+    expect(externalSessionIdFromProcessArgs(
+      "kiro",
+      "kiro-cli chat --resume-id kiro-123",
+    )).toBe("kiro-123");
+    expect(externalSessionIdFromProcessArgs(
+      "kiro",
+      "kiro-cli chat --resume-id=kiro-456",
+    )).toBe("kiro-456");
   });
 });
 
@@ -656,6 +679,16 @@ describe("getHistoryResumeInfo", () => {
       argv: ["opencode", "--session", "opencode-123"],
     });
   });
+
+  it("returns restart metadata for kiro sessions", () => {
+    expect(getHistoryResumeInfo("kiro", { sessionId: "kiro-123" })).toEqual({
+      strategy: "restart",
+      target: "kiro-123",
+      targetKind: "session-id",
+      command: "kiro-cli chat --tui --resume-id kiro-123",
+      argv: ["kiro-cli", "chat", "--tui", "--resume-id", "kiro-123"],
+    });
+  });
 });
 
 describe("resume helpers", () => {
@@ -681,7 +714,7 @@ describe("resume helpers", () => {
     });
   });
 
-  it("builds claude, codex, copilot, pi, and opencode resume invocations", () => {
+  it("builds claude, codex, copilot, pi, opencode, and kiro resume invocations", () => {
     expect(agentResumeInvocation("claude", { target: "claude-123", targetKind: "session-id" })).toEqual({
       strategy: "restart",
       argv: ["claude", "--resume", "claude-123"],
@@ -701,6 +734,10 @@ describe("resume helpers", () => {
     expect(agentResumeInvocation("opencode", { target: "opencode-123", targetKind: "session-id" })).toEqual({
       strategy: "restart",
       argv: ["opencode", "--session", "opencode-123"],
+    });
+    expect(agentResumeInvocation("kiro", { target: "kiro-123", targetKind: "session-id" })).toEqual({
+      strategy: "restart",
+      argv: ["kiro-cli", "chat", "--tui", "--resume-id", "kiro-123"],
     });
   });
 
@@ -751,6 +788,18 @@ describe("resume helpers", () => {
       strategy: "restart",
       argv: ["opencode", "--prompt", "Review this item"],
     });
+
+    expect(agentResumeInvocation(
+      "kiro",
+      { target: "new-session", targetKind: "new-session" },
+      {
+        profile: { command: "kiro-cli chat --tui --agent agents-reporting" },
+        prompt: "Review this item",
+      },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["kiro-cli", "chat", "--tui", "--agent", "agents-reporting", "Review this item"],
+    });
   });
 
   it("carries matching profile args into resume invocations", () => {
@@ -779,6 +828,15 @@ describe("resume helpers", () => {
     )).toEqual({
       strategy: "restart",
       argv: ["copilot", "--allow-all-tools", "--resume=copilot-123"],
+    });
+
+    expect(agentResumeInvocation(
+      "kiro",
+      { target: "kiro-123", targetKind: "session-id" },
+      { profile: { command: "kiro-cli chat --tui --agent agents-reporting" } },
+    )).toEqual({
+      strategy: "restart",
+      argv: ["kiro-cli", "chat", "--tui", "--agent", "agents-reporting", "--resume-id", "kiro-123"],
     });
   });
 
@@ -1123,7 +1181,7 @@ describe("filterAgents", () => {
   });
 });
 
-describe("generic detector (screen-scraping)", () => {
+describe("generic detector patterns", () => {
   // Get the generic detector via an unknown agent name
   const detector = getDetector("codex");
 

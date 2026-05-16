@@ -463,7 +463,8 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
  *  This captures the authoritative session/cwd before preview swaps can muddy it. */
 function seedWorkspaceState(agentPaneId: string, agentCommand: string, snapshot: WorkspaceSnapshot): void {
   // Infer agent name from command (e.g. "claude --dangerously-skip-permissions" → "claude")
-  const agent = agentCommand.split(/\s+/)[0].replace(/.*\//, "").toLowerCase();
+  const executable = agentCommand.split(/\s+/)[0].replace(/.*\//, "").toLowerCase();
+  const agent = executable === "kiro-cli" || executable === "kiro-cli-chat" ? "kiro" : executable;
   // For tmux, also capture session name from the actual pane if not already set
   if (!snapshot.sessionName && agentPaneId.startsWith("%")) {
     try {

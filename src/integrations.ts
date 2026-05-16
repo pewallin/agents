@@ -1,4 +1,4 @@
-export type AgentIntegrationName = "claude" | "codex" | "copilot" | "pi" | "opencode";
+export type AgentIntegrationName = "claude" | "codex" | "copilot" | "pi" | "opencode" | "kiro";
 export type IntegrationInstallMethod = "config-hooks" | "cli-extension" | "plugin-package";
 export type LifecycleCapability = "working" | "idle" | "approval" | "question";
 export type MetadataCapability = "provider" | "modelId" | "modelLabel" | "contextUsage" | "externalSessionId";
@@ -166,6 +166,32 @@ export const INTEGRATION_SPECS: AgentIntegrationSpec[] = [
     },
     notes: [
       "Context usage is extracted opportunistically from OpenCode event payloads when usage fields are present.",
+    ],
+  },
+  {
+    agent: "kiro",
+    installMethod: "config-hooks",
+    configuredEvents: [
+      "agentSpawn",
+      "userPromptSubmit",
+      "preToolUse",
+      "postToolUse",
+      "stop",
+    ],
+    capabilities: {
+      working: true,
+      idle: true,
+      approval: false,
+      question: true,
+      provider: false,
+      modelId: false,
+      modelLabel: false,
+      contextUsage: false,
+      externalSessionId: true,
+    },
+    notes: [
+      "Setup creates the global Kiro agent config `agents-reporting` and sets it as the default when no Kiro default exists; launch with `--agent agents-reporting` when another default is configured.",
+      "Approval is not reported until Kiro CLI exposes a dedicated hook event for permission prompts.",
     ],
   },
 ];

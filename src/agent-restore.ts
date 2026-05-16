@@ -98,9 +98,15 @@ function tokenBasename(token: string): string {
   return basename(token.replace(/^['"]+|['"]+$/g, "")).replace(/^-/, "").toLowerCase();
 }
 
+function normalizeAgentName(agent: string): string {
+  const normalized = tokenBasename(agent);
+  if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
+  return normalized;
+}
+
 function agentIndex(argv: string[], agent: string): number {
-  const normalized = agent.toLowerCase();
-  return argv.findIndex((token) => tokenBasename(token) === normalized);
+  const normalized = normalizeAgentName(agent);
+  return argv.findIndex((token) => normalizeAgentName(token) === normalized);
 }
 
 function optionsWithValues(agent: string): Set<string> {
@@ -155,6 +161,13 @@ function explicitTargetFromArgs(agent: string, argv: string[]): string | undefin
       const target = resumeIndex >= 0 ? args[resumeIndex + 1] : undefined;
       return target && !target.startsWith("-") ? target : undefined;
     }
+    case "kiro": {
+      const resumeArg = args.find((arg) => arg.startsWith("--resume-id="));
+      if (resumeArg) return resumeArg.slice("--resume-id=".length) || undefined;
+      const resumeIndex = args.indexOf("--resume-id");
+      const target = resumeIndex >= 0 ? args[resumeIndex + 1] : undefined;
+      return target && !target.startsWith("-") ? target : undefined;
+    }
     default:
       return undefined;
   }
@@ -174,7 +187,7 @@ function profileArgvForAgent(agent: string): string[] | undefined {
   try {
     const profile = resolveProfile(agent);
     const argv = splitCommandArgv(profile.command);
-    if (tokenBasename(argv[0] || "") !== agent.toLowerCase()) return undefined;
+    if (normalizeAgentName(argv[0] || "") !== normalizeAgentName(agent)) return undefined;
     return originalBaseArgv(agent, argv) || argv;
   } catch {
     return undefined;
@@ -193,6 +206,10 @@ function mergeBaseArgv(primary?: string[], secondary?: string[], fallback: strin
   if (!primary?.length || !secondary?.length) return base;
   if (tokenBasename(primary[0] || "") !== tokenBasename(secondary[0] || "")) return base;
   return appendUnique(primary, secondary.slice(1));
+}
+
+function defaultBaseArgv(agent: string): string[] {
+  return normalizeAgentName(agent) === "kiro" ? ["kiro-cli", "chat", "--tui"] : [normalizeAgentName(agent)];
 }
 
 function appendUnique(argv: string[], args: string[]): string[] {
@@ -268,6 +285,14 @@ function originalBaseArgv(agent: string, originalArgv?: string[]): string[] | un
     case "opencode":
     case "pi":
       return [...beforeAgent, ...stripFlagAndValue(afterAgent.filter((arg) => arg !== "--continue"), new Set(["--session"]))];
+    case "kiro":
+      return [
+        ...beforeAgent,
+        ...stripFlagAndValue(
+          afterAgent.filter((arg) => arg !== "--resume" && !arg.startsWith("--resume-id=")),
+          new Set(["--resume-id"]),
+        ),
+      ];
     default:
       return [...beforeAgent, ...afterAgent];
   }
@@ -379,13 +404,13 @@ function resolveSessionId(options: AgentRestoreCommandOptions, originalArgv?: st
 }
 
 export function resolveAgentRestoreArgv(options: AgentRestoreCommandOptions): string[] | undefined {
-  const agent = options.agent.toLowerCase();
+  const agent = normalizeAgentName(options.agent);
   const originalArgv = argvFromOptions(options);
   const sessionId = resolveSessionId(options, originalArgv);
 
   const profileArgv = profileArgvForAgent(agent);
   const originalBase = originalBaseArgv(agent, originalArgv);
-  const baseArgv = mergeBaseArgv(profileArgv, originalBase, [agent]);
+  const baseArgv = mergeBaseArgv(profileArgv, originalBase, defaultBaseArgv(agent));
 
   if (!sessionId) {
     return shouldStartFreshForAmbiguousLast(agent, options.cwd, originalArgv) ? baseArgv : undefined;
@@ -401,6 +426,8 @@ export function resolveAgentRestoreArgv(options: AgentRestoreCommandOptions): st
     case "opencode":
     case "pi":
       return appendUnique(baseArgv, ["--session", sessionId]);
+    case "kiro":
+      return appendUnique(baseArgv, ["--resume-id", sessionId]);
     default:
       return undefined;
   }

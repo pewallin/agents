@@ -3,8 +3,8 @@
 Monitor and manage AI coding agents across tmux sessions (with zellij support in beta).
 
 - Live dashboard with status, preview, and grid view
-- Hook-based reporting for claude, copilot, pi, and opencode
-- Screen-scrape fallback for codex, cursor, and others
+- Hook-based reporting for claude, copilot, pi, opencode, and kiro
+- Conservative process/runtime status for agents without hooks
 - Agent workspaces with profiles, helper panes, and quick jump-back
 
 ## Install
@@ -94,6 +94,10 @@ Add `bind -n M-b run-shell "node ~/code/agents/dist/cli.js back 2>/dev/null || t
     "opencode": {
       "command": "opencode",
       "workspace": "default"
+    },
+    "kiro": {
+      "command": "kiro-cli chat --tui --agent agents-reporting",
+      "workspace": "default"
     }
   },
   "defaultProfile": "claude",
@@ -165,6 +169,7 @@ set -g @resurrect-processes '\
   "~copilot -> agents resurrect agent copilot *" \
   "~opencode -> agents resurrect agent opencode *" \
   "~pi -> agents resurrect agent pi *" \
+  "~kiro-cli -> agents resurrect agent kiro *" \
   "~bv -> bv *" \
   "~lazygit -> lazygit *" \
   "~nvim -> nvim -S Session.vim *" \
@@ -195,12 +200,13 @@ Flags for running agents without approval prompts and for resuming sessions.
 | copilot | `--continue` | `--yolo` | Also has `--resume[=id]` for specific sessions |
 | opencode | `--continue` | — | No auto-approve flag |
 | pi | `--continue` | `--yolo` | Also has `--resume` for interactive picker |
+| kiro | `--resume` or `--resume-id <id>` | `--trust-all-tools` | `agents setup` sets `agents-reporting` as the default agent when no Kiro default exists; use `--agent agents-reporting` when another default is configured |
 
 The recommended tmux setup above restores agent CLIs with explicit resume/YOLO flags and still preserves original args for utility panes via `*`.
 
 ## Status Detection
 
-Hooks report state for claude, copilot, pi, and opencode. Codex, cursor, and anything else fall back to screen-scraping.
+Hooks report state for claude, codex, copilot, pi, opencode, and kiro. Kiro reports only when the `agents-reporting` agent config is active, either as the default from `agents setup` or via `kiro-cli chat --agent agents-reporting`. Agents without hooks are detected by process name but do not inspect terminal content for state.
 
 | Indicator | Meaning |
 |-----------|---------|
@@ -212,7 +218,7 @@ Hooks report state for claude, copilot, pi, and opencode. Codex, cursor, and any
 
 ## Detected Agents
 
-`claude` `copilot` `opencode` `codex` `pi` `cursor`
+`claude` `copilot` `opencode` `codex` `pi` `kiro` `cursor`
 
 ## License
 

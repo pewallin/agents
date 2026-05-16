@@ -741,7 +741,7 @@ function snapshotContextPaths(input: {
       cpSync(sourcePath, checkoutPath, { recursive: true, force: true });
       runGit(
         input.checkoutPath,
-        ["add", "--", gitPath],
+        ["add", "-f", "--", gitPath],
         "snapshot_context",
         "Agents could not stage a snapshot context path in the implementation checkout.",
         "snapshot_stage_failed",

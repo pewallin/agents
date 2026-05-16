@@ -248,6 +248,29 @@ describe("implementation checkout runtime", () => {
     expect(await runGit(sandbox.repoRoot, ["status", "--short", "--", ".shape/plans/item/prd.md", "notes.txt"])).toContain("?? .shape/");
   });
 
+  it("snapshots selected dirty context paths even when the repo ignores them", async () => {
+    const sandbox = await createCommittedRepo();
+    cleanupPaths.push(sandbox.sandboxRoot);
+    await writeFile(path.join(sandbox.repoRoot, ".gitignore"), ".shape\n", "utf8");
+    await runGit(sandbox.repoRoot, ["add", ".gitignore"]);
+    await runGit(sandbox.repoRoot, ["commit", "-m", "ignore shape state"]);
+    await mkdir(path.join(sandbox.repoRoot, ".shape", "plans", "item"), { recursive: true });
+    await writeFile(path.join(sandbox.repoRoot, ".shape", "plans", "item", "prd.md"), "# PRD\n\nIgnored local artifact.\n", "utf8");
+
+    const result = createImplementationCheckout({
+      sourceRepoPath: sandbox.repoRoot,
+      name: "Snapshot ignored context",
+      targetId: "local",
+      baseRef: "main",
+      startRef: "HEAD",
+      snapshotPaths: [".shape/plans/item/prd.md"],
+    });
+
+    expect(await runGit(result.executionCheckout.path, ["cat-file", "-p", "HEAD:.shape/plans/item/prd.md"])).toContain("Ignored local artifact");
+    expect(await runGit(result.executionCheckout.path, ["status", "--short", "--", ".shape/plans/item/prd.md"])).toBe("");
+    expect(await runGit(result.executionCheckout.path, ["log", "--format=%s", "-1"])).toBe("Agents: snapshot checkout context");
+  });
+
   it("reports checkout status with branch, head, ahead/behind, dirty state, and sessions", async () => {
     const sandbox = await createCommittedRepo();
     cleanupPaths.push(sandbox.sandboxRoot);

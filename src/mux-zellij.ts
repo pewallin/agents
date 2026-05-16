@@ -2,7 +2,7 @@
  * Zellij multiplexer backend.
  *
  * Uses a combination of:
- * - zellij 0.44 CLI (`list-panes --json`, `dump-screen --pane-id`, `new-pane`)
+ * - zellij 0.44 CLI (`list-panes --json`, `new-pane`)
  * - WASM bridge plugin via `zellij action pipe` for operations the CLI can't do
  *   (focus by ID, break pane cross-tab, get PID)
  */
@@ -180,12 +180,6 @@ export class ZellijMux implements Multiplexer {
 
   async listPanesAsync(): Promise<MuxPaneInfo[]> {
     return this.listPanes();
-  }
-
-  getPaneContent(paneId: string, _lines?: number): string {
-    // zellij dump-screen returns the viewport (no line count flag)
-    // Use --pane-id to target specific pane without focus
-    return exec(`zellij action dump-screen --pane-id ${paneId} 2>/dev/null`);
   }
 
   createSplit(targetPaneId: string, direction: "right" | "down", size?: string): string | null {

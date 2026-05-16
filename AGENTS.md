@@ -57,6 +57,7 @@ extensions/
   copilot/           — Copilot CLI extension (extension.mjs, uses SDK events)
   pi/                — Pi extension (TypeScript, lives in dustbot repo)
   opencode/          — OpenCode plugin (index.mjs, installed as npm package)
+  kiro/              — Kiro CLI hook script (wired via ~/.kiro/agents/agents-reporting.json and Kiro's default agent setting when unset)
 
 bridge-plugin/       — Rust WASM plugin for zellij (see bridge-plugin/README.md)
 docs/                — feature plans (zellij-support.md)
@@ -64,11 +65,11 @@ docs/                — feature plans (zellij-support.md)
 
 ## Key concepts
 
-**Agent detection**: The scanner walks pane process trees looking for known agent binaries (`claude`, `copilot`, `opencode`, `codex`, `cursor`, `pi`). It also checks TTY sessions for agents that spawn under shells.
+**Agent detection**: The scanner walks pane process trees looking for known agent binaries (`claude`, `copilot`, `opencode`, `codex`, `cursor`, `pi`, `kiro-cli`). It also checks TTY sessions for agents that spawn under shells.
 
 **Status detection** has two modes:
-- **Hook-based** (claude, codex, copilot, pi, opencode): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`. Falls back to screen-scraping for approval detection only.
-- **Screen-scraping** (cursor, others): Pattern-matches pane content for spinners, prompts, permission dialogs. The generic detector regexes are tested in `scanner.test.ts`.
+- **Hook-based** (claude, codex, copilot, pi, opencode, kiro): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`.
+- **Process/runtime fallback** (cursor, others): Detects panes by process name and reports conservative activity-derived status without reading terminal content.
 
 **Preview**: The dashboard swaps an agent pane into a split beside itself using `tmux swap-pane`. Pane IDs follow the process (not the position) after a swap. `filterAgents()` in scanner.ts handles re-adding swapped agents to the scan results.
 

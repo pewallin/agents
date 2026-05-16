@@ -23,7 +23,6 @@ export interface Multiplexer {
   // Discovery
   listPanes(): MuxPaneInfo[];
   listPanesAsync(): Promise<MuxPaneInfo[]>;
-  getPaneContent(paneId: string, lines?: number): string;
 
   // Pane operations
   createSplit(targetPaneId: string, direction: "right" | "down", size?: string): string | null;

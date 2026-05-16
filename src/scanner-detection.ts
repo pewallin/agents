@@ -225,6 +225,7 @@ const codexDetector = makeHookFirstDetector("codex");
 const copilotDetector = makeHookDetector("copilot");
 const piDetector = makeHookDetector("pi");
 const opencodeDetector = makeHookDetector("opencode");
+const kiroDetector = makeHookDetector("kiro");
 
 export function getDetector(agent: string, snapshot?: StateSnapshot): AgentDetector {
   switch (agent.toLowerCase()) {
@@ -233,6 +234,7 @@ export function getDetector(agent: string, snapshot?: StateSnapshot): AgentDetec
     case "copilot":  return snapshot ? makeHookDetector("copilot", snapshot) : copilotDetector;
     case "pi":       return snapshot ? makeHookDetector("pi", snapshot) : piDetector;
     case "opencode": return snapshot ? makeHookDetector("opencode", snapshot) : opencodeDetector;
+    case "kiro":     return snapshot ? makeHookDetector("kiro", snapshot) : kiroDetector;
     default:          return genericDetector;
   }
 }
@@ -335,7 +337,7 @@ export function reconcileStaleCodexWorkingState(
   if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
 }
 
-export const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode"]);
+export const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode", "kiro"]);
 
 export function resolveStatusFromContent(
   title: string,
@@ -348,13 +350,14 @@ export function resolveStatusFromContent(
 ): { status: AgentStatus; detail?: string } {
   const detector = getDetector(agent, snapshot);
   const dur = stateDuration(agent, tmuxPaneId, snapshot);
+  const agentName = agent.toLowerCase();
 
-  if (HOOK_AGENTS.has(agent.toLowerCase())) {
-    const content = agent.toLowerCase() === "codex" ? tailContent : "";
-    if (agent.toLowerCase() === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId, snapshot);
+  if (HOOK_AGENTS.has(agentName)) {
+    const content = agentName === "codex" ? tailContent : "";
+    if (agentName === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId, snapshot);
 
     if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
-    const disconnected = agent.toLowerCase() === "codex" ? codexStreamDisconnectStatus(tmuxPaneId, snapshot) : undefined;
+    const disconnected = agentName === "codex" ? codexStreamDisconnectStatus(tmuxPaneId, snapshot) : undefined;
     if (disconnected) return disconnected;
     if (detector.isIdle(content, title, tmuxPaneId)) {
       if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
@@ -371,9 +374,10 @@ export function resolveStatusFromContent(
   }
   if (detector.isWorking(tailContent, title, tmuxPaneId)) return { status: "working", detail: dur };
 
-  const full = fullPane ?? "";
-  const isEmpty = full.replace(/\s/g, "").length === 0;
-  if (isEmpty) return { status: "idle" };
+  if (fullPane !== undefined) {
+    const isEmpty = fullPane.replace(/\s/g, "").length === 0;
+    if (isEmpty) return { status: "idle" };
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const age = now - windowActivity;

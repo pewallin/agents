@@ -72,11 +72,6 @@ export class TmuxMux implements Multiplexer {
     }).filter(p => !isLinkedSession(p.session));
   }
 
-  getPaneContent(paneId: string, lines?: number): string {
-    const lineFlag = lines ? `-S -${lines}` : "";
-    return exec(`tmux capture-pane -t ${paneId} -p ${lineFlag} 2>/dev/null`);
-  }
-
   createSplit(targetPaneId: string, direction: "right" | "down", size?: string): string | null {
     const flag = direction === "right" ? "-h" : "-v";
     const sizeFlag = size ? ` -l ${size}` : "";

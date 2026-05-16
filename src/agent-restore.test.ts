@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { normalizeTmuxResurrectContent, resolveAgentRestoreCommand } from "./agent-restore.js";
+import {
+  normalizeTmuxResurrectContent,
+  resolveAgentRestoreCommand,
+} from "./agent-restore.js";
 import { reloadConfig } from "./config.js";
 import type { StateEntry } from "./state.js";
 
@@ -91,6 +94,26 @@ describe("resolveAgentRestoreCommand", () => {
       })).toBe("codex --dangerously-bypass-approvals-and-sandbox");
     });
   });
+
+  it("restores kiro-cli panes with explicit resume ids", () => {
+    withIsolatedAgentsHome((_root, stateDir) => {
+      writeState(stateDir, "kiro-%1.json", {
+        state: "idle",
+        ts: now,
+        agent: "kiro",
+        session: "%1",
+        externalSessionId: "kiro-session-123",
+        workspace: { cwd: "/repo", command: "kiro-cli chat --tui --agent agents-reporting" },
+      });
+
+      expect(resolveAgentRestoreCommand({
+        agent: "kiro",
+        cwd: "/repo",
+        originalArgv: ["kiro-cli", "chat", "--tui", "--agent", "agents-reporting", "--resume"],
+      })).toBe("kiro-cli chat --tui --agent agents-reporting --resume-id kiro-session-123");
+    });
+  });
+
 });
 
 describe("normalizeTmuxResurrectContent", () => {
