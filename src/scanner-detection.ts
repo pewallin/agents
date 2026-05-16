@@ -21,11 +21,22 @@ export interface CodexOpEntry {
   at?: number;
 }
 
+export interface CodexStreamDisconnectEntry {
+  at?: number;
+  attempt?: number;
+  maxAttempts?: number;
+}
+
 let codexOpCache: { mtimeMs: number; latestOps: Map<string, CodexOpEntry> } | null = null;
+let codexStreamDisconnectCache: {
+  mtimeMs: number;
+  latestDisconnects: Map<string, CodexStreamDisconnectEntry>;
+} | null = null;
 
 const CODEX_STALE_WORKING_MIN_AGE_SECONDS = 120;
 const CODEX_STALE_WORKING_SAMPLE_INTERVAL_SECONDS = 30;
 const CODEX_STALE_WORKING_REQUIRED_SAMPLES = 2;
+const CODEX_STREAM_DISCONNECT_ACTIVE_SECONDS = 180;
 
 function codexLogTimestamp(line: string): number | undefined {
   const match = line.match(/^(\d{4}-\d{2}-\d{2}T[^\s]+Z)\s/);
@@ -56,6 +67,24 @@ export function extractLatestCodexOpsFromLogLines(lines: string[]): Map<string, 
   );
 }
 
+export function extractLatestCodexStreamDisconnectEntriesFromLogLines(lines: string[]): Map<string, CodexStreamDisconnectEntry> {
+  const latestDisconnects = new Map<string, CodexStreamDisconnectEntry>();
+  for (const line of lines) {
+    if (!line) continue;
+    const threadMatch = line.match(/thread_id=([0-9a-f-]+)/i) || line.match(/thread\.id=([0-9a-f-]+)/i);
+    if (!threadMatch) continue;
+    const disconnectMatch = line.match(/stream disconnected - retrying sampling request \((\d+)\/(\d+)\b/i);
+    if (!disconnectMatch) continue;
+    const at = codexLogTimestamp(line);
+    latestDisconnects.set(threadMatch[1], {
+      attempt: Number(disconnectMatch[1]),
+      maxAttempts: Number(disconnectMatch[2]),
+      ...(at !== undefined ? { at } : {}),
+    });
+  }
+  return latestDisconnects;
+}
+
 function latestCodexOpEntries(): Map<string, CodexOpEntry> {
   if (!existsSync(codexLogPath)) return new Map();
   try {
@@ -66,6 +95,21 @@ function latestCodexOpEntries(): Map<string, CodexOpEntry> {
     const latestOps = extractLatestCodexOpEntriesFromLogLines(tail.split("\n"));
     codexOpCache = { mtimeMs, latestOps };
     return latestOps;
+  } catch {
+    return new Map();
+  }
+}
+
+function latestCodexStreamDisconnectEntries(): Map<string, CodexStreamDisconnectEntry> {
+  if (!existsSync(codexLogPath)) return new Map();
+  try {
+    const mtimeMs = statSync(codexLogPath).mtimeMs;
+    if (codexStreamDisconnectCache?.mtimeMs === mtimeMs) return codexStreamDisconnectCache.latestDisconnects;
+
+    const tail = exec(`tail -n 4000 ${JSON.stringify(codexLogPath)} 2>/dev/null`);
+    const latestDisconnects = extractLatestCodexStreamDisconnectEntriesFromLogLines(tail.split("\n"));
+    codexStreamDisconnectCache = { mtimeMs, latestDisconnects };
+    return latestDisconnects;
   } catch {
     return new Map();
   }
@@ -93,6 +137,28 @@ function isCodexInterruptedAfterState(
   const op = codexOps.get(externalSessionId);
   if (op?.op !== "interrupt" || op.at === undefined) return false;
   return op.at >= entry.ts + 1;
+}
+
+export function codexStreamDisconnectStatus(
+  paneId?: string,
+  snapshot?: StateSnapshot,
+  disconnects: Map<string, CodexStreamDisconnectEntry> = latestCodexStreamDisconnectEntries(),
+  now: number = Math.floor(Date.now() / 1000),
+): { status: "stalled"; detail: string } | undefined {
+  const externalSessionId = stateExternalSessionId("codex", paneId, snapshot);
+  if (!externalSessionId) return undefined;
+  const disconnect = disconnects.get(externalSessionId);
+  if (!disconnect?.at) return undefined;
+  if (now - disconnect.at > CODEX_STREAM_DISCONNECT_ACTIVE_SECONDS) return undefined;
+
+  const entry = paneId ? getAgentStateEntry("codex", paneId, snapshot) : null;
+  if (entry?.ts && disconnect.at < entry.ts - 1) return undefined;
+  if (entry?.state === "approval" || entry?.state === "question") return undefined;
+
+  const retry = disconnect.attempt && disconnect.maxAttempts
+    ? ` ${disconnect.attempt}/${disconnect.maxAttempts}`
+    : "";
+  return { status: "stalled", detail: `stream disconnected${retry}` };
 }
 
 const genericDetector: AgentDetector = {
@@ -288,6 +354,8 @@ export function resolveStatusFromContent(
     if (agent.toLowerCase() === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId, snapshot);
 
     if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
+    const disconnected = agent.toLowerCase() === "codex" ? codexStreamDisconnectStatus(tmuxPaneId, snapshot) : undefined;
+    if (disconnected) return disconnected;
     if (detector.isIdle(content, title, tmuxPaneId)) {
       if (detector.isQuestion(content, tmuxPaneId)) return { status: "question", detail: dur };
       return { status: "idle" };

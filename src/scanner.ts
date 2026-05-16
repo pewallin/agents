@@ -19,7 +19,7 @@ import type { AgentPane, AgentRuntimeState, AgentStatus } from "./scanner-types.
 export type { AgentPane, AgentRuntimeState, AgentStatus } from "./scanner-types.js";
 export type { AgentSessionHistoryItem } from "./scanner-history.js";
 export { extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent } from "./scanner-runtime.js";
-export { extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, getDetector, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner-detection.js";
+export { codexStreamDisconnectStatus, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, getDetector, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner-detection.js";
 export { detectAgentProcess } from "./scanner-discovery.js";
 export { extractClaudeRenameTitleFromTranscript, extractLatestCodexSessionTitlesFromIndexLines } from "./scanner-history.js";
 export { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";

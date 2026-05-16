@@ -1,7 +1,7 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget } from "./resume.js";
 import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
@@ -257,6 +257,70 @@ describe("extractLatestCodexOpsFromLogLines", () => {
       op: "interrupt",
       at: Date.parse("2026-03-31T14:00:39.500000Z") / 1000,
     });
+  });
+});
+
+describe("codex stream disconnect detection", () => {
+  it("tracks the latest stream disconnect per thread", () => {
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const latest = extractLatestCodexStreamDisconnectEntriesFromLogLines([
+      `2026-03-31T14:00:35.250000Z WARN session_loop{thread_id=${thread}}:turn{thread.id=${thread}}: codex_core::session::turn: stream disconnected - retrying sampling request (1/5 in 218ms)...`,
+      `2026-03-31T14:00:39.500000Z WARN session_loop{thread_id=${thread}}:turn{thread.id=${thread}}: codex_core::session::turn: stream disconnected - retrying sampling request (2/5 in 379ms)...`,
+    ]);
+
+    expect(latest.get(thread)).toEqual({
+      attempt: 2,
+      maxAttempts: 5,
+      at: Date.parse("2026-03-31T14:00:39.500000Z") / 1000,
+    });
+  });
+
+  it("marks a codex pane stalled for a fresh stream disconnect on the current session", () => {
+    const session = `%vitest-codex-stream-disconnect-${Date.now()}`;
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const statePath = join(getStateDir(), `codex-${session}.json`);
+    reportState("codex", session, "working", { externalSessionId: thread });
+    try {
+      const entry = getAgentStateEntry("codex", session)!;
+      const disconnects = new Map([[thread, { attempt: 4, maxAttempts: 5, at: entry.ts + 10 }]]);
+
+      expect(codexStreamDisconnectStatus(session, undefined, disconnects, entry.ts + 20)).toEqual({
+        status: "stalled",
+        detail: "stream disconnected 4/5",
+      });
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
+  it("ignores stream disconnects from an earlier state generation", () => {
+    const session = `%vitest-codex-old-stream-disconnect-${Date.now()}`;
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const statePath = join(getStateDir(), `codex-${session}.json`);
+    reportState("codex", session, "working", { externalSessionId: thread });
+    try {
+      const entry = getAgentStateEntry("codex", session)!;
+      const disconnects = new Map([[thread, { attempt: 5, maxAttempts: 5, at: entry.ts - 10 }]]);
+
+      expect(codexStreamDisconnectStatus(session, undefined, disconnects, entry.ts + 20)).toBeUndefined();
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
+  it("expires stale stream disconnect warnings", () => {
+    const session = `%vitest-codex-expired-stream-disconnect-${Date.now()}`;
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
+    const statePath = join(getStateDir(), `codex-${session}.json`);
+    reportState("codex", session, "working", { externalSessionId: thread });
+    try {
+      const entry = getAgentStateEntry("codex", session)!;
+      const disconnects = new Map([[thread, { attempt: 5, maxAttempts: 5, at: entry.ts + 10 }]]);
+
+      expect(codexStreamDisconnectStatus(session, undefined, disconnects, entry.ts + 191)).toBeUndefined();
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
   });
 });
 
