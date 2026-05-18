@@ -19,7 +19,9 @@ describe("runtime state events", () => {
     try {
       writeFileSync(eventPath, "x".repeat(256 * 1024));
 
-      appendRuntimeStateEvent("primary_state", "upsert", "codex", "%runtime-events-test");
+      appendRuntimeStateEvent("primary_state", "upsert", "codex", "%runtime-events-test", {
+        state: "working",
+      });
 
       expect(existsSync(`${eventPath}.1`)).toBe(true);
       const activeLines = readFileSync(eventPath, "utf8").trim().split("\n");
@@ -29,6 +31,7 @@ describe("runtime state events", () => {
         op: "upsert",
         agent: "codex",
         surfaceId: "%runtime-events-test",
+        state: "working",
       });
     } finally {
       restoreEnv("AGENTS_HOME", previousAgentsHome);

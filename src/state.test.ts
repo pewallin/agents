@@ -202,10 +202,14 @@ describe("runtime state events", () => {
       agent: "codex",
       surfaceId: primarySurface,
       mux: "tmux",
+      state: "working",
+      externalSessionId: "ext-123",
+      stateSource: "primary",
     });
   });
 
   it("appends contributor upsert and remove events", () => {
+    reportState("pi", contributorSurface, "idle");
     reportContributorState("pi", contributorSurface, "dustbot-sandbox", "approval", { detail: "sandbox approval" });
     reportContributorState("pi", contributorSurface, "dustbot-sandbox", "idle");
 
@@ -218,6 +222,9 @@ describe("runtime state events", () => {
         surfaceId: contributorSurface,
         reporter: "dustbot-sandbox",
         mux: "tmux",
+        state: "approval",
+        detail: "sandbox approval",
+        stateSource: "contributor",
       }),
       expect.objectContaining({
         entity: "contributor_state",
@@ -226,6 +233,7 @@ describe("runtime state events", () => {
         surfaceId: contributorSurface,
         reporter: "dustbot-sandbox",
         mux: "tmux",
+        state: "idle",
       }),
     ]);
   });

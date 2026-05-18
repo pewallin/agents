@@ -4,6 +4,8 @@ import { getRuntimeStateEventsPath, ensureAgentsDirs } from "./paths.js";
 export type RuntimeMux = "tmux" | "zellij";
 export type RuntimeStateEventEntity = "primary_state" | "contributor_state";
 export type RuntimeStateEventOperation = "upsert" | "remove";
+export type RuntimeReportedState = "working" | "idle" | "approval" | "question";
+export type RuntimeStateSource = "primary" | "contributor";
 
 export interface RuntimeLocator {
   surfaceId: string;
@@ -17,6 +19,22 @@ export interface RuntimeStateEvent extends RuntimeLocator {
   op: RuntimeStateEventOperation;
   agent: string;
   reporter?: string;
+  state?: RuntimeReportedState;
+  detail?: string;
+  externalSessionId?: string;
+  stateSource?: RuntimeStateSource;
+  primaryState?: RuntimeReportedState;
+  auxiliaryReporters?: string[];
+}
+
+export interface RuntimeStateEventOptions {
+  reporter?: string;
+  state?: RuntimeReportedState;
+  detail?: string;
+  externalSessionId?: string;
+  stateSource?: RuntimeStateSource;
+  primaryState?: RuntimeReportedState;
+  auxiliaryReporters?: string[];
 }
 
 const DEFAULT_RUNTIME_STATE_EVENTS_MAX_BYTES = 5 * 1024 * 1024;
@@ -38,9 +56,12 @@ export function appendRuntimeStateEvent(
   op: RuntimeStateEventOperation,
   agent: string,
   surfaceId: string,
-  reporter?: string,
+  optionsOrReporter?: RuntimeStateEventOptions | string,
 ): RuntimeStateEvent {
   ensureAgentsDirs();
+  const options: RuntimeStateEventOptions = typeof optionsOrReporter === "string"
+    ? { reporter: optionsOrReporter }
+    : optionsOrReporter ?? {};
 
   const event: RuntimeStateEvent = {
     v: 1,
@@ -49,7 +70,13 @@ export function appendRuntimeStateEvent(
     op,
     agent,
     ...runtimeLocatorForSurface(surfaceId),
-    ...(reporter ? { reporter } : {}),
+    ...(options.reporter ? { reporter: options.reporter } : {}),
+    ...(options.state ? { state: options.state } : {}),
+    ...(options.detail ? { detail: options.detail } : {}),
+    ...(options.externalSessionId ? { externalSessionId: options.externalSessionId } : {}),
+    ...(options.stateSource ? { stateSource: options.stateSource } : {}),
+    ...(options.primaryState ? { primaryState: options.primaryState } : {}),
+    ...(options.auxiliaryReporters?.length ? { auxiliaryReporters: options.auxiliaryReporters } : {}),
   };
 
   const eventPath = getRuntimeStateEventsPath();
