@@ -3,7 +3,7 @@ import { execFileSync } from "child_process";
 import { mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { codexReasoningEffortForSession } from "./scanner-history.js";
-import { resolveProfile } from "./config.js";
+import { loadConfig, resolveProfile, type CommandConfigEntry } from "./config.js";
 import { readStates, type StateEntry } from "./state.js";
 import { getRuntimeTempDir } from "./paths.js";
 
@@ -93,6 +93,8 @@ export function renderCommand(argv: string[]): string {
 }
 
 const AMBIGUOUS_LAST_CLAIM_TTL_MS = 10 * 60 * 1000;
+const SHELL_COMMAND_NAMES = new Set(["$shell", "bash", "fish", "login", "nu", "sh", "tmux", "zsh"]);
+const AGENT_COMMAND_NAMES = new Set(["claude", "codex", "copilot", "kiro", "kiro-cli", "kiro-cli-chat", "opencode", "pi"]);
 
 function tokenBasename(token: string): string {
   return basename(token.replace(/^['"]+|['"]+$/g, "")).replace(/^-/, "").toLowerCase();
@@ -102,6 +104,71 @@ function normalizeAgentName(agent: string): string {
   const normalized = tokenBasename(agent);
   if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
   return normalized;
+}
+
+function isShellCommandName(value: string | undefined): boolean {
+  return SHELL_COMMAND_NAMES.has(tokenBasename(value || ""));
+}
+
+function isAgentCommandName(value: string | undefined): boolean {
+  return AGENT_COMMAND_NAMES.has(tokenBasename(value || ""));
+}
+
+function commandArgv(command: string): string[] {
+  try {
+    return splitCommandArgv(command);
+  } catch {
+    return command.trim().split(/\s+/).filter(Boolean);
+  }
+}
+
+function executableTokens(command: string): string[] {
+  const argv = commandArgv(command);
+  const tokens: string[] = [];
+  let skipNext = false;
+  for (const token of argv) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (token === "env" || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+    if (token === "-u" || token === "--unset") {
+      skipNext = true;
+      continue;
+    }
+    if (token.startsWith("-")) continue;
+    tokens.push(token);
+  }
+  return tokens;
+}
+
+function firstExecutableToken(command: string): string | undefined {
+  return executableTokens(command)[0];
+}
+
+function firstAgentToken(command: string): string | undefined {
+  return executableTokens(command).find(isAgentCommandName);
+}
+
+function commandEnvironmentPrefix(environment?: Record<string, string>): string {
+  const assignments = Object.keys(environment || {})
+    .sort()
+    .flatMap((key) => {
+      const value = environment?.[key];
+      if (value === undefined) return [];
+      return [`${key}=${value}`];
+    });
+  return assignments.length ? `env ${assignments.map(shellQuoteIfNeeded).join(" ")} ` : "";
+}
+
+function renderConfiguredCommand(command: string, environment?: Record<string, string>): string {
+  return `${commandEnvironmentPrefix(environment)}${command}`.trim();
+}
+
+function isShellishFullCommand(command: string | undefined): boolean {
+  const trimmed = (command || "").replace(/^:/, "").trim();
+  if (!trimmed) return true;
+  return isShellCommandName(firstExecutableToken(trimmed));
 }
 
 function agentIndex(argv: string[], agent: string): number {
@@ -447,6 +514,207 @@ export function resolveStateRestoreCommand(entry: StateEntry): string | undefine
     originalCommand: workspace.command,
     externalSessionId: entry.externalSessionId,
   });
+}
+
+interface MetadataPaneEntry {
+  sessionName: string;
+  windowNumber: string;
+  paneIndex: string;
+  commandId?: string;
+  commandCwd?: string;
+  commandLaunch?: string;
+}
+
+interface ResolvedMetadataLaunch {
+  command: string;
+  cwd?: string;
+  source: "metadata" | "config-command" | "profile";
+}
+
+export interface TmuxResurrectMetadataApplyResult {
+  panes: number;
+  metadata: number;
+  changed: number;
+  content: string;
+}
+
+function metadataKey(entry: Pick<MetadataPaneEntry, "sessionName" | "windowNumber" | "paneIndex">): string {
+  return `${entry.sessionName}\0${entry.windowNumber}\0${entry.paneIndex}`;
+}
+
+function parseMetadataEntries(content: string): MetadataPaneEntry[] {
+  return content.split("\n").flatMap((line) => {
+    if (!line.trim()) return [];
+    const fields = line.split("|");
+    if (fields.length < 18) return [];
+    return [{
+      sessionName: fields[0] || "",
+      windowNumber: fields[1] || "",
+      paneIndex: fields[2] || "",
+      commandId: fields[4]?.trim() || undefined,
+      commandCwd: fields[7]?.trim() || undefined,
+      commandLaunch: fields[17]?.trim() || undefined,
+    }];
+  }).filter((entry) => entry.sessionName && entry.windowNumber && entry.paneIndex);
+}
+
+function commandById(commandId: string): CommandConfigEntry | undefined {
+  return loadConfig().commands.find((entry) => entry.id === commandId);
+}
+
+function configuredLaunchForCommandId(commandId: string | undefined): ResolvedMetadataLaunch | undefined {
+  if (!commandId || commandId === "shell") return undefined;
+
+  const commandEntry = commandById(commandId);
+  if (commandEntry && !isShellCommandName(firstExecutableToken(commandEntry.command))) {
+    return {
+      command: renderConfiguredCommand(commandEntry.command, commandEntry.environment),
+      cwd: commandEntry.cwd,
+      source: "config-command",
+    };
+  }
+
+  const profile = loadConfig().profiles[commandId];
+  if (profile?.command) {
+    return {
+      command: renderConfiguredCommand(profile.command, profile.env),
+      source: "profile",
+    };
+  }
+
+  return undefined;
+}
+
+function resolvedLaunchForMetadata(entry: MetadataPaneEntry): ResolvedMetadataLaunch | undefined {
+  if (entry.commandLaunch) {
+    return {
+      command: entry.commandLaunch,
+      cwd: entry.commandCwd,
+      source: "metadata",
+    };
+  }
+
+  const configured = configuredLaunchForCommandId(entry.commandId);
+  if (!configured) return undefined;
+  return {
+    ...configured,
+    cwd: entry.commandCwd || configured.cwd,
+  };
+}
+
+function paneProcessEntryForCommand(command: string): string | undefined {
+  const agent = firstAgentToken(command);
+  if (agent) {
+    return `~${tokenBasename(agent)} -> agents resurrect agent ${normalizeAgentName(agent)} *`;
+  }
+
+  const executable = firstExecutableToken(command);
+  if (!executable || isShellCommandName(executable)) return undefined;
+  return `~${tokenBasename(executable)}`;
+}
+
+function configuredRestoreProcessEntries(): string[] {
+  const config = loadConfig();
+  const entries: string[] = [];
+
+  for (const profile of Object.values(config.profiles)) {
+    if (!profile.command) continue;
+    const entry = paneProcessEntryForCommand(renderConfiguredCommand(profile.command, profile.env));
+    if (entry) entries.push(entry);
+  }
+
+  for (const command of config.commands) {
+    if (!command.command || command.id === "shell") continue;
+    const entry = paneProcessEntryForCommand(renderConfiguredCommand(command.command, command.environment));
+    if (entry) entries.push(entry);
+  }
+
+  return entries;
+}
+
+export function tmuxResurrectRestoreProcesses(content = "", metadataContent = ""): string[] {
+  const entries = new Set<string>();
+  for (const entry of configuredRestoreProcessEntries()) entries.add(entry);
+
+  for (const metadata of parseMetadataEntries(metadataContent)) {
+    const launch = resolvedLaunchForMetadata(metadata);
+    if (!launch) continue;
+    const entry = paneProcessEntryForCommand(launch.command);
+    if (entry) entries.add(entry);
+  }
+
+  for (const line of content.split("\n")) {
+    const fields = line.split("\t");
+    if (fields[0] !== "pane" || fields.length < 11) continue;
+    const savedFullCommand = fields[10]?.startsWith(":") ? fields[10].slice(1) : fields[10];
+    const entry = paneProcessEntryForCommand(savedFullCommand || "");
+    if (entry) entries.add(entry);
+  }
+
+  return [...entries];
+}
+
+export function tmuxResurrectRestoreProcessesForFiles(file?: string, metadataFile?: string): string[] {
+  const content = file ? readFileSync(file, "utf-8") : "";
+  let metadataContent = "";
+  if (metadataFile) {
+    try {
+      metadataContent = readFileSync(metadataFile, "utf-8");
+    } catch {}
+  }
+  return tmuxResurrectRestoreProcesses(content, metadataContent);
+}
+
+export function applyTmuxResurrectMetadataLaunches(
+  content: string,
+  metadataContent: string,
+): TmuxResurrectMetadataApplyResult {
+  const launches = new Map<string, ResolvedMetadataLaunch>();
+  const metadataEntries = parseMetadataEntries(metadataContent);
+  for (const entry of metadataEntries) {
+    const launch = resolvedLaunchForMetadata(entry);
+    if (!launch) continue;
+    launches.set(metadataKey(entry), launch);
+  }
+
+  let panes = 0;
+  let changed = 0;
+  const normalized = content.split("\n").map((line) => {
+    const fields = line.split("\t");
+    if (fields[0] !== "pane" || fields.length < 11) return line;
+    panes += 1;
+
+    const launch = launches.get(metadataKey({
+      sessionName: fields[1],
+      windowNumber: fields[2],
+      paneIndex: fields[5],
+    }));
+    if (!launch) return line;
+
+    const savedFullCommand = fields[10]?.startsWith(":") ? fields[10].slice(1) : fields[10];
+    if (!isShellishFullCommand(savedFullCommand)) return line;
+
+    const nextFullCommand = `:${launch.command}`;
+    const nextDir = launch.cwd ? `:${launch.cwd}` : fields[7];
+    if (fields[10] === nextFullCommand && fields[7] === nextDir) return line;
+    fields[10] = nextFullCommand;
+    fields[7] = nextDir;
+    changed += 1;
+    return fields.join("\t");
+  }).join("\n");
+
+  return { panes, metadata: metadataEntries.length, changed, content: normalized };
+}
+
+export function applyTmuxResurrectMetadataLaunchesFile(file: string, metadataFile: string): TmuxResurrectMetadataApplyResult {
+  const result = applyTmuxResurrectMetadataLaunches(
+    readFileSync(file, "utf-8"),
+    readFileSync(metadataFile, "utf-8"),
+  );
+  if (result.changed > 0) {
+    writeFileSync(file, result.content);
+  }
+  return result;
 }
 
 export interface TmuxResurrectNormalizeResult {

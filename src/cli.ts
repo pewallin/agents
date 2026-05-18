@@ -121,10 +121,12 @@ const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
-const {
-  normalizeTmuxResurrectFile,
-  resolveAgentRestoreArgv,
-} = agentRestore;
+  const {
+    normalizeTmuxResurrectFile,
+    resolveAgentRestoreArgv,
+    applyTmuxResurrectMetadataLaunchesFile,
+    tmuxResurrectRestoreProcessesForFiles,
+  } = agentRestore;
 const {
   AgentsRuntimeError,
   listImplementationTargets,
@@ -160,6 +162,22 @@ function normalizeResurrectFile(file: string, opts: { json?: boolean }): void {
   if (opts.json) {
     console.log(JSON.stringify({ panes: result.panes, changed: result.changed }, null, 2));
   }
+}
+
+function applyResurrectMetadata(file: string, metadataFile: string, opts: { json?: boolean }): void {
+  const result = applyTmuxResurrectMetadataLaunchesFile(file, metadataFile);
+  if (opts.json) {
+    console.log(JSON.stringify({ panes: result.panes, metadata: result.metadata, changed: result.changed }, null, 2));
+  }
+}
+
+function printResurrectProcesses(file: string | undefined, metadataFile: string | undefined, opts: { json?: boolean }): void {
+  const processes = tmuxResurrectRestoreProcessesForFiles(file, metadataFile);
+  if (opts.json) {
+    console.log(JSON.stringify(processes, null, 2));
+    return;
+  }
+  console.log(processes.join("\n"));
 }
 
 function printRuntimeResult(result: unknown, opts: { json?: boolean }, fallback: string): void {
@@ -598,6 +616,26 @@ resurrect
   .option("--json", "Output as JSON")
   .action((file: string, opts) => {
     normalizeResurrectFile(file, opts);
+  });
+
+resurrect
+  .command("apply-metadata")
+  .description("Rewrite a tmux-resurrect save file from Agents pane metadata and config")
+  .argument("<file>", "tmux-resurrect save file path")
+  .argument("<metadataFile>", "Agents pane metadata sidecar path")
+  .option("--json", "Output as JSON")
+  .action((file: string, metadataFile: string, opts) => {
+    applyResurrectMetadata(file, metadataFile, opts);
+  });
+
+resurrect
+  .command("processes")
+  .description("Print tmux-resurrect process entries from Agents config and metadata")
+  .argument("[file]", "tmux-resurrect save file path")
+  .argument("[metadataFile]", "Agents pane metadata sidecar path")
+  .option("--json", "Output as JSON")
+  .action((file: string | undefined, metadataFile: string | undefined, opts) => {
+    printResurrectProcesses(file, metadataFile, opts);
   });
 
 program

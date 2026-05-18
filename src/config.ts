@@ -24,12 +24,24 @@ export interface LaunchProfile {
   resume_args?: string;        // args to append when resuming (e.g. "--resume", "-c")
 }
 
+export interface CommandConfigEntry {
+  id: string;
+  title?: string;
+  command: string;
+  cwd?: string;
+  runtime?: string;
+  exitPersistence?: string;
+  paneTitle?: string;
+  environment?: Record<string, string>;
+}
+
 export interface Config {
   helpers: Record<string, HelperDef[]>;
   workspace: WorkspaceDef[] | Record<string, WorkspaceDef[]>;
   defaultCommand: string;
   profiles: Record<string, LaunchProfile>;
   defaultProfile: string;
+  commands: CommandConfigEntry[];
 }
 
 let _cached: Config | null = null;
@@ -40,6 +52,7 @@ const DEFAULT_CONFIG: Config = {
     claude: { command: "claude --dangerously-skip-permissions", workspace: "default" },
   },
   defaultProfile: "claude",
+  commands: [],
   helpers: {
     default: [
       { process: "lazygit", split: "left", size: "20%" },
@@ -88,6 +101,29 @@ function parseProfiles(raw: any): { profiles: Record<string, LaunchProfile>; def
   };
 }
 
+function parseCommands(raw: any): CommandConfigEntry[] {
+  const commands = Array.isArray(raw.commands) ? raw.commands : [];
+  return commands.flatMap((entry: any, index: number) => {
+    if (!entry || typeof entry !== "object") return [];
+    const command = typeof entry.command === "string" ? entry.command.trim() : "";
+    if (!command) return [];
+    const runtime = typeof entry.runtime === "string" ? entry.runtime.trim() : undefined;
+    const id = typeof entry.id === "string" && entry.id.trim()
+      ? entry.id.trim()
+      : `config-command-${index}-${command}`;
+    return [{
+      id,
+      command,
+      ...(typeof entry.title === "string" && entry.title.trim() ? { title: entry.title.trim() } : {}),
+      ...(typeof entry.cwd === "string" && entry.cwd.trim() ? { cwd: entry.cwd.trim() } : {}),
+      ...(runtime ? { runtime } : {}),
+      ...(typeof entry.exit_persistence === "string" && entry.exit_persistence.trim() ? { exitPersistence: entry.exit_persistence.trim() } : {}),
+      ...(typeof entry.pane_title === "string" && entry.pane_title.trim() ? { paneTitle: entry.pane_title.trim() } : {}),
+      ...(entry.environment && typeof entry.environment === "object" ? { environment: entry.environment as Record<string, string> } : {}),
+    }];
+  });
+}
+
 export function loadConfig(): Config {
   if (_cached) return _cached;
   try {
@@ -100,6 +136,7 @@ export function loadConfig(): Config {
       defaultCommand: raw.defaultCommand || DEFAULT_CONFIG.defaultCommand,
       profiles,
       defaultProfile,
+      commands: parseCommands(raw),
     };
   } catch {
     _cached = { ...DEFAULT_CONFIG };
