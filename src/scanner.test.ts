@@ -3,7 +3,7 @@ import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
-import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget } from "./resume.js";
+import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
 import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
@@ -858,6 +858,23 @@ describe("resume helpers", () => {
       strategy: "restart",
       argv: ["codex", "resume", "-c", "model_reasoning_effort=\"xhigh\"", "thread-123"],
     });
+  });
+
+  it("seeds resumed sessions as idle so stale working state cannot cross respawn boundaries", () => {
+    expect(resumeStateSeedForTarget(
+      { target: "thread-123", targetKind: "session-id" },
+      { pane: "%1", session: "thread-123" },
+    )).toEqual({
+      state: "idle",
+      externalSessionId: "thread-123",
+    });
+  });
+
+  it("does not seed idle for prompted new sessions", () => {
+    expect(resumeStateSeedForTarget(
+      { target: "new-session", targetKind: "new-session" },
+      { pane: "%1", newSession: true, prompt: "Start work" },
+    )).toBeUndefined();
   });
 
   it("does not duplicate profile args already required by resume", () => {

@@ -283,22 +283,28 @@ function isOurCodexHook(group: any): boolean {
   return s.includes("extensions/codex/") || s.includes("report-state.sh") || s.includes("stop-hook.sh") || s.includes("--agent codex");
 }
 
-function ensureCodexHooksEnabled(configText: string): { text: string; changed: boolean } {
-  if (/^codex_hooks\s*=\s*true\s*$/m.test(configText)) return { text: configText, changed: false };
+export function ensureCodexHooksEnabled(configText: string): { text: string; changed: boolean } {
+  let text = configText.replace(/^codex_hooks\s*=\s*(?:true|false)\s*$/gm, "");
+  text = text.replace(/\n{3,}/g, "\n\n");
+  const removedDeprecatedFlag = text !== configText;
 
-  if (/^codex_hooks\s*=\s*false\s*$/m.test(configText)) {
-    return { text: configText.replace(/^codex_hooks\s*=\s*false\s*$/m, "codex_hooks = true"), changed: true };
+  if (/^hooks\s*=\s*true\s*$/m.test(text)) {
+    return { text, changed: removedDeprecatedFlag };
   }
 
-  if (/^\[features\]\s*$/m.test(configText)) {
+  if (/^hooks\s*=\s*false\s*$/m.test(text)) {
+    return { text: text.replace(/^hooks\s*=\s*false\s*$/m, "hooks = true"), changed: true };
+  }
+
+  if (/^\[features\]\s*$/m.test(text)) {
     return {
-      text: configText.replace(/^\[features\]\s*$/m, `[features]\ncodex_hooks = true`),
+      text: text.replace(/^\[features\]\s*$/m, `[features]\nhooks = true`),
       changed: true,
     };
   }
 
-  const suffix = configText.endsWith("\n") || configText.length === 0 ? "" : "\n";
-  return { text: `${configText}${suffix}\n[features]\ncodex_hooks = true\n`, changed: true };
+  const suffix = text.endsWith("\n") || text.length === 0 ? "" : "\n";
+  return { text: `${text}${suffix}\n[features]\nhooks = true\n`, changed: true };
 }
 
 function normalizeCodexHooksJson(hooksJson: Record<string, any>): { hooksJson: Record<string, any>; hookRoot: Record<string, any[]>; changed: boolean } {
@@ -892,7 +898,7 @@ function doctorCodex(spec: AgentIntegrationSpec): DoctorResult {
   }
 
   const installedEvents: string[] = [];
-  if (/^codex_hooks\s*=\s*true\s*$/m.test(configText)) {
+  if (/^hooks\s*=\s*true\s*$/m.test(configText)) {
     const normalized = normalizeCodexHooksJson(hooksJson);
     const hookRoot = normalized.hookRoot;
     const expected = codexHookEntries();
@@ -904,8 +910,8 @@ function doctorCodex(spec: AgentIntegrationSpec): DoctorResult {
     }
   }
 
-  if (!/^codex_hooks\s*=\s*true\s*$/m.test(configText) && installedEvents.length === 0) {
-    return doctorResult(spec, "not-installed", "codex_hooks is not enabled", []);
+  if (!/^hooks\s*=\s*true\s*$/m.test(configText) && installedEvents.length === 0) {
+    return doctorResult(spec, "not-installed", "hooks is not enabled", []);
   }
 
   const verdict = detailFromMissingEvents(spec.configuredEvents, installedEvents, "Codex hooks are incomplete");

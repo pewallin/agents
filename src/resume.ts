@@ -1,10 +1,10 @@
-import { execFileSync } from "child_process";
 import { scan, matchesHistoryPaneFilter } from "./scanner.js";
 import { codexReasoningEffortForSession, renderShellCommand, normalizeHistoryCwd } from "./scanner-history.js";
 import { stateWorkspaceCwd } from "./scanner-state-runtime.js";
-import { clearStateExternalSessionId, readStateSnapshot } from "./state.js";
+import { clearStateExternalSessionId, readStateSnapshot, reportState } from "./state.js";
 import { resolveProfile, type LaunchProfile } from "./config.js";
 import { splitCommandArgv } from "./workspace.js";
+import { execFileCapture } from "./shell.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
 
@@ -62,6 +62,11 @@ interface ResumeInvocationOptions {
   overrideArgs?: string[];
 }
 
+export interface ResumeStateSeed {
+  state: "idle";
+  externalSessionId?: string;
+}
+
 function normalizeAgentName(agent: string): string {
   const normalized = agent.split("/").pop()?.toLowerCase() || agent.toLowerCase();
   if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
@@ -90,6 +95,14 @@ export function resolveResumeTarget(options: ResumeAgentSessionOptions): Resolve
     return { target: options.target, targetKind: options.targetKind };
   }
   return undefined;
+}
+
+export function resumeStateSeedForTarget(target: ResolvedResumeTarget, options: ResumeAgentSessionOptions): ResumeStateSeed | undefined {
+  if (options.prompt?.trim()) return undefined;
+  if (target.targetKind === "session-id") {
+    return { state: "idle", externalSessionId: target.target };
+  }
+  return { state: "idle" };
 }
 
 export function agentResumeInvocation(
@@ -268,7 +281,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     if (target.targetKind === "new-session") {
       clearStateExternalSessionId(resumeAgent, pane.tmuxPaneId);
     }
-    execFileSync("tmux", [
+    const respawn = execFileCapture("tmux", [
       "respawn-pane",
       "-k",
       "-t",
@@ -276,7 +289,10 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
       "-c",
       cwd,
       command,
-    ], { encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] });
+    ]);
+    if (respawn.status !== 0) {
+      throw new Error(respawn.stderr || respawn.stdout || respawn.error?.message || `tmux respawn-pane exited ${respawn.status}`);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -293,6 +309,19 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
       command,
       argv: invocation.argv,
     };
+  }
+
+  const stateSeed = resumeStateSeedForTarget(target, options);
+  if (stateSeed) {
+    try {
+      if (!stateSeed.externalSessionId) {
+        clearStateExternalSessionId(resumeAgent, pane.tmuxPaneId);
+      }
+      reportState(resumeAgent, pane.tmuxPaneId, stateSeed.state, {
+        clearDetail: true,
+        ...(stateSeed.externalSessionId ? { externalSessionId: stateSeed.externalSessionId } : {}),
+      });
+    } catch {}
   }
 
   return {
