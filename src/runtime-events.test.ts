@@ -21,6 +21,7 @@ describe("runtime state events", () => {
 
       appendRuntimeStateEvent("primary_state", "upsert", "codex", "%runtime-events-test", {
         state: "working",
+        intent: "Run focused tests",
       });
 
       expect(existsSync(`${eventPath}.1`)).toBe(true);
@@ -32,6 +33,7 @@ describe("runtime state events", () => {
         agent: "codex",
         surfaceId: "%runtime-events-test",
         state: "working",
+        intent: "Run focused tests",
       });
     } finally {
       restoreEnv("AGENTS_HOME", previousAgentsHome);

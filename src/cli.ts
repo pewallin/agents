@@ -654,6 +654,8 @@ program
   .option("--state <state>", "State: working, idle, approval, question")
   .option("--detail <text>", "Current activity detail (tool name, filename, etc.)")
   .option("--clear-detail", "Clear any previously reported activity detail")
+  .option("--intent <text>", "Current user intent/prompt summary")
+  .option("--clear-intent", "Clear any previously reported intent")
   .option("--model <name>", "Backward-compatible model display string")
   .option("--provider <id>", "Model provider ID")
   .option("--model-id <id>", "Canonical model ID")
@@ -725,6 +727,8 @@ program
         modelLabel,
         modelSource: modelSource as ModelSource | undefined,
         externalSessionId,
+        intent: opts.intent,
+        clearIntent: !!opts.clearIntent,
       });
     } else if (opts.state && opts.auxiliary) {
       reportContributorState(opts.agent, session, opts.reporter, opts.state, {
@@ -734,6 +738,8 @@ program
       reportState(opts.agent, session, opts.state, {
         detail: opts.detail,
         clearDetail: !!opts.clearDetail,
+        intent: opts.intent,
+        clearIntent: !!opts.clearIntent,
         model,
         provider,
         modelId,

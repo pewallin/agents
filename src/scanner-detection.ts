@@ -162,8 +162,7 @@ export function codexStreamDisconnectStatus(
 }
 
 const genericDetector: AgentDetector = {
-  isWorking(content, title) {
-    if (/[⠁-⠿⏳🔄]/.test(title)) return true;
+  isWorking(content, _title) {
     return /Working\.\.\.|Thinking\.\.\.|Running\.\.\.|Generating|Searching|Compiling|[⠁-⠿]/.test(content);
   },
   isIdle(content) {
@@ -193,35 +192,28 @@ function makeHookDetector(agentName: string, snapshot?: StateSnapshot): AgentDet
   };
 }
 
-function makeHookFirstDetector(agentName: string, snapshot?: StateSnapshot): AgentDetector {
+function makeCodexDetector(snapshot?: StateSnapshot): AgentDetector {
   return {
-    isWorking(content, title, paneId) {
-      const s = paneId ? getAgentState(agentName, paneId, snapshot) : null;
-      if (s === "working") return true;
-      if (s === "approval" || s === "question" || s === "idle") return false;
-      return genericDetector.isWorking(content, title, paneId);
+    isWorking(_content, _title, paneId) {
+      return paneId ? getAgentState("codex", paneId, snapshot) === "working" : false;
     },
-    isIdle(content, title, paneId) {
-      const s = paneId ? getAgentState(agentName, paneId, snapshot) : null;
-      if (s !== null) return s === "idle" || s === "question";
-      return genericDetector.isIdle(content, title, paneId);
+    isIdle(_content, _title, paneId) {
+      if (!paneId) return true;
+      const s = getAgentState("codex", paneId, snapshot);
+      return s === "idle" || s === "question" || s === null;
     },
-    isApproval(content, paneId) {
-      return (paneId ? getAgentState(agentName, paneId, snapshot) === "approval" : false)
-        || (agentName === "codex" && isCodexApprovalPending(paneId, snapshot))
-        || genericDetector.isApproval(content, paneId);
+    isApproval(_content, paneId) {
+      return (paneId ? getAgentState("codex", paneId, snapshot) === "approval" : false)
+        || isCodexApprovalPending(paneId, snapshot);
     },
-    isQuestion(content, paneId) {
-      const s = paneId ? getAgentState(agentName, paneId, snapshot) : null;
-      if (s !== null) return s === "question";
-      if (agentName === "codex") return false;
-      return genericDetector.isQuestion(content, paneId);
+    isQuestion(_content, paneId) {
+      return paneId ? getAgentState("codex", paneId, snapshot) === "question" : false;
     },
   };
 }
 
 const claudeDetector = makeHookDetector("claude");
-const codexDetector = makeHookFirstDetector("codex");
+const codexDetector = makeCodexDetector();
 const copilotDetector = makeHookDetector("copilot");
 const piDetector = makeHookDetector("pi");
 const opencodeDetector = makeHookDetector("opencode");
@@ -230,7 +222,7 @@ const kiroDetector = makeHookDetector("kiro");
 export function getDetector(agent: string, snapshot?: StateSnapshot): AgentDetector {
   switch (agent.toLowerCase()) {
     case "claude":   return snapshot ? makeHookDetector("claude", snapshot) : claudeDetector;
-    case "codex":    return snapshot ? makeHookFirstDetector("codex", snapshot) : codexDetector;
+    case "codex":    return snapshot ? makeCodexDetector(snapshot) : codexDetector;
     case "copilot":  return snapshot ? makeHookDetector("copilot", snapshot) : copilotDetector;
     case "pi":       return snapshot ? makeHookDetector("pi", snapshot) : piDetector;
     case "opencode": return snapshot ? makeHookDetector("opencode", snapshot) : opencodeDetector;

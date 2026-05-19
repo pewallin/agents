@@ -120,6 +120,25 @@ describe("reportState", () => {
     expect(getAgentStateEntry("pi", session)?.detail).toBeUndefined();
     expect(getAgentStateEntry("pi", session)?.state).toBe("idle");
   });
+
+  it("preserves and clears reported intent independently of activity detail", () => {
+    const session = `%vitest-intent-${Date.now()}`;
+
+    reportState("pi", session, "working", { detail: "thinking", intent: "Fix Pi intent reporting" });
+    reportState("pi", session, "idle", { clearDetail: true });
+
+    expect(getAgentStateEntry("pi", session)?.detail).toBeUndefined();
+    expect(getAgentStateEntry("pi", session)?.intent).toBe("Fix Pi intent reporting");
+
+    reportState("pi", session, "working", { clearIntent: true });
+
+    expect(getAgentStateEntry("pi", session)?.intent).toBeUndefined();
+    expect(readRuntimeStateEvents().at(-1)).toMatchObject({
+      agent: "pi",
+      surfaceId: session,
+      clearIntent: true,
+    });
+  });
 });
 
 describe("session filtering", () => {
@@ -190,6 +209,7 @@ describe("runtime state events", () => {
 
   it("appends primary state upserts using surface-oriented event fields", () => {
     reportState("codex", primarySurface, "working", {
+      intent: "Run the test suite",
       externalSessionId: "ext-123",
       contextTokens: 42,
     });
@@ -203,6 +223,7 @@ describe("runtime state events", () => {
       surfaceId: primarySurface,
       mux: "tmux",
       state: "working",
+      intent: "Run the test suite",
       externalSessionId: "ext-123",
       stateSource: "primary",
     });

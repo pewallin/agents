@@ -38,10 +38,16 @@ const DEBUG_LOG = process.env.AGENTS_PI_REPORT_DEBUG;
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
 const MAX_DETAIL_LENGTH = 60;
+const MAX_INTENT_LENGTH = 160;
 const TERMINAL_ASSISTANT_STOP_REASONS = new Set(["stop", "length"] as const);
 
 type PiState = "working" | "idle" | "question";
 type AssistantStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+interface ReportMetadata {
+  intent?: string;
+  clearIntent?: boolean;
+}
 
 function debug(event: string, data: Record<string, unknown> = {}): void {
   if (!DEBUG_LOG) return;
@@ -78,16 +84,21 @@ function appendSessionMetadata(args: string[], ctx: any): void {
   } catch {}
 }
 
-function report(state: PiState, ctx: any, detail?: string | null): void {
+function report(state: PiState, ctx: any, detail?: string | null, metadata: ReportMetadata = {}): void {
   const args = ["report", "--agent", "pi", "--state", state, "--session", SESSION_ID];
   if (detail === null) {
     args.push("--clear-detail");
   } else if (detail) {
     args.push("--detail", detail.slice(0, MAX_DETAIL_LENGTH));
   }
+  if (metadata.clearIntent) {
+    args.push("--clear-intent");
+  } else if (metadata.intent) {
+    args.push("--intent", metadata.intent.slice(0, MAX_INTENT_LENGTH));
+  }
   appendModel(args, ctx);
   appendSessionMetadata(args, ctx);
-  debug("report", { state, detail, agentsBin: AGENTS_BIN, args });
+  debug("report", { state, detail, intent: metadata.intent, clearIntent: metadata.clearIntent, agentsBin: AGENTS_BIN, args });
   execFile(AGENTS_BIN, args, (error) => {
     if (error) debug("report_error", { state, detail, message: error.message });
   });
@@ -129,6 +140,13 @@ function normalizeToolDetail(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, MAX_DETAIL_LENGTH) : undefined;
+}
+
+export function normalizeIntent(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  return normalized.slice(0, MAX_INTENT_LENGTH);
 }
 
 function basenameIfPath(value: unknown): string | undefined {
@@ -223,20 +241,24 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   let activePrompt = false;
   let lastState: PiState | undefined;
   let lastDetail: string | undefined;
+  let lastIntent: string | undefined;
+  let pendingIntent: string | undefined;
   let lastAssistantStopReason: AssistantStopReason | undefined;
   let lastAssistantMessageSeen: any | undefined;
   const pendingToolExecutions = new Set<string>();
   const activeToolNames = new Map<string, string>();
 
-  function setState(state: PiState, ctx: any, detail?: string | null, force = false): void {
-    if (!force && lastState === state && lastDetail === detail) return;
-    report(state, ctx, detail);
+  function setState(state: PiState, ctx: any, detail?: string | null, force = false, metadata: ReportMetadata = {}): void {
+    const nextIntent = metadata.clearIntent ? undefined : metadata.intent ?? lastIntent;
+    if (!force && lastState === state && lastDetail === detail && lastIntent === nextIntent) return;
+    report(state, ctx, detail, metadata);
     lastState = state;
     lastDetail = detail ?? undefined;
+    lastIntent = nextIntent;
   }
 
-  function setWorking(ctx: any, detail?: string): void {
-    setState("working", ctx, detail);
+  function setWorking(ctx: any, detail?: string, metadata: ReportMetadata = {}, force = false): void {
+    setState("working", ctx, detail, force, metadata);
   }
 
   function ctxIsIdle(ctx: any): boolean {
@@ -298,13 +320,25 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     }
   }
 
+  pi.on("before_agent_start", async (event: any, ctx: any) => {
+    pendingIntent = normalizeIntent(event?.prompt);
+    debug("before_agent_start", { hasIntent: !!pendingIntent, intent: pendingIntent });
+    activePrompt = true;
+    setWorking(
+      ctx,
+      "starting",
+      pendingIntent ? { intent: pendingIntent } : { clearIntent: true },
+      true,
+    );
+  });
+
   pi.on("agent_start", async (_event: any, ctx: any) => {
     debug("agent_start");
     activePrompt = true;
     lastAssistantStopReason = undefined;
     lastAssistantMessageSeen = undefined;
     clearActivity();
-    setWorking(ctx, "starting");
+    setWorking(ctx, "starting", pendingIntent ? { intent: pendingIntent } : {});
   });
 
   pi.on("agent_end", async (event: any, ctx: any) => {
@@ -430,18 +464,20 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
 
   pi.on("session_switch", async (_event: any, ctx: any) => {
     activePrompt = false;
+    pendingIntent = undefined;
     lastAssistantStopReason = undefined;
     lastAssistantMessageSeen = undefined;
     clearActivity();
-    setState("idle", ctx, null, true);
+    setState("idle", ctx, null, true, { clearIntent: true });
   });
 
   pi.on("session_shutdown", async (_event: any, ctx: any) => {
     activePrompt = false;
+    pendingIntent = undefined;
     lastAssistantStopReason = undefined;
     lastAssistantMessageSeen = undefined;
     clearActivity();
-    setState("idle", ctx, null, true);
+    setState("idle", ctx, null, true, { clearIntent: true });
   });
 };
 

@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget } from "./resume.js";
+import { resolveStatusFromContent } from "./scanner-detection.js";
 import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
@@ -19,12 +20,20 @@ describe("getDetector", () => {
     expect(d).toBeDefined();
   });
 
-  it("returns codex detector with generic fallback behavior", () => {
+  it("returns codex detector backed by runtime state without generic working fallback", () => {
     const d = getDetector("codex");
+    const session = `%vitest-codex-detector-${Date.now()}`;
+    const statePath = join(getStateDir(), `codex-${session}.json`);
     expect(d).toBeDefined();
-    expect(d.isWorking("⠋ Working...", "", "%missing-codex")).toBe(true);
-    expect(d.isApproval("Do you want to run this command? (Y/n)", "%missing-codex")).toBe(true);
+    expect(d.isWorking("", "⠋ Starting", "%missing-codex")).toBe(false);
+    expect(d.isApproval("Do you want to run this command? (Y/n)", "%missing-codex")).toBe(false);
     expect(d.isQuestion("Open Questions\n- Should this happen?\n› Summarize recent commits", "%missing-codex")).toBe(false);
+    try {
+      reportState("codex", session, "working");
+      expect(d.isWorking("", "codex", session)).toBe(true);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
   });
 
   it("returns hook-only detector for kiro", () => {
@@ -1034,7 +1043,13 @@ describe("shouldTreatCodexWorkingAsIdle", () => {
   });
 });
 
-describe("codex hook-first detection", () => {
+describe("codex hook-backed detection", () => {
+  it("treats codex as idle without hook state even when the pane title has a spinner", () => {
+    expect(
+      resolveStatusFromContent("⠋ Codex", 0, "codex", "", "%missing-codex-spinner"),
+    ).toEqual({ status: "idle" });
+  });
+
   it("keeps codex working when hook state says working even if a stale prompt is visible", () => {
     const session = `%vitest-codex-hook-first-${Date.now()}`;
     const statePath = join(getStateDir(), `codex-${session}.json`);
@@ -1183,7 +1198,7 @@ describe("filterAgents", () => {
 
 describe("generic detector patterns", () => {
   // Get the generic detector via an unknown agent name
-  const detector = getDetector("codex");
+  const detector = getDetector("unknown-agent");
 
   describe("isApproval", () => {
     it("matches (Y/n) prompt", () => {
@@ -1228,8 +1243,8 @@ describe("generic detector patterns", () => {
       expect(detector.isWorking("⠋ Loading...", "")).toBe(true);
     });
 
-    it("matches spinner in title", () => {
-      expect(detector.isWorking("", "⠋ Working")).toBe(true);
+    it("does not infer working from title-only activity markers", () => {
+      expect(detector.isWorking("", "⠋ Working")).toBe(false);
     });
 
     it("matches Working... keyword", () => {

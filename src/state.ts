@@ -28,6 +28,7 @@ export interface StateEntry extends ModelMetadata {
   agent: string;
   session: string;
   detail?: string;         // transient activity detail (e.g. tool name, filename)
+  intent?: string;         // stable user intent for the current/last prompt
   externalSessionId?: string;
   context?: string;
   contextTokens?: number;
@@ -80,6 +81,7 @@ function runtimeStateEventOptionsForEntry(
 
   return {
     state: entry.state,
+    ...(entry.intent ? { intent: entry.intent } : {}),
     ...(entry.detail ? { detail: entry.detail } : {}),
     ...(entry.externalSessionId ? { externalSessionId: entry.externalSessionId } : {}),
     ...(provenance?.source ? { stateSource: provenance.source } : {}),
@@ -329,6 +331,8 @@ function isReportOptions(value: unknown): value is ReportOptions {
     && (
       "detail" in value
       || "clearDetail" in value
+      || "intent" in value
+      || "clearIntent" in value
       || "model" in value
       || "provider" in value
       || "modelId" in value
@@ -363,6 +367,8 @@ function mergeModelMetadata(existing: ModelMetadata | null, incoming: ModelMetad
 export interface ReportOptions extends ModelMetadata {
   detail?: string;
   clearDetail?: boolean;
+  intent?: string;
+  clearIntent?: boolean;
   externalSessionId?: string;
   context?: string;
   workspace?: WorkspaceSnapshot;
@@ -385,11 +391,16 @@ export function reportState(agent: string, session: string, state: ReportedState
 
   const mergedModel = mergeModelMetadata(existing, opts);
 
-  let { detail, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
+  let { detail, intent, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
   if (opts.clearDetail) {
     detail = undefined;
   } else if (detail === undefined) {
     detail = existing?.detail;
+  }
+  if (opts.clearIntent) {
+    intent = undefined;
+  } else if (intent === undefined) {
+    intent = existing?.intent;
   }
   if (extSessionId === undefined) extSessionId = existing?.externalSessionId;
   if (context === undefined) context = existing?.context;
@@ -406,6 +417,7 @@ export function reportState(agent: string, session: string, state: ReportedState
     ts: Math.floor(Date.now() / 1000),
     agent,
     session,
+    ...(intent ? { intent } : {}),
     ...(detail ? { detail } : {}),
     ...mergedModel,
     ...(extSessionId ? { externalSessionId: extSessionId } : {}),
@@ -415,7 +427,10 @@ export function reportState(agent: string, session: string, state: ReportedState
     ...(ws ? { workspace: ws } : {}),
   };
   writeStateFile(agent, session, entry);
-  appendRuntimeStateEvent("primary_state", "upsert", agent, session, runtimeStateEventOptionsForEntry(agent, session, entry));
+  appendRuntimeStateEvent("primary_state", "upsert", agent, session, {
+    ...runtimeStateEventOptionsForEntry(agent, session, entry),
+    ...(opts.clearIntent ? { clearIntent: true } : {}),
+  });
   return entry;
 }
 
@@ -438,6 +453,12 @@ export function reportContext(agent: string, session: string, context: string, o
       ...(opts.contextMax !== undefined ? { contextMax: opts.contextMax } : {}),
       ts: Math.floor(Date.now() / 1000),
     };
+    if (opts.clearIntent) {
+      const { intent: _intent, ...rest } = entry;
+      entry = rest;
+    } else if (opts.intent !== undefined) {
+      entry.intent = opts.intent;
+    }
     if (opts.workspace !== undefined && !(existing.workspace?.sessionName && !opts.workspace?.sessionName)) {
       entry.workspace = opts.workspace;
     }
@@ -448,6 +469,7 @@ export function reportContext(agent: string, session: string, context: string, o
       agent,
       session,
       context,
+      ...(opts.intent && !opts.clearIntent ? { intent: opts.intent } : {}),
       ...mergeModelMetadata(null, opts),
       ...(opts.externalSessionId ? { externalSessionId: opts.externalSessionId } : {}),
       ...(opts.contextTokens !== undefined ? { contextTokens: opts.contextTokens } : {}),
@@ -456,7 +478,10 @@ export function reportContext(agent: string, session: string, context: string, o
     };
   }
   writeStateFile(agent, session, entry);
-  appendRuntimeStateEvent("primary_state", "upsert", agent, session, runtimeStateEventOptionsForEntry(agent, session, entry));
+  appendRuntimeStateEvent("primary_state", "upsert", agent, session, {
+    ...runtimeStateEventOptionsForEntry(agent, session, entry),
+    ...(opts.clearIntent ? { clearIntent: true } : {}),
+  });
   return entry;
 }
 

@@ -20,6 +20,8 @@ export interface RuntimeStateEvent extends RuntimeLocator {
   agent: string;
   reporter?: string;
   state?: RuntimeReportedState;
+  intent?: string;
+  clearIntent?: boolean;
   detail?: string;
   externalSessionId?: string;
   stateSource?: RuntimeStateSource;
@@ -30,6 +32,8 @@ export interface RuntimeStateEvent extends RuntimeLocator {
 export interface RuntimeStateEventOptions {
   reporter?: string;
   state?: RuntimeReportedState;
+  intent?: string;
+  clearIntent?: boolean;
   detail?: string;
   externalSessionId?: string;
   stateSource?: RuntimeStateSource;
@@ -72,6 +76,8 @@ export function appendRuntimeStateEvent(
     ...runtimeLocatorForSurface(surfaceId),
     ...(options.reporter ? { reporter: options.reporter } : {}),
     ...(options.state ? { state: options.state } : {}),
+    ...(options.intent ? { intent: options.intent } : {}),
+    ...(options.clearIntent ? { clearIntent: true } : {}),
     ...(options.detail ? { detail: options.detail } : {}),
     ...(options.externalSessionId ? { externalSessionId: options.externalSessionId } : {}),
     ...(options.stateSource ? { stateSource: options.stateSource } : {}),

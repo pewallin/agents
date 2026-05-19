@@ -55,6 +55,11 @@ export function stateDetail(agent: string, paneId?: string, snapshot?: StateSnap
   return entry?.detail;
 }
 
+export function stateIntent(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
+  return entry?.intent;
+}
+
 export function stateContext(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
   const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   return entry?.context;
