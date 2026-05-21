@@ -17,6 +17,42 @@ agents setup          # install reporting hooks
 agents                # live dashboard
 ```
 
+## Remote bootstrap
+
+For a fresh remote host, run the bootstrap script in dry-run mode first. The
+script prints the commands it would run and exits without changing the host:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \
+  | bash -s -- --dry-run
+```
+
+For app integration, use the JSON plan:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \
+  | bash -s -- --dry-run --json
+```
+
+Apply the approved plan with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \
+  | bash -s -- --yes
+```
+
+The default profile checks or installs `tmux`, Node/npm, git, `agents`, `nvim`,
+`micro`, `lazygit`, and `yazi`, then starts a tmux `agents` session if no tmux
+server is running. Use `--no-tools` to skip the editor/helper tools. The script
+does not use `sudo`; when Homebrew is unavailable it reports blocked actions
+instead of escalating privileges. The agents install is cloned to
+`~/.agents/agents-cli/source`, exposed through `~/.local/bin/agents`, and writes
+`~/.agents/agents-app/install.json` for app-managed detection.
+
+App-managed bootstrap should pass `--expected-agents-commit <sha>` for the
+bundled agents CLI commit. This lets the plan update stale remotes even when the
+package semver is unchanged.
+
 ## Use as Library
 
 For local testing from another Node project:

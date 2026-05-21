@@ -1,8 +1,60 @@
 #!/usr/bin/env node
 import { execSync, spawnSync } from "child_process";
+import { existsSync, readFileSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import type { ModelSource } from "./state.js";
 import { switchBack } from "./back.js";
 import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
+
+type AgentsPackageJSON = {
+  version?: string;
+};
+
+function findPackageRoot(): string | undefined {
+  let directory = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 4; depth++) {
+    if (existsSync(join(directory, "package.json"))) {
+      return directory;
+    }
+    directory = dirname(directory);
+  }
+  return undefined;
+}
+
+function readPackageVersion(packageRoot: string | undefined): string {
+  if (!packageRoot) {
+    return "0.0.0-dev";
+  }
+  try {
+    const packageJSON = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as AgentsPackageJSON;
+    return packageJSON.version || "0.0.0-dev";
+  } catch {
+    return "0.0.0-dev";
+  }
+}
+
+function readGitRevision(packageRoot: string | undefined): string | undefined {
+  if (!packageRoot || !existsSync(join(packageRoot, ".git"))) {
+    return undefined;
+  }
+  try {
+    return execSync("git rev-parse --short=12 HEAD", {
+      cwd: packageRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function agentsVersion(): string {
+  const packageRoot = findPackageRoot();
+  const version = readPackageVersion(packageRoot);
+  const revision = readGitRevision(packageRoot);
+  return revision ? `${version}+${revision}` : version;
+}
 
 // Handle --tmux flag early (before commander parses, since it's global)
 if (process.argv.includes("--tmux")) {
@@ -235,7 +287,7 @@ const program = new Command();
 program
   .name("agents")
   .description("Monitor AI agent panes across tmux sessions")
-  .version("1.0.0");
+  .version(agentsVersion());
 
 program
   .command("list")
