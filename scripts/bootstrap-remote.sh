@@ -195,6 +195,20 @@ commit_matches() {
   return 1
 }
 
+agents_install_command() {
+  local clone_action="git clone/pull $(shell_quote "$REPO_URL") $(shell_quote "$INSTALL_ROOT")"
+  if [ -n "$EXPECTED_AGENTS_COMMIT" ]; then
+    printf "%s && git checkout %s && npm install && npm run build && write %s" \
+      "$clone_action" \
+      "$(shell_quote "$EXPECTED_AGENTS_COMMIT")" \
+      "$(shell_quote "$WRAPPER_PATH")"
+    return
+  fi
+  printf "%s && npm install && npm run build && write %s" \
+    "$clone_action" \
+    "$(shell_quote "$WRAPPER_PATH")"
+}
+
 tmux_version() {
   tmux -V 2>/dev/null | head -n 1 | sed -E 's/^tmux[[:space:]]+//' || true
 }
@@ -294,7 +308,7 @@ plan_agents() {
         add_action "agents" "blocked" "agents commit update needs npm, and Homebrew is not installed to provide Node.js/npm." "Install Node.js >= $MIN_NODE_MAJOR manually before updating agents." "noop"
         return
       fi
-      add_action "agents" "planned" "Update agents commit from ${current_commit:-unknown} to $EXPECTED_AGENTS_COMMIT." "git clone/pull $(shell_quote "$REPO_URL") $(shell_quote "$INSTALL_ROOT") && git checkout $(shell_quote "$EXPECTED_AGENTS_COMMIT") && npm install && npm run build && write $(shell_quote "$WRAPPER_PATH")" "install-agents"
+      add_action "agents" "planned" "Update agents commit from ${current_commit:-unknown} to $EXPECTED_AGENTS_COMMIT." "$(agents_install_command)" "install-agents"
       return
     fi
     path_text="$(agents_bin)"
@@ -316,9 +330,17 @@ plan_agents() {
   fi
 
   if [ -n "$current" ]; then
-    add_action "agents" "planned" "Update agents from $current to >= $MIN_AGENTS_VERSION." "git clone/pull $(shell_quote "$REPO_URL") $(shell_quote "$INSTALL_ROOT") && npm install && npm run build && write $(shell_quote "$WRAPPER_PATH")" "install-agents"
+    if [ -n "$EXPECTED_AGENTS_COMMIT" ]; then
+      add_action "agents" "planned" "Update agents from $current to >= $MIN_AGENTS_VERSION at commit $EXPECTED_AGENTS_COMMIT." "$(agents_install_command)" "install-agents"
+    else
+      add_action "agents" "planned" "Update agents from $current to >= $MIN_AGENTS_VERSION." "$(agents_install_command)" "install-agents"
+    fi
   else
-    add_action "agents" "planned" "Install agents >= $MIN_AGENTS_VERSION." "git clone $(shell_quote "$REPO_URL") $(shell_quote "$INSTALL_ROOT") && npm install && npm run build && write $(shell_quote "$WRAPPER_PATH")" "install-agents"
+    if [ -n "$EXPECTED_AGENTS_COMMIT" ]; then
+      add_action "agents" "planned" "Install agents >= $MIN_AGENTS_VERSION at commit $EXPECTED_AGENTS_COMMIT." "$(agents_install_command)" "install-agents"
+    else
+      add_action "agents" "planned" "Install agents >= $MIN_AGENTS_VERSION." "$(agents_install_command)" "install-agents"
+    fi
   fi
 }
 
