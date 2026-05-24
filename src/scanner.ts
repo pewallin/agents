@@ -214,15 +214,17 @@ const FRIENDLY_NAMES: Record<string, string> = {};
 
 
 /** Check if a pane title is meaningful (not a default/command-prefix title). */
-function isTitleUseful(title: string): boolean {
-  if (!title || title.length === 0) return false;
+function isTitleUseful(title: string | null | undefined): boolean {
+  const normalizedTitle = cleanTitle(title);
+  if (!normalizedTitle || normalizedTitle.length === 0) return false;
   // Reject titles that look like "agent:x" command prefixes (e.g., "pi:c")
-  if (/^[a-z]+:[a-z]$/i.test(title)) return false;
+  if (/^[a-z]+:[a-z]$/i.test(normalizedTitle)) return false;
   return true;
 }
 
 /** Sanitize pane title: strip spinner chars, control chars, and reject escape sequence leaks. */
-function cleanTitle(raw: string): string {
+function cleanTitle(raw: string | null | undefined): string {
+  if (typeof raw !== "string") return "";
   // Strip braille spinners
   let t = raw.replace(/^[\u2801-\u28FF] */u, "");
   // Strip control characters (except normal whitespace)
@@ -230,6 +232,12 @@ function cleanTitle(raw: string): string {
   // Reject if it looks like a leaked escape sequence (DA response, etc.)
   if (/\x1b\[|[\x00-\x1f]/.test(raw)) return "";
   return t;
+}
+
+function resolvedPaneTitle(title: string | null | undefined, winname: string | null | undefined): string {
+  const rawTitle = typeof title === "string" ? title : "";
+  if (isTitleUseful(rawTitle)) return rawTitle;
+  return (typeof winname === "string" && winname.length > 0) ? winname : rawTitle;
 }
 
 function friendlyName(name: string): string {
@@ -290,7 +298,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
     if (!matchedProcess) continue;
     const agentName = matchedProcess.agentName;
 
-    const resolvedTitle = isTitleUseful(title) ? title : winname || title;
+    const resolvedTitle = resolvedPaneTitle(title, winname);
     const intent = stateIntent(agentName, tmuxPaneId, stateSnapshot)
       || resolveAgentIntentTitle(resolvedTitle);
     const wact = parseInt(wactStr, 10) || 0;
@@ -449,7 +457,7 @@ function scanSync(): AgentPane[] {
 
     // Use window_name as fallback when pane_title is unhelpful
     // (e.g., "pi:c" from agents that don't set a useful terminal title)
-    const resolvedTitle = isTitleUseful(title) ? title : winname || title;
+    const resolvedTitle = resolvedPaneTitle(title, winname);
     agentPanes.push({
       pane,
       pid,
@@ -560,7 +568,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     if (!matchedProcess) continue;
     const agentName = matchedProcess.agentName;
 
-    const resolvedTitle = isTitleUseful(title) ? title : winname || title;
+    const resolvedTitle = resolvedPaneTitle(title, winname);
     agentPanes.push({
       pane,
       title: resolvedTitle,

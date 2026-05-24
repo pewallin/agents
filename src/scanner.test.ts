@@ -980,6 +980,10 @@ describe("resolveAgentIntentTitle", () => {
     expect(resolveAgentIntentTitle("⠋ Weekly pricing cleanup", "Weekly pricing cleanup")).toBeUndefined();
   });
 
+  it("ignores missing pane titles from malformed tmux rows", () => {
+    expect(resolveAgentIntentTitle(undefined as unknown as string, "Weekly pricing cleanup")).toBeUndefined();
+  });
+
   it("drops repo-basename pane titles when a richer display title exists", () => {
     expect(
       resolveAgentIntentTitle("agents", "ta bort mcp_agent_mail mcp-servern från codex", "/Users/peter/code/agents"),
