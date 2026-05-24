@@ -387,25 +387,28 @@ export function reportState(agent: string, session: string, state: ReportedState
     ? optsOrContext
     : { context: optsOrContext as string | undefined, workspace, contextTokens, contextMax, model, externalSessionId };
 
-  const existing = readStateFile(agent, session);
-
-  const mergedModel = mergeModelMetadata(existing, opts);
-
   let { detail, intent, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
+  const existing = readStateFile(agent, session);
+  const sessionChanged = extSessionId !== undefined
+    && existing?.externalSessionId !== undefined
+    && extSessionId !== existing.externalSessionId;
+
+  const mergedModel = mergeModelMetadata(sessionChanged ? null : existing, opts);
+
   if (opts.clearDetail) {
     detail = undefined;
-  } else if (detail === undefined) {
+  } else if (detail === undefined && !sessionChanged) {
     detail = existing?.detail;
   }
   if (opts.clearIntent) {
     intent = undefined;
-  } else if (intent === undefined) {
+  } else if (intent === undefined && !sessionChanged) {
     intent = existing?.intent;
   }
   if (extSessionId === undefined) extSessionId = existing?.externalSessionId;
-  if (context === undefined) context = existing?.context;
-  if (ctxTokens === undefined) ctxTokens = existing?.contextTokens;
-  if (ctxMax === undefined) ctxMax = existing?.contextMax;
+  if (context === undefined && !sessionChanged) context = existing?.context;
+  if (ctxTokens === undefined && !sessionChanged) ctxTokens = existing?.contextTokens;
+  if (ctxMax === undefined && !sessionChanged) ctxMax = existing?.contextMax;
   // Preserve existing workspace if it has a sessionName (seeded by createWorkspace).
   // Hook-reported snapshots lack sessionName and should not overwrite authoritative data.
   if (ws === undefined || (existing?.workspace?.sessionName && !ws?.sessionName)) {
@@ -429,7 +432,7 @@ export function reportState(agent: string, session: string, state: ReportedState
   writeStateFile(agent, session, entry);
   appendRuntimeStateEvent("primary_state", "upsert", agent, session, {
     ...runtimeStateEventOptionsForEntry(agent, session, entry),
-    ...(opts.clearIntent ? { clearIntent: true } : {}),
+    ...(opts.clearIntent || (sessionChanged && intent === undefined) ? { clearIntent: true } : {}),
   });
   return entry;
 }

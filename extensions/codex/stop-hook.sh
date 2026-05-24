@@ -92,10 +92,10 @@ if [ ${#AGENTS_CMD[@]} -gt 0 ]; then
     if [ -n "$QUESTION_DETAIL" ] && [ "$QUESTION_DETAIL" != "null" ]; then
       "${AGENTS_CMD[@]}" "${ARGS[@]}" --state question --detail "$QUESTION_DETAIL"
     else
-      "${AGENTS_CMD[@]}" "${ARGS[@]}" --state question
+      "${AGENTS_CMD[@]}" "${ARGS[@]}" --state question --clear-detail
     fi
   else
-    "${AGENTS_CMD[@]}" "${ARGS[@]}" --state idle
+    "${AGENTS_CMD[@]}" "${ARGS[@]}" --state idle --clear-detail
   fi
 fi
 

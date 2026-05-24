@@ -90,7 +90,9 @@ if [ -n "$SESSION_ID" ] && [ "$SESSION_ID" != "null" ]; then
   ARGS+=(--external-session-id "$SESSION_ID")
 fi
 if [ -n "$DETAIL" ] && [ "$DETAIL" != "null" ]; then
-  ARGS+=(--detail "$DETAIL")
+  ARGS+=(--intent "$DETAIL" --clear-detail)
+else
+  ARGS+=(--clear-detail)
 fi
 if [ -n "$CONTEXT_TOKENS" ] && [ "$CONTEXT_TOKENS" != "null" ]; then
   ARGS+=(--context-tokens "$CONTEXT_TOKENS")

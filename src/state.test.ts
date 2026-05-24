@@ -139,6 +139,62 @@ describe("reportState", () => {
       clearIntent: true,
     });
   });
+
+  it("does not carry session-scoped metadata across an external session change", () => {
+    const session = `%vitest-session-boundary-${Date.now()}`;
+
+    reportState("codex", session, "working", {
+      detail: "old transient detail",
+      intent: "old prompt",
+      model: "old-model",
+      externalSessionId: "thread-old",
+      context: "old context",
+      contextTokens: 123,
+      contextMax: 456,
+    });
+    reportState("codex", session, "idle", {
+      externalSessionId: "thread-new",
+    });
+
+    const entry = getAgentStateEntry("codex", session);
+    expect(entry?.externalSessionId).toBe("thread-new");
+    expect(entry?.detail).toBeUndefined();
+    expect(entry?.intent).toBeUndefined();
+    expect(entry?.model).toBeUndefined();
+    expect(entry?.context).toBeUndefined();
+    expect(entry?.contextTokens).toBeUndefined();
+    expect(entry?.contextMax).toBeUndefined();
+    expect(readRuntimeStateEvents().at(-1)).toMatchObject({
+      agent: "codex",
+      surfaceId: session,
+      externalSessionId: "thread-new",
+      clearIntent: true,
+    });
+  });
+
+  it("keeps a newly reported intent when the external session changes", () => {
+    const session = `%vitest-session-boundary-intent-${Date.now()}`;
+
+    reportState("codex", session, "working", {
+      intent: "old prompt",
+      externalSessionId: "thread-old",
+    });
+    reportState("codex", session, "working", {
+      intent: "new prompt",
+      externalSessionId: "thread-new",
+    });
+
+    const entry = getAgentStateEntry("codex", session);
+    expect(entry?.externalSessionId).toBe("thread-new");
+    expect(entry?.intent).toBe("new prompt");
+    expect(readRuntimeStateEvents().at(-1)).toMatchObject({
+      agent: "codex",
+      surfaceId: session,
+      externalSessionId: "thread-new",
+      intent: "new prompt",
+    });
+    expect(readRuntimeStateEvents().at(-1)?.clearIntent).toBeUndefined();
+  });
 });
 
 describe("session filtering", () => {
