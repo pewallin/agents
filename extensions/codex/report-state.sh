@@ -36,6 +36,58 @@ def first_text:
 ' 2>/dev/null)
 DETAIL=$(printf '%s' "$DETAIL_RAW" | awk 'NF { print; exit }' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-160)
 
+agents_home() {
+  if [ -n "${AGENTS_HOME:-}" ]; then
+    printf '%s' "$AGENTS_HOME"
+    return
+  fi
+  printf '%s/%s' "${AGENTS_SHARED_HOME:-$HOME/.agents}" "${AGENTS_PRODUCT_DIRNAME:-agents-app}"
+}
+
+runtime_tmp_dir() {
+  if [ -n "${AGENTS_TMP_DIR:-}" ]; then
+    printf '%s' "$AGENTS_TMP_DIR"
+    return
+  fi
+  if [ -n "${AGENTS_RUNTIME_DIR:-}" ]; then
+    printf '%s/tmp' "$AGENTS_RUNTIME_DIR"
+    return
+  fi
+  printf '%s/runtime/tmp' "$(agents_home)"
+}
+
+internal_session_marker() {
+  local session_id="$1"
+  local safe_id
+  safe_id=$(printf '%s' "$session_id" | tr -c 'A-Za-z0-9._-' '_')
+  printf '%s/codex-internal-%s' "$(runtime_tmp_dir)" "$safe_id"
+}
+
+is_internal_codex_prompt() {
+  case "$1" in
+    "## Memory Writing Agent:"*|"Memory Writing Agent:"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+mark_internal_session() {
+  [ -n "$SESSION_ID" ] && [ "$SESSION_ID" != "null" ] || return
+  local marker_dir
+  marker_dir=$(runtime_tmp_dir)
+  mkdir -p "$marker_dir" 2>/dev/null || return
+  {
+    date +%s
+    printf '%s\n' "$SESSION"
+  } >"$(internal_session_marker "$SESSION_ID")" 2>/dev/null || true
+}
+
+if is_internal_codex_prompt "$DETAIL"; then
+  mark_internal_session
+  exit 0
+fi
+
 if [ -z "$MODEL_ID" ] && [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
   case "$MODEL" in
     */*)

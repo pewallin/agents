@@ -29,6 +29,42 @@ MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""' 2>/dev/null)
 LAST_LINE=$(printf '%s' "$MSG" | awk 'NF { last=$0 } END { print last }')
 QUESTION_DETAIL=$(printf '%s' "$MSG" | awk 'NF { print; exit }' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-160)
 
+agents_home() {
+  if [ -n "${AGENTS_HOME:-}" ]; then
+    printf '%s' "$AGENTS_HOME"
+    return
+  fi
+  printf '%s/%s' "${AGENTS_SHARED_HOME:-$HOME/.agents}" "${AGENTS_PRODUCT_DIRNAME:-agents-app}"
+}
+
+runtime_tmp_dir() {
+  if [ -n "${AGENTS_TMP_DIR:-}" ]; then
+    printf '%s' "$AGENTS_TMP_DIR"
+    return
+  fi
+  if [ -n "${AGENTS_RUNTIME_DIR:-}" ]; then
+    printf '%s/tmp' "$AGENTS_RUNTIME_DIR"
+    return
+  fi
+  printf '%s/runtime/tmp' "$(agents_home)"
+}
+
+internal_session_marker() {
+  local session_id="$1"
+  local safe_id
+  safe_id=$(printf '%s' "$session_id" | tr -c 'A-Za-z0-9._-' '_')
+  printf '%s/codex-internal-%s' "$(runtime_tmp_dir)" "$safe_id"
+}
+
+if [ -n "$SESSION_ID" ] && [ "$SESSION_ID" != "null" ]; then
+  INTERNAL_MARKER=$(internal_session_marker "$SESSION_ID")
+  if [ -f "$INTERNAL_MARKER" ]; then
+    rm -f "$INTERNAL_MARKER" 2>/dev/null || true
+    printf '{}\n'
+    exit 0
+  fi
+fi
+
 if [ -z "$MODEL_ID" ] && [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
   case "$MODEL" in
     */*)
