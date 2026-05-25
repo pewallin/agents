@@ -65,11 +65,11 @@ docs/                — feature plans (zellij-support.md)
 
 ## Key concepts
 
-**Agent detection**: The scanner walks pane process trees looking for known agent binaries (`claude`, `copilot`, `opencode`, `codex`, `cursor`, `pi`, `kiro-cli`). It also checks TTY sessions for agents that spawn under shells.
+**Agent detection**: The scanner walks pane process trees looking for known agent binaries (`claude`, `copilot`, `opencode`, `codex`, `cursor`, `pi`, `kiro-cli`, `hermes`). It also checks TTY sessions for agents that spawn under shells.
 
 **Status detection** has two modes:
 - **Hook-based** (claude, codex, copilot, pi, opencode, kiro): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`.
-- **Process/runtime fallback** (cursor, others): Detects panes by process name and reports conservative activity-derived status without reading terminal content.
+- **Process/runtime fallback** (cursor, hermes, others): Detects panes by process name and reports conservative activity-derived status without reading terminal content.
 
 **Preview**: The dashboard swaps an agent pane into a split beside itself using `tmux swap-pane`. Pane IDs follow the process (not the position) after a swap. `filterAgents()` in scanner.ts handles re-adding swapped agents to the scan results.
 
@@ -92,7 +92,7 @@ docs/                — feature plans (zellij-support.md)
 
 ## Adding a new agent
 
-1. Add the binary name to `AGENT_PROCS` regex in `scanner.ts`
+1. Add the binary name to `AGENT_PROC_NAMES` in `scanner-discovery.ts`
 2. Create an extension in `extensions/<name>/` that calls `agents report --agent <name> --state <state> --session "$TMUX_PANE"`
 3. Add a hook detector: `const myDetector = makeHookDetector("<name>")` and wire it into `getDetector()`
 4. Add `setup<Name>()` / `uninstall<Name>()` in `setup.ts`, wire into `setup()` / `uninstall()` / `computeSetupHash()`

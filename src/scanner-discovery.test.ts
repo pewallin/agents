@@ -74,4 +74,24 @@ describe("findAgentOnTtyProcessInTree", () => {
       process: processTree.byPid.get(71042),
     });
   });
+
+  it("detects hermes when launched from a shell via python", () => {
+    const processTree = tree([
+      proc(72000, 1, "-zsh", "ttys016", 0, 8, "-zsh"),
+      proc(
+        72042,
+        72000,
+        "/Users/clawd/.he",
+        "ttys016",
+        2,
+        214,
+        "/Users/clawd/.hermes/hermes-agent/venv/bin/python3 /Users/clawd/.local/bin/hermes",
+      ),
+    ]);
+
+    expect(findAgentOnTtyProcessInTree("/dev/ttys016", processTree)).toEqual({
+      agentName: "hermes",
+      process: processTree.byPid.get(72042),
+    });
+  });
 });

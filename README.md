@@ -134,6 +134,10 @@ Add `bind -n M-b run-shell "node ~/code/agents/dist/cli.js back 2>/dev/null || t
     "kiro": {
       "command": "kiro-cli chat --tui --agent agents-reporting",
       "workspace": "default"
+    },
+    "hermes": {
+      "command": "hermes",
+      "workspace": "default"
     }
   },
   "defaultProfile": "claude",
@@ -242,7 +246,7 @@ The recommended tmux setup above restores agent CLIs with explicit resume/YOLO f
 
 ## Status Detection
 
-Hooks report state for claude, codex, copilot, pi, opencode, and kiro. Kiro reports only when the `agents-reporting` agent config is active, either as the default from `agents setup` or via `kiro-cli chat --agent agents-reporting`. Agents without hooks are detected by process name but do not inspect terminal content for state.
+Hooks report state for claude, codex, copilot, pi, opencode, and kiro. Kiro reports only when the `agents-reporting` agent config is active, either as the default from `agents setup` or via `kiro-cli chat --agent agents-reporting`. Agents without hooks, including Hermes, are detected by process name but do not inspect terminal content for state.
 
 | Indicator | Meaning |
 |-----------|---------|
@@ -254,7 +258,7 @@ Hooks report state for claude, codex, copilot, pi, opencode, and kiro. Kiro repo
 
 ## Detected Agents
 
-`claude` `copilot` `opencode` `codex` `pi` `kiro` `cursor`
+`claude` `copilot` `opencode` `codex` `pi` `kiro` `cursor` `hermes`
 
 ## License
 

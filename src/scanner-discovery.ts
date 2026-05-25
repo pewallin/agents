@@ -22,7 +22,7 @@ interface AgentProcessMatch extends AgentLeafProcess {
   depth: number;
 }
 
-const AGENT_PROC_NAMES = ["claude", "copilot", "opencode", "codex", "cursor", "pi", "kiro", "kiro-cli", "kiro-cli-chat"] as const;
+const AGENT_PROC_NAMES = ["claude", "copilot", "opencode", "codex", "cursor", "pi", "kiro", "kiro-cli", "kiro-cli-chat", "hermes"] as const;
 const AGENT_PROCS = new RegExp(`^(${AGENT_PROC_NAMES.join("|")})$`, "i");
 const WRAPPER_PROCS = new Set(["node", "bun", "bunx", "deno", "tsx", "ts-node", "env", "npm", "npx", "pnpm", "yarn"]);
 const AGENT_PROC_ALIASES: Record<string, string> = {

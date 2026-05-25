@@ -76,6 +76,13 @@ describe("detectAgentProcess", () => {
     expect(detectAgentProcess("kiro-cli", "kiro-cli chat --tui")).toBe("kiro");
     expect(detectAgentProcess("kiro-cli-chat", "kiro-cli-chat chat --tui")).toBe("kiro");
   });
+
+  it("detects hermes launched through its python entrypoint", () => {
+    expect(detectAgentProcess(
+      "/Users/clawd/.he",
+      "/Users/clawd/.hermes/hermes-agent/venv/bin/python3 /Users/clawd/.local/bin/hermes",
+    )).toBe("hermes");
+  });
 });
 
 describe("externalSessionIdFromProcessArgs", () => {
