@@ -1,4 +1,4 @@
-export type AgentIntegrationName = "claude" | "codex" | "copilot" | "pi" | "opencode" | "kiro";
+export type AgentIntegrationName = "claude" | "codex" | "copilot" | "pi" | "opencode" | "kiro" | "hermes";
 export type IntegrationInstallMethod = "config-hooks" | "cli-extension" | "plugin-package";
 export type LifecycleCapability = "working" | "idle" | "approval" | "question";
 export type MetadataCapability = "provider" | "modelId" | "modelLabel" | "contextUsage" | "externalSessionId";
@@ -192,6 +192,39 @@ export const INTEGRATION_SPECS: AgentIntegrationSpec[] = [
     notes: [
       "Setup creates the global Kiro agent config `agents-reporting` and sets it as the default when no Kiro default exists; launch with `--agent agents-reporting` when another default is configured.",
       "Approval is not reported until Kiro CLI exposes a dedicated hook event for permission prompts.",
+    ],
+  },
+  {
+    agent: "hermes",
+    installMethod: "config-hooks",
+    configuredEvents: [
+      "on_session_start",
+      "pre_llm_call",
+      "pre_api_request",
+      "post_api_request",
+      "pre_tool_call",
+      "post_tool_call",
+      "pre_approval_request",
+      "post_approval_response",
+      "post_llm_call",
+      "on_session_end",
+      "on_session_finalize",
+      "on_session_reset",
+    ],
+    capabilities: {
+      working: true,
+      idle: true,
+      approval: true,
+      question: true,
+      provider: true,
+      modelId: true,
+      modelLabel: true,
+      contextUsage: true,
+      externalSessionId: true,
+    },
+    notes: [
+      "Setup writes Hermes shell hooks into ~/.hermes/config.yaml and allowlists only the agents-reporting hook command.",
+      "post_llm_call determines idle versus question; on_session_end only clears interrupted turns so it does not overwrite questions.",
     ],
   },
 ];

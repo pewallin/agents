@@ -58,8 +58,8 @@ docs/                — feature plans (zellij-support.md)
 **Agent detection**: The scanner walks pane process trees looking for known agent binaries (`claude`, `copilot`, `opencode`, `codex`, `cursor`, `pi`, `kiro-cli`, `hermes`). It also checks TTY sessions for agents that spawn under shells.
 
 **Status detection** has two modes:
-- **Hook-based** (claude, codex, copilot, pi, opencode, kiro): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`.
-- **Process/runtime fallback** (cursor, hermes, others): Detects panes by process name and reports conservative activity-derived status without reading terminal content.
+- **Hook-based** (claude, codex, copilot, pi, opencode, kiro, hermes): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`.
+- **Process/runtime fallback** (cursor, others): Detects panes by process name and reports conservative activity-derived status without reading terminal content.
 
 **Preview**: The dashboard swaps an agent pane into a split beside itself using `tmux swap-pane`. Pane IDs follow the process (not the position) after a swap. `filterAgents()` in scanner.ts handles re-adding swapped agents to the scan results.
 

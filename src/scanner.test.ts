@@ -43,6 +43,22 @@ describe("getDetector", () => {
     expect(d.isApproval("Do you want to run this command? (Y/n)", "%missing-kiro")).toBe(false);
   });
 
+  it("returns hook-only detector for hermes", () => {
+    const d = getDetector("hermes");
+    const session = `%vitest-hermes-detector-${Date.now()}`;
+    const statePath = join(getStateDir(), `hermes-${session}.json`);
+    expect(d).toBeDefined();
+    expect(d.isWorking("⠋ Working...", "", "%missing-hermes")).toBe(false);
+    expect(d.isIdle("done\n❯ ", "mac-mini", "%missing-hermes")).toBe(true);
+    try {
+      reportState("hermes", session, "working");
+      expect(d.isWorking("", "mac-mini", session)).toBe(true);
+      expect(d.isIdle("done\n❯ ", "mac-mini", session)).toBe(false);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
   it("is case-insensitive", () => {
     const a = getDetector("Claude");
     const b = getDetector("claude");

@@ -702,7 +702,7 @@ program
 program
   .command("report")
   .description("Report agent state (called by agent hooks)")
-  .requiredOption("--agent <name>", "Agent name (claude, copilot, pi, opencode, codex, kiro)")
+  .requiredOption("--agent <name>", "Agent name (claude, copilot, pi, opencode, codex, kiro, hermes)")
   .option("--state <state>", "State: working, idle, approval, question")
   .option("--detail <text>", "Current activity detail (tool name, filename, etc.)")
   .option("--clear-detail", "Clear any previously reported activity detail")

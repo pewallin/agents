@@ -246,7 +246,7 @@ The recommended tmux setup above restores agent CLIs with explicit resume/YOLO f
 
 ## Status Detection
 
-Hooks report state for claude, codex, copilot, pi, opencode, and kiro. Kiro reports only when the `agents-reporting` agent config is active, either as the default from `agents setup` or via `kiro-cli chat --agent agents-reporting`. Agents without hooks, including Hermes, are detected by process name but do not inspect terminal content for state.
+Hooks report state for claude, codex, copilot, pi, opencode, kiro, and hermes. Kiro reports only when the `agents-reporting` agent config is active, either as the default from `agents setup` or via `kiro-cli chat --agent agents-reporting`. Hermes reports through shell hooks in `~/.hermes/config.yaml`; `agents setup` installs those hooks and allowlists only the agents reporting script. Agents without hooks are detected by process name but do not inspect terminal content for state.
 
 | Indicator | Meaning |
 |-----------|---------|

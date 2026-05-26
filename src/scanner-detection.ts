@@ -218,6 +218,7 @@ const copilotDetector = makeHookDetector("copilot");
 const piDetector = makeHookDetector("pi");
 const opencodeDetector = makeHookDetector("opencode");
 const kiroDetector = makeHookDetector("kiro");
+const hermesDetector = makeHookDetector("hermes");
 
 export function getDetector(agent: string, snapshot?: StateSnapshot): AgentDetector {
   switch (agent.toLowerCase()) {
@@ -227,6 +228,7 @@ export function getDetector(agent: string, snapshot?: StateSnapshot): AgentDetec
     case "pi":       return snapshot ? makeHookDetector("pi", snapshot) : piDetector;
     case "opencode": return snapshot ? makeHookDetector("opencode", snapshot) : opencodeDetector;
     case "kiro":     return snapshot ? makeHookDetector("kiro", snapshot) : kiroDetector;
+    case "hermes":   return snapshot ? makeHookDetector("hermes", snapshot) : hermesDetector;
     default:          return genericDetector;
   }
 }
@@ -329,7 +331,7 @@ export function reconcileStaleCodexWorkingState(
   if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
 }
 
-export const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode", "kiro"]);
+export const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode", "kiro", "hermes"]);
 
 export function resolveStatusFromContent(
   title: string,

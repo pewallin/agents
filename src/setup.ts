@@ -8,8 +8,9 @@
  *   - Pi: symlinks extension to ~/.pi/agent/extensions/agents-reporting/
  *   - OpenCode: symlinks plugin to ~/.config/opencode/node_modules/ and patches config.json
  *   - Kiro CLI: writes ~/.kiro/agents/agents-reporting.json with hook commands
+ *   - Hermes: patches ~/.hermes/config.yaml shell hooks and allowlists our hook command
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, unlinkSync, lstatSync, readdirSync, rmdirSync, realpathSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync, unlinkSync, lstatSync, readdirSync, rmdirSync, realpathSync, statSync } from "fs";
 import { createHash } from "crypto";
 import { homedir } from "os";
 import { join, dirname } from "path";
@@ -816,6 +817,341 @@ function uninstallKiro(): SetupResult {
   return { agent: "kiro", action: "uninstalled", detail };
 }
 
+// ── Hermes ───────────────────────────────────────────────────────────────
+
+const HERMES_CONFIG_PATH = join(homedir(), ".hermes", "config.yaml");
+const HERMES_ALLOWLIST_PATH = join(homedir(), ".hermes", "shell-hooks-allowlist.json");
+const HERMES_REPORT_SCRIPT = join(EXTENSIONS_DIR, "hermes", "report-state.sh");
+const HERMES_HOOK_TIMEOUT_SECONDS = 10;
+const HERMES_HOOK_EVENTS = [
+  "on_session_start",
+  "pre_llm_call",
+  "pre_api_request",
+  "post_api_request",
+  "pre_tool_call",
+  "post_tool_call",
+  "pre_approval_request",
+  "post_approval_response",
+  "post_llm_call",
+  "on_session_end",
+  "on_session_finalize",
+  "on_session_reset",
+];
+
+function yamlDoubleQuoted(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function hermesHookItemLines(command: string = HERMES_REPORT_SCRIPT): string[] {
+  return [
+    `    - command: ${yamlDoubleQuoted(command)}`,
+    `      timeout: ${HERMES_HOOK_TIMEOUT_SECONDS}`,
+  ];
+}
+
+function hermesHooksBlock(command: string = HERMES_REPORT_SCRIPT): string[] {
+  return [
+    "hooks:",
+    ...HERMES_HOOK_EVENTS.flatMap((event) => [
+      `  ${event}:`,
+      ...hermesHookItemLines(command),
+    ]),
+  ];
+}
+
+function isTopLevelYamlKey(line: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_-]*\s*:/.test(line);
+}
+
+function isHermesEventHeader(line: string): RegExpMatchArray | null {
+  return line.match(/^  ([A-Za-z_][A-Za-z0-9_]*):\s*$/);
+}
+
+function isHermesHookText(text: string): boolean {
+  return text.includes(HERMES_REPORT_SCRIPT)
+    || text.includes("extensions/hermes/report-state.sh")
+    || text.includes("--agent hermes");
+}
+
+function removeOurHermesItems(lines: string[]): string[] {
+  const result: string[] = [];
+  let current: string[] = [];
+
+  const flush = () => {
+    if (!current.length) return;
+    if (!isHermesHookText(current.join("\n"))) {
+      result.push(...current);
+    }
+    current = [];
+  };
+
+  for (const line of lines) {
+    if (/^    - /.test(line)) {
+      flush();
+      current = [line];
+    } else if (current.length) {
+      current.push(line);
+    } else {
+      result.push(line);
+    }
+  }
+  flush();
+
+  return result;
+}
+
+function hasHermesListItem(lines: string[]): boolean {
+  return lines.some((line) => /^    - /.test(line));
+}
+
+function findHermesHooksBlock(lines: string[]): { start: number; end: number } | null {
+  const start = lines.findIndex((line) => /^hooks\s*:/.test(line));
+  if (start < 0) return null;
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (isTopLevelYamlKey(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function rewriteHermesHooksBlock(blockLines: string[], mode: "install" | "remove"): string[] {
+  const installed = new Set<string>();
+  const output: string[] = ["hooks:"];
+  let i = 1;
+
+  while (i < blockLines.length) {
+    const header = isHermesEventHeader(blockLines[i]);
+    if (!header) {
+      output.push(blockLines[i]);
+      i += 1;
+      continue;
+    }
+
+    const event = header[1];
+    const section = [blockLines[i]];
+    i += 1;
+    while (i < blockLines.length && !isHermesEventHeader(blockLines[i])) {
+      section.push(blockLines[i]);
+      i += 1;
+    }
+
+    if (!HERMES_HOOK_EVENTS.includes(event)) {
+      output.push(...section);
+      continue;
+    }
+
+    const retained = removeOurHermesItems(section.slice(1));
+    if (mode === "remove") {
+      if (hasHermesListItem(retained)) {
+        output.push(`  ${event}:`, ...retained);
+      }
+      continue;
+    }
+
+    output.push(`  ${event}:`, ...retained, ...hermesHookItemLines());
+    installed.add(event);
+  }
+
+  if (mode === "install") {
+    for (const event of HERMES_HOOK_EVENTS) {
+      if (installed.has(event)) continue;
+      output.push(`  ${event}:`, ...hermesHookItemLines());
+    }
+  }
+
+  if (mode === "remove" && output.length === 1) return ["hooks: {}"];
+  return output;
+}
+
+export function ensureHermesHooksConfig(configText: string): { text: string; changed: boolean } {
+  const lines = configText.split("\n");
+  const block = findHermesHooksBlock(lines);
+  const nextBlock = hermesHooksBlock();
+
+  if (!block) {
+    const prefix = configText.endsWith("\n") || configText.length === 0 ? "" : "\n";
+    return { text: `${configText}${prefix}${nextBlock.join("\n")}\n`, changed: true };
+  }
+
+  const currentBlock = lines.slice(block.start, block.end);
+  const rewritten = rewriteHermesHooksBlock(currentBlock, "install");
+  const nextLines = [...lines.slice(0, block.start), ...rewritten, ...lines.slice(block.end)];
+  const nextText = nextLines.join("\n");
+  return { text: nextText, changed: nextText !== configText };
+}
+
+export function removeHermesHooksConfig(configText: string): { text: string; changed: boolean } {
+  const lines = configText.split("\n");
+  const block = findHermesHooksBlock(lines);
+  if (!block) return { text: configText, changed: false };
+
+  const currentBlock = lines.slice(block.start, block.end);
+  const rewritten = rewriteHermesHooksBlock(currentBlock, "remove");
+  const nextLines = [...lines.slice(0, block.start), ...rewritten, ...lines.slice(block.end)];
+  const nextText = nextLines.join("\n");
+  return { text: nextText, changed: nextText !== configText };
+}
+
+function installedHermesHookEvents(configText: string): string[] {
+  const lines = configText.split("\n");
+  const block = findHermesHooksBlock(lines);
+  if (!block) return [];
+
+  const blockLines = lines.slice(block.start, block.end);
+  const installed: string[] = [];
+  let i = 1;
+  while (i < blockLines.length) {
+    const header = isHermesEventHeader(blockLines[i]);
+    if (!header) {
+      i += 1;
+      continue;
+    }
+    const event = header[1];
+    const section = [blockLines[i]];
+    i += 1;
+    while (i < blockLines.length && !isHermesEventHeader(blockLines[i])) {
+      section.push(blockLines[i]);
+      i += 1;
+    }
+    if (HERMES_HOOK_EVENTS.includes(event) && isHermesHookText(section.join("\n"))) {
+      installed.push(event);
+    }
+  }
+  return installed;
+}
+
+function hermesScriptMtimeIso(): string | undefined {
+  try {
+    return statSync(HERMES_REPORT_SCRIPT).mtime.toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
+function readHermesAllowlist(): { allowlist: any; error?: string } {
+  if (!existsSync(HERMES_ALLOWLIST_PATH)) return { allowlist: { approvals: [] } };
+  try {
+    const parsed = JSON.parse(readFileSync(HERMES_ALLOWLIST_PATH, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { allowlist: { approvals: [] }, error: "could not parse ~/.hermes/shell-hooks-allowlist.json" };
+    }
+    if (!Array.isArray(parsed.approvals)) parsed.approvals = [];
+    return { allowlist: parsed };
+  } catch {
+    return { allowlist: { approvals: [] }, error: "could not parse ~/.hermes/shell-hooks-allowlist.json" };
+  }
+}
+
+function approvedHermesHookEvents(): string[] {
+  const { allowlist, error } = readHermesAllowlist();
+  if (error) return [];
+  return HERMES_HOOK_EVENTS.filter((event) =>
+    allowlist.approvals.some((entry: any) =>
+      entry?.event === event && entry?.command === HERMES_REPORT_SCRIPT,
+    ),
+  );
+}
+
+function ensureHermesAllowlist(): { changed: boolean; error?: string } {
+  const { allowlist, error } = readHermesAllowlist();
+  if (error) return { changed: false, error };
+
+  const approvedAt = new Date().toISOString();
+  const scriptMtime = hermesScriptMtimeIso();
+  const existing = Array.isArray(allowlist.approvals) ? allowlist.approvals : [];
+  const filtered = existing.filter((entry: any) =>
+    !(HERMES_HOOK_EVENTS.includes(entry?.event) && entry?.command === HERMES_REPORT_SCRIPT),
+  );
+  const additions = HERMES_HOOK_EVENTS.map((event) => ({
+    event,
+    command: HERMES_REPORT_SCRIPT,
+    approved_at: approvedAt,
+    ...(scriptMtime ? { script_mtime_at_approval: scriptMtime } : {}),
+  }));
+  const next = { ...allowlist, approvals: [...filtered, ...additions] };
+
+  if (JSON.stringify(next) === JSON.stringify(allowlist)) return { changed: false };
+
+  mkdirSync(dirname(HERMES_ALLOWLIST_PATH), { recursive: true });
+  writeFileSync(HERMES_ALLOWLIST_PATH, JSON.stringify(next, null, 2) + "\n");
+  return { changed: true };
+}
+
+function removeHermesAllowlist(): boolean {
+  const { allowlist, error } = readHermesAllowlist();
+  if (error) return false;
+  const existing = Array.isArray(allowlist.approvals) ? allowlist.approvals : [];
+  const filtered = existing.filter((entry: any) =>
+    !(HERMES_HOOK_EVENTS.includes(entry?.event) && entry?.command === HERMES_REPORT_SCRIPT),
+  );
+  if (filtered.length === existing.length) return false;
+
+  mkdirSync(dirname(HERMES_ALLOWLIST_PATH), { recursive: true });
+  writeFileSync(HERMES_ALLOWLIST_PATH, JSON.stringify({ ...allowlist, approvals: filtered }, null, 2) + "\n");
+  return true;
+}
+
+function setupHermes(): SetupResult {
+  const hermesDir = join(homedir(), ".hermes");
+  if (!existsSync(hermesDir) && !commandExists("hermes")) {
+    return { agent: "hermes", action: "skipped", detail: "~/.hermes/ not found and hermes is not on PATH" };
+  }
+  if (!existsSync(HERMES_REPORT_SCRIPT)) {
+    return { agent: "hermes", action: "skipped", detail: "extension source not found in repo" };
+  }
+  if (!existsSync(HERMES_CONFIG_PATH)) {
+    return { agent: "hermes", action: "skipped", detail: "~/.hermes/config.yaml not found" };
+  }
+
+  let configText = "";
+  try {
+    configText = readFileSync(HERMES_CONFIG_PATH, "utf-8");
+  } catch {
+    return { agent: "hermes", action: "skipped", detail: "could not read ~/.hermes/config.yaml" };
+  }
+
+  const configUpdate = ensureHermesHooksConfig(configText);
+  const allowlistUpdate = ensureHermesAllowlist();
+  if (allowlistUpdate.error) {
+    return { agent: "hermes", action: "skipped", detail: allowlistUpdate.error };
+  }
+
+  if (configUpdate.changed) writeFileSync(HERMES_CONFIG_PATH, configUpdate.text);
+
+  if (!configUpdate.changed && !allowlistUpdate.changed) {
+    return { agent: "hermes", action: "installed", detail: "hooks configured and allowlisted" };
+  }
+
+  return { agent: "hermes", action: "installed", detail: "patched ~/.hermes/config.yaml and shell hook allowlist" };
+}
+
+function uninstallHermes(): SetupResult {
+  let removedConfig = false;
+  if (existsSync(HERMES_CONFIG_PATH)) {
+    try {
+      const current = readFileSync(HERMES_CONFIG_PATH, "utf-8");
+      const next = removeHermesHooksConfig(current);
+      if (next.changed) {
+        writeFileSync(HERMES_CONFIG_PATH, next.text);
+        removedConfig = true;
+      }
+    } catch {
+      return { agent: "hermes", action: "skipped", detail: "could not update ~/.hermes/config.yaml" };
+    }
+  }
+
+  const removedAllowlist = removeHermesAllowlist();
+  return {
+    agent: "hermes",
+    action: removedConfig || removedAllowlist ? "uninstalled" : "not-installed",
+    ...(removedConfig || removedAllowlist ? { detail: "removed Hermes hooks and allowlist entries" } : {}),
+  };
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 export function setup(quiet: boolean = false): SetupResult[] {
@@ -826,13 +1162,13 @@ export function setup(quiet: boolean = false): SetupResult[] {
     if (!quiet) console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
   }
 
-  const results = [setupClaude(), setupCodex(), setupCopilot(), setupPi(), setupOpencode(), setupKiro()];
+  const results = [setupClaude(), setupCodex(), setupCopilot(), setupPi(), setupOpencode(), setupKiro(), setupHermes()];
   saveSetupHash();
   return results;
 }
 
 export function uninstall(): SetupResult[] {
-  return [uninstallClaude(), uninstallCodex(), uninstallCopilot(), uninstallPi(), uninstallOpencode(), uninstallKiro()];
+  return [uninstallClaude(), uninstallCodex(), uninstallCopilot(), uninstallPi(), uninstallOpencode(), uninstallKiro(), uninstallHermes()];
 }
 
 function doctorClaude(spec: AgentIntegrationSpec): DoctorResult {
@@ -1080,6 +1416,40 @@ function doctorKiro(spec: AgentIntegrationSpec): DoctorResult {
   return doctorResult(spec, verdict.status, verdict.detail, installedEvents);
 }
 
+function doctorHermes(spec: AgentIntegrationSpec): DoctorResult {
+  const hermesDir = join(homedir(), ".hermes");
+  if (!existsSync(hermesDir) && !commandExists("hermes")) {
+    return doctorResult(spec, "unavailable", "~/.hermes/ not found and hermes is not on PATH", []);
+  }
+  if (!existsSync(HERMES_REPORT_SCRIPT)) {
+    return doctorResult(spec, "broken", "Hermes reporting script is missing from the repo", []);
+  }
+  if (!existsSync(HERMES_CONFIG_PATH)) {
+    return doctorResult(spec, "not-installed", "~/.hermes/config.yaml not found", []);
+  }
+
+  let configText = "";
+  try {
+    configText = readFileSync(HERMES_CONFIG_PATH, "utf-8");
+  } catch {
+    return doctorResult(spec, "broken", "could not read ~/.hermes/config.yaml", []);
+  }
+
+  const installedEvents = installedHermesHookEvents(configText);
+  const approvedEvents = approvedHermesHookEvents();
+  const verdict = detailFromMissingEvents(spec.configuredEvents, installedEvents, "Hermes hooks are incomplete");
+  if (verdict.status !== "installed") {
+    return doctorResult(spec, verdict.status, verdict.detail, installedEvents);
+  }
+
+  const missingApprovals = spec.configuredEvents.filter((event) => !approvedEvents.includes(event));
+  if (missingApprovals.length) {
+    return doctorResult(spec, "partial", `hooks configured but not allowlisted for ${missingApprovals.join(", ")}`, installedEvents);
+  }
+
+  return doctorResult(spec, "installed", "hooks configured and allowlisted", installedEvents);
+}
+
 function doctorResult(
   spec: AgentIntegrationSpec,
   status: DoctorResult["status"],
@@ -1118,6 +1488,8 @@ export function doctor(): DoctorResult[] {
         return doctorOpencode(spec);
       case "kiro":
         return doctorKiro(spec);
+      case "hermes":
+        return doctorHermes(spec);
     }
   });
 }
@@ -1132,8 +1504,9 @@ function computeSetupHash(): string {
   h.update(JSON.stringify(CLAUDE_HOOKS));
   h.update(JSON.stringify(codexHooksConfig()));
   h.update(JSON.stringify(kiroAgentConfig()));
+  h.update(JSON.stringify(hermesHooksBlock()));
   h.update("kiro-default-agent-v1");
-  for (const ext of ["codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs", "kiro/report-state.sh"]) {
+  for (const ext of ["codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs", "kiro/report-state.sh", "hermes/report-state.sh"]) {
     const p = join(EXTENSIONS_DIR, ext);
     try { h.update(readFileSync(p)); } catch {}
   }

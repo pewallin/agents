@@ -35,4 +35,10 @@ describe("integration specs", () => {
     expect(missingLifecycleCapabilities(spec)).toEqual(["approval"]);
     expect(missingMetadataCapabilities(spec)).toEqual(["provider", "modelId", "modelLabel", "contextUsage"]);
   });
+
+  it("captures hermes as fully hook-backed", () => {
+    const spec = integrationSpec("hermes");
+    expect(missingLifecycleCapabilities(spec)).toEqual([]);
+    expect(missingMetadataCapabilities(spec)).toEqual([]);
+  });
 });
