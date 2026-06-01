@@ -9,6 +9,7 @@ function defaultExecMock(command: string) {
 }
 
 const execMock = vi.fn(defaultExecMock);
+const execFileCaptureMock = vi.fn(() => ({ status: 0, stdout: "", stderr: "", signal: null }));
 const reportStateMock = vi.fn();
 const writeFileSyncMock = vi.fn();
 const randomUUIDMock = vi.fn(() => "fixed-uuid");
@@ -84,6 +85,7 @@ vi.mock("./config.js", () => ({
 
 vi.mock("./shell.js", () => ({
   exec: execMock,
+  execFileCapture: execFileCaptureMock,
 }));
 
 vi.mock("./state.js", () => ({
@@ -105,6 +107,7 @@ const { createWorkspace, createWorkspaceOrThrow, resolveWorkspaceLaunch } = awai
 beforeEach(() => {
   execMock.mockReset();
   execMock.mockImplementation(defaultExecMock);
+  execFileCaptureMock.mockClear();
   reportStateMock.mockClear();
   scanMock.mockReset();
   scanMock.mockReturnValue([]);
@@ -176,6 +179,24 @@ describe("createWorkspace", () => {
       windowName: "bare:demo",
     }));
     expect(execMock).toHaveBeenCalledWith(expect.stringContaining(`tmux send-keys -t %42 "export FEATURE_FLAG='1'; claude --dangerously-skip-permissions" Enter`));
+    expect(execFileCaptureMock).toHaveBeenCalledWith("tmux", [
+      "set-option",
+      "-p",
+      "-q",
+      "-t",
+      "%42",
+      "@agents_command_content_kind",
+      "agent",
+    ]);
+    expect(execFileCaptureMock).toHaveBeenCalledWith("tmux", [
+      "set-option",
+      "-p",
+      "-q",
+      "-t",
+      "%42",
+      "@agents_command_launch",
+      "export FEATURE_FLAG='1'; claude --dangerously-skip-permissions",
+    ]);
     expect(reportStateMock).toHaveBeenCalledWith(
       "claude",
       "%42",

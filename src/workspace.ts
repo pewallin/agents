@@ -6,6 +6,7 @@ import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { loadConfig, resolveProfile } from "./config.js";
 import { readStates, reportState } from "./state.js";
 import { resolveStateRestoreCommand } from "./agent-restore.js";
+import { setTmuxPaneCommandMetadata } from "./tmux-pane-metadata.js";
 import { scan } from "./scanner.js";
 import type { WorkspaceDef, LaunchProfile } from "./config.js";
 import type { StateEntry, WorkspaceSnapshot } from "./state.js";
@@ -429,7 +430,7 @@ export function createWorkspaceOrThrow(agentCmd?: string, name?: string, layout?
   if (muxKind === "zellij") {
     createdPane = createWorkspaceZellij(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
   } else {
-    createdPane = createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen, argv, launchEnv);
+    createdPane = createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen, argv, launchEnv, resolved.profileName);
   }
 
   const result: WorkspaceLaunchResult = {
@@ -536,7 +537,7 @@ function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: st
   };
 }
 
-function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean, argv?: string[], env?: Record<string, string>): CreatedWorkspacePane {
+function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean, argv?: string[], env?: Record<string, string>, profileName?: string): CreatedWorkspacePane {
   const shouldFocusNewWindow = detectMultiplexer() === "tmux" && opts?.detached !== true;
   const cwd = opts?.cwd || process.cwd();
   const targetSession = resolveTmuxSessionTarget(opts?.tmuxSession);
@@ -572,6 +573,12 @@ function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: stri
   if (alternateScreen === false) {
     exec(`tmux set-option -p -t ${agentPaneId} alternate-screen off`);
   }
+  setTmuxPaneCommandMetadata(agentPaneId, {
+    command: agentCommand,
+    launchCommand: cmd,
+    cwd,
+    profileName,
+  });
   if (wsSnapshot) seedWorkspaceState(agentPaneId, agentCommand, wsSnapshot);
   if (!opts?.directAgentLaunch) {
     exec(`tmux send-keys -t ${agentPaneId} ${JSON.stringify(cmd)} Enter`);

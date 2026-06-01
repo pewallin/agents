@@ -151,6 +151,7 @@ const [
   config,
   resumeMod,
   agentRestore,
+  tmuxPaneMetadata,
   implementationRuntime,
 ] = await Promise.all([
   import("commander"),
@@ -162,6 +163,7 @@ const [
   import("./config.js"),
   import("./resume.js"),
   import("./agent-restore.js"),
+  import("./tmux-pane-metadata.js"),
   import("./implementation-runtime.js"),
 ]);
 
@@ -173,12 +175,14 @@ const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
-  const {
-    normalizeTmuxResurrectFile,
-    resolveAgentRestoreArgv,
-    applyTmuxResurrectMetadataLaunchesFile,
-    tmuxResurrectRestoreProcessesForFiles,
-  } = agentRestore;
+const { backfillTmuxPaneCommandMetadata, setTmuxPaneCommandMetadata } = tmuxPaneMetadata;
+const {
+  normalizeTmuxResurrectFile,
+  resolveAgentRestoreArgv,
+  renderCommand,
+  applyTmuxResurrectMetadataLaunchesFile,
+  tmuxResurrectRestoreProcessesForFiles,
+} = agentRestore;
 const {
   AgentsRuntimeError,
   listImplementationTargets,
@@ -196,6 +200,13 @@ function runResurrectAgent(agent: string, args: string[]): never {
     cwd: process.cwd(),
     originalArgv,
   }) || originalArgv;
+
+  setTmuxPaneCommandMetadata(process.env.TMUX_PANE, {
+    agent,
+    command: renderCommand(originalArgv),
+    launchCommand: renderCommand(argv),
+    cwd: process.cwd(),
+  });
 
   const result = spawnSync(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });
   if (result.error) {
@@ -748,7 +759,15 @@ program
           `tmux display-message -t ${session} -p '#{pane_current_path}'`,
           { encoding: "utf-8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"] }
         ).trim();
-        if (paneCwd) wsSnapshot = { command: opts.agent, cwd: paneCwd, mux: "tmux" };
+        if (paneCwd) {
+          wsSnapshot = { command: opts.agent, cwd: paneCwd, mux: "tmux" };
+          backfillTmuxPaneCommandMetadata(session, {
+            agent: opts.agent,
+            command: opts.agent,
+            launchCommand: opts.agent,
+            cwd: paneCwd,
+          });
+        }
       } catch {}
     } else if (muxKind === "zellij" && process.env.PWD) {
       wsSnapshot = { command: opts.agent, cwd: process.env.PWD, mux: "zellij" };

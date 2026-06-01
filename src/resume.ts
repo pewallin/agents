@@ -5,6 +5,7 @@ import { clearStateExternalSessionId, readStateSnapshot, reportState } from "./s
 import { resolveProfile, type LaunchProfile } from "./config.js";
 import { splitCommandArgv } from "./workspace.js";
 import { execFileCapture } from "./shell.js";
+import { setTmuxPaneCommandMetadata } from "./tmux-pane-metadata.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
 
@@ -293,6 +294,12 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     if (respawn.status !== 0) {
       throw new Error(respawn.stderr || respawn.stdout || respawn.error?.message || `tmux respawn-pane exited ${respawn.status}`);
     }
+    setTmuxPaneCommandMetadata(pane.tmuxPaneId, {
+      agent: resumeAgent,
+      command,
+      launchCommand: command,
+      cwd,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
