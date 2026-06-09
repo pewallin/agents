@@ -121,6 +121,22 @@ describe("resolveAgentRestoreCommand", () => {
     });
   });
 
+  it("uses the configured kiro CLI profile when restoring without a session id", () => {
+    withIsolatedAgentsHome((root) => {
+      writeConfig(root, {
+        profiles: {
+          kiro: { command: "kiro-cli chat -a" },
+        },
+      });
+
+      expect(resolveAgentRestoreCommand({
+        agent: "kiro",
+        cwd: "/repo",
+        originalArgv: ["kiro"],
+      })).toBe("kiro-cli chat -a");
+    });
+  });
+
 });
 
 describe("normalizeTmuxResurrectContent", () => {

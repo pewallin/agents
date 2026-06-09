@@ -480,6 +480,7 @@ export function resolveAgentRestoreArgv(options: AgentRestoreCommandOptions): st
   const baseArgv = mergeBaseArgv(profileArgv, originalBase, defaultBaseArgv(agent));
 
   if (!sessionId) {
+    if (agent === "kiro") return baseArgv;
     return shouldStartFreshForAmbiguousLast(agent, options.cwd, originalArgv) ? baseArgv : undefined;
   }
 
