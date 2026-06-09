@@ -3,7 +3,7 @@ import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
-import { agentResumeInvocation, agentStatusRequiresForce, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
+import { agentResumeInvocation, agentStatusRequiresForce, renderResumeRespawnCommand, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
 import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
@@ -408,6 +408,16 @@ describe("resolveCodexFallbackTitleFromHistory", () => {
         "Build a complete redesign of the sidebar and keep all previous behavior while also making it work across multiple repos with a large amount of project context that should not be truncated poorly",
       ]),
     ).toBeUndefined();
+  });
+
+  it("skips resurrect command and session-id fallback titles", () => {
+    expect(
+      resolveCodexFallbackTitleFromHistory("shape", "/Users/peter/code/shape", [
+        "node /Users/peter/code/agents/dist/cli.js resurrect agent codex",
+        "019e8043-2892-7cc1-a3de-6566d9f016f5",
+        "comitta",
+      ]),
+    ).toBe("comitta");
   });
 
   it("keeps an already-meaningful fallback title", () => {
@@ -881,6 +891,14 @@ describe("resume helpers", () => {
       strategy: "restart",
       argv: ["codex", "resume", "-c", "model_reasoning_effort=\"xhigh\"", "thread-123"],
     });
+  });
+
+  it("wraps resume respawn commands with local agent PATH discovery", () => {
+    const command = renderResumeRespawnCommand(["codex", "resume", "thread-123"]);
+
+    expect(command).toContain("agents_prepend_path_dir");
+    expect(command).toContain("$HOME/.nvm/versions/node");
+    expect(command).toContain("exec codex resume thread-123");
   });
 
   it("seeds resumed sessions as idle so stale working state cannot cross respawn boundaries", () => {

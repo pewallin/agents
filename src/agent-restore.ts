@@ -530,6 +530,7 @@ interface ResolvedMetadataLaunch {
   command: string;
   cwd?: string;
   source: "metadata" | "config-command" | "profile";
+  commandId?: string;
 }
 
 export interface TmuxResurrectMetadataApplyResult {
@@ -592,6 +593,7 @@ function resolvedLaunchForMetadata(entry: MetadataPaneEntry): ResolvedMetadataLa
       command: entry.commandLaunch,
       cwd: entry.commandCwd,
       source: "metadata",
+      commandId: entry.commandId,
     };
   }
 
@@ -600,7 +602,13 @@ function resolvedLaunchForMetadata(entry: MetadataPaneEntry): ResolvedMetadataLa
   return {
     ...configured,
     cwd: entry.commandCwd || configured.cwd,
+    commandId: entry.commandId,
   };
+}
+
+function shouldApplyMetadataLaunch(savedFullCommand: string | undefined, launch: ResolvedMetadataLaunch): boolean {
+  if (isShellishFullCommand(savedFullCommand)) return true;
+  return !firstAgentToken(launch.command);
 }
 
 function paneProcessEntryForCommand(command: string): string | undefined {
@@ -693,7 +701,7 @@ export function applyTmuxResurrectMetadataLaunches(
     if (!launch) return line;
 
     const savedFullCommand = fields[10]?.startsWith(":") ? fields[10].slice(1) : fields[10];
-    if (!isShellishFullCommand(savedFullCommand)) return line;
+    if (!shouldApplyMetadataLaunch(savedFullCommand, launch)) return line;
 
     const nextFullCommand = `:${launch.command}`;
     const nextDir = launch.cwd ? `:${launch.cwd}` : fields[7];

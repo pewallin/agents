@@ -153,6 +153,7 @@ const [
   agentRestore,
   tmuxPaneMetadata,
   implementationRuntime,
+  usageMod,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -165,6 +166,7 @@ const [
   import("./agent-restore.js"),
   import("./tmux-pane-metadata.js"),
   import("./implementation-runtime.js"),
+  import("./usage.js"),
 ]);
 
 const { Command } = commander;
@@ -192,6 +194,7 @@ const {
   resumeImplementationSession,
   listTargetAgentSessions,
 } = implementationRuntime;
+const { fetchAgentUsageSnapshot } = usageMod;
 
 function runResurrectAgent(agent: string, args: string[]): never {
   const originalArgv = [agent, ...(args || [])];
@@ -365,6 +368,29 @@ program
     for (const state of states) {
       const detail = state.detail ? ` ${state.detail}` : "";
       console.log(`${state.session} ${state.status}${detail}`);
+    }
+  });
+
+program
+  .command("usage")
+  .description("Show normalized provider quota usage")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const snapshot = await fetchAgentUsageSnapshot();
+    if (opts.json || !process.stdout.isTTY) {
+      console.log(JSON.stringify(snapshot, null, 2));
+      return;
+    }
+
+    if (snapshot.sources.length === 0) {
+      console.log("No provider usage sources configured.");
+      return;
+    }
+
+    for (const source of snapshot.sources) {
+      const account = source.account?.label || source.account?.id;
+      const suffix = account ? ` (${account})` : "";
+      console.log(`${source.providerLabel || source.provider}${suffix}: ${source.status}`);
     }
   });
 

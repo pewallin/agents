@@ -258,7 +258,7 @@ Hooks report state for claude, codex, copilot, pi, opencode, kiro, and hermes. K
 
 ## Detected Agents
 
-`claude` `copilot` `opencode` `codex` `pi` `kiro` `cursor` `hermes`
+`claude` `copilot` `opencode` `codex` `pi` `kiro`/`kiro-cli` `cursor` `hermes`
 
 ## License
 

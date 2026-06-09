@@ -206,6 +206,20 @@ function promptArgsForAgent(agent: string, prompt?: string): string[] {
   }
 }
 
+export function renderResumeRespawnCommand(argv: string[]): string {
+  const command = renderShellCommand(argv);
+  return [
+    `agents_prepend_path_dir() { [ -d "$1" ] || return 0; case ":$PATH:" in *":$1:"*) ;; *) PATH="$1\${PATH:+:$PATH}" ;; esac; }`,
+    `agents_prepend_path_dir /opt/homebrew/bin`,
+    `agents_prepend_path_dir /usr/local/bin`,
+    `agents_prepend_path_dir "$HOME/.local/bin"`,
+    `agents_prepend_path_dir "$HOME/.npm-global/bin"`,
+    `if [ -d "$HOME/.nvm/versions/node" ]; then for agents_node_bin in $(find "$HOME/.nvm/versions/node" -mindepth 2 -maxdepth 2 -type d -name bin 2>/dev/null); do agents_prepend_path_dir "$agents_node_bin"; done; fi`,
+    `export PATH`,
+    `exec ${command}`,
+  ].join("; ");
+}
+
 export function resolveResumePane(paneFilter: string, panes: AgentPane[] = scan()): AgentPane | undefined {
   return panes.find((pane) => matchesHistoryPaneFilter(pane, paneFilter));
 }
@@ -277,6 +291,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     || stateWorkspaceCwd(pane.agent, pane.tmuxPaneId, snapshot)
     || (pane.cwd ? normalizeHistoryCwd(pane.cwd) : process.cwd());
   const command = renderShellCommand(invocation.argv);
+  const respawnCommand = renderResumeRespawnCommand(invocation.argv);
 
   try {
     if (target.targetKind === "new-session") {
@@ -289,7 +304,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
       pane.tmuxPaneId,
       "-c",
       cwd,
-      command,
+      respawnCommand,
     ]);
     if (respawn.status !== 0) {
       throw new Error(respawn.stderr || respawn.stdout || respawn.error?.message || `tmux respawn-pane exited ${respawn.status}`);

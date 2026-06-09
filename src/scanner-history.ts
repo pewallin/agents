@@ -199,12 +199,22 @@ export function resolveCodexFallbackTitleFromHistory(
   for (const candidateTitle of candidateTitles) {
     const summary = summarizeText(candidateTitle);
     if (!summary) continue;
+    if (isUnhelpfulCodexFallbackTitle(summary)) continue;
     if (summary.length > 120) continue;
     if (isLikelyProjectBasenameTitle(summary, cwdRaw)) continue;
     return summary;
   }
 
   return undefined;
+}
+
+function isUnhelpfulCodexFallbackTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized.includes("resurrect agent")
+    || normalized.includes(">>> transcript start")
+    || normalized.includes(">>> approval request start")
+    || normalized.startsWith("the following is the codex agent history")
+    || /^019e[0-9a-f-]{31,}$/i.test(normalized);
 }
 
 function getCodexCwdFallbackTitle(cwdRaw: string | undefined, fallbackTitle: string): string | undefined {
@@ -231,6 +241,7 @@ function listCodexHistoryTitlesForCwd(cwdRaw: string, limit: number): string[] {
     const sessionIndex = readCodexSessionIndex();
     return rows
       .map((row) => row.id ? sessionIndex.get(row.id) || row.title || row.id : row.title)
+      .filter((title): title is string => !!title && !isUnhelpfulCodexFallbackTitle(title))
       .filter((title): title is string => !!title);
   } catch {
     return [];
