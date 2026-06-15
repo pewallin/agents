@@ -121,19 +121,31 @@ describe("resolveAgentRestoreCommand", () => {
     });
   });
 
-  it("uses the configured kiro CLI profile when restoring without a session id", () => {
+  it("uses configured profiles when restoring without a session id", () => {
     withIsolatedAgentsHome((root) => {
       writeConfig(root, {
         profiles: {
+          claude: { command: "claude --dangerously-skip-permissions" },
+          codex: { command: "codex --dangerously-bypass-approvals-and-sandbox" },
+          copilot: { command: "copilot --yolo" },
+          pi: { command: "pi --yolo" },
+          opencode: { command: "opencode" },
           kiro: { command: "kiro-cli chat -a" },
         },
       });
 
-      expect(resolveAgentRestoreCommand({
-        agent: "kiro",
-        cwd: "/repo",
-        originalArgv: ["kiro"],
-      })).toBe("kiro-cli chat -a");
+      expect(resolveAgentRestoreCommand({ agent: "claude", cwd: "/repo", originalArgv: ["claude"] }))
+        .toBe("claude --dangerously-skip-permissions");
+      expect(resolveAgentRestoreCommand({ agent: "codex", cwd: "/repo", originalArgv: ["codex"] }))
+        .toBe("codex --dangerously-bypass-approvals-and-sandbox");
+      expect(resolveAgentRestoreCommand({ agent: "copilot", cwd: "/repo", originalArgv: ["copilot"] }))
+        .toBe("copilot --yolo");
+      expect(resolveAgentRestoreCommand({ agent: "pi", cwd: "/repo", originalArgv: ["pi"] }))
+        .toBe("pi --yolo");
+      expect(resolveAgentRestoreCommand({ agent: "opencode", cwd: "/repo", originalArgv: ["opencode"] }))
+        .toBe("opencode");
+      expect(resolveAgentRestoreCommand({ agent: "kiro", cwd: "/repo", originalArgv: ["kiro"] }))
+        .toBe("kiro-cli chat -a");
     });
   });
 

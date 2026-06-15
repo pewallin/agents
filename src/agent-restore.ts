@@ -448,13 +448,6 @@ function claimAmbiguousLast(agent: string, cwd: string): boolean {
   }
 }
 
-function shouldStartFreshForAmbiguousLast(agent: string, cwd: string | undefined, originalArgv?: string[]): boolean {
-  if (agent.toLowerCase() !== "codex") return false;
-  if (!cwd || !isCodexLastResume(originalArgv)) return false;
-  if (stateSessionIdsFor(agent, cwd).length <= 1) return false;
-  return !claimAmbiguousLast(agent, cwd);
-}
-
 function ambiguousLastSessionId(agent: string, cwd: string | undefined, originalArgv?: string[]): string | undefined {
   if (agent.toLowerCase() !== "codex") return undefined;
   if (!cwd || !isCodexLastResume(originalArgv)) return undefined;
@@ -480,8 +473,7 @@ export function resolveAgentRestoreArgv(options: AgentRestoreCommandOptions): st
   const baseArgv = mergeBaseArgv(profileArgv, originalBase, defaultBaseArgv(agent));
 
   if (!sessionId) {
-    if (agent === "kiro") return baseArgv;
-    return shouldStartFreshForAmbiguousLast(agent, options.cwd, originalArgv) ? baseArgv : undefined;
+    return baseArgv;
   }
 
   switch (agent) {
