@@ -605,6 +605,11 @@ function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: stri
       if (paneCmd !== "$SHELL") {
         exec(`tmux send-keys -t ${paneId} ${JSON.stringify(paneCmd)} Enter`);
       }
+      setTmuxPaneCommandMetadata(paneId, {
+        command: paneCmd,
+        launchCommand: paneCmd,
+        cwd,
+      });
       const label = paneCmd.replace(/^\$/, "").split(/\s+/)[0].toLowerCase();
       paneMap[label] = paneId;
     }

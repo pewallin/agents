@@ -235,6 +235,53 @@ describe("createWorkspace", () => {
     expect(execMock).not.toHaveBeenCalledWith(expect.stringContaining(`tmux send-keys -t %42`));
   });
 
+  it("records launch metadata for tmux helper panes", () => {
+    const splitPanes = ["%43", "%44", "%45"];
+    execMock.mockImplementation((command: string) => {
+      if (command.startsWith("tmux new-window")) return "%42";
+      if (command.startsWith("tmux split-window")) return splitPanes.shift() || "";
+      if (command.includes("display-message -t %42 -p '#{session_name}'")) return "agents";
+      if (command.includes("display-message -p '#S'")) return "agents";
+      if (command.includes("list-sessions")) return "agents";
+      return "";
+    });
+
+    createWorkspace(undefined, undefined, undefined, {
+      profile: "bare",
+      cwd: "/tmp/demo",
+    });
+
+    expect(execMock).toHaveBeenCalledWith(expect.stringContaining(`tmux send-keys -t %43 "lazygit" Enter`));
+    expect(execMock).toHaveBeenCalledWith(expect.stringContaining(`tmux send-keys -t %44 "bv" Enter`));
+    expect(execFileCaptureMock).toHaveBeenCalledWith("tmux", [
+      "set-option",
+      "-p",
+      "-q",
+      "-t",
+      "%43",
+      "@agents_command_launch",
+      "lazygit",
+    ]);
+    expect(execFileCaptureMock).toHaveBeenCalledWith("tmux", [
+      "set-option",
+      "-p",
+      "-q",
+      "-t",
+      "%44",
+      "@agents_command_launch",
+      "bv",
+    ]);
+    expect(execFileCaptureMock).toHaveBeenCalledWith("tmux", [
+      "set-option",
+      "-p",
+      "-q",
+      "-t",
+      "%45",
+      "@agents_command_launch",
+      "$SHELL",
+    ]);
+  });
+
   it("can create a tmux workspace without focusing the attached client", () => {
     createWorkspace(undefined, undefined, undefined, {
       profile: "bare",
