@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execSync, spawnSync } from "child_process";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import type { ModelSource } from "./state.js";
@@ -177,7 +177,7 @@ const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
-const { backfillTmuxPaneCommandMetadata, setTmuxPaneCommandMetadata } = tmuxPaneMetadata;
+const { backfillTmuxPaneCommandMetadata, setTmuxPaneCommandMetadata, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
 const {
   normalizeTmuxResurrectFile,
   resolveAgentRestoreArgv,
@@ -196,6 +196,74 @@ const {
 } = implementationRuntime;
 const { fetchAgentUsageSnapshot } = usageMod;
 
+const CODEX_UPDATE_PREFLIGHT_TTL_MS = 15 * 60 * 1000;
+const CODEX_UPDATE_PREFLIGHT_WAIT_MS = 10 * 60 * 1000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isFreshPath(path: string, ttlMs: number): boolean {
+  try {
+    return Date.now() - statSync(path).mtimeMs <= ttlMs;
+  } catch {
+    return false;
+  }
+}
+
+function agentsRuntimeTempDir(): string {
+  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
+  return process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp");
+}
+
+function runCodexUpdatePreflight(argv: string[]): void {
+  if (process.env.AGENTS_SKIP_CODEX_UPDATE_PREFLIGHT === "1") return;
+  const preflightDir = join(agentsRuntimeTempDir(), "codex-update-preflight");
+  const donePath = join(preflightDir, "done");
+  const lockPath = join(preflightDir, "lock");
+
+  mkdirSync(preflightDir, { recursive: true });
+  if (isFreshPath(donePath, CODEX_UPDATE_PREFLIGHT_TTL_MS)) return;
+
+  let leader = false;
+  try {
+    mkdirSync(lockPath);
+    leader = true;
+  } catch {
+    leader = false;
+  }
+
+  if (leader) {
+    try {
+      const executable = argv[0] || "codex";
+      const result = spawnSync(executable, ["update"], { stdio: "inherit", env: process.env });
+      if (result.error) {
+        console.error(`Codex update preflight failed: ${result.error.message}`);
+      } else if (result.status && result.status !== 0) {
+        console.error(`Codex update preflight exited with ${result.status}; continuing restore.`);
+      }
+      writeFileSync(donePath, `${Date.now()}\n`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Codex update preflight failed: ${message}`);
+      writeFileSync(donePath, `${Date.now()}\n`);
+    } finally {
+      rmSync(lockPath, { recursive: true, force: true });
+    }
+    return;
+  }
+
+  const startedAt = Date.now();
+  while (!isFreshPath(donePath, CODEX_UPDATE_PREFLIGHT_TTL_MS)) {
+    if (!existsSync(lockPath)) return;
+    if (Date.now() - startedAt > CODEX_UPDATE_PREFLIGHT_WAIT_MS) {
+      console.error("Timed out waiting for Codex update preflight; continuing restore.");
+      return;
+    }
+    sleepSync(500);
+  }
+}
+
 function runResurrectAgent(agent: string, args: string[]): never {
   const originalArgv = [agent, ...(args || [])];
   const argv = resolveAgentRestoreArgv({
@@ -210,6 +278,10 @@ function runResurrectAgent(agent: string, args: string[]): never {
     launchCommand: renderCommand(argv),
     cwd: process.cwd(),
   });
+
+  if (agent.toLowerCase() === "codex") {
+    runCodexUpdatePreflight(argv);
+  }
 
   const result = spawnSync(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });
   if (result.error) {
@@ -800,6 +872,16 @@ program
     }
 
     const externalSessionId = opts.externalSessionId as string | undefined;
+    if (externalSessionId && muxKind === "tmux" && session?.startsWith("%") && wsSnapshot?.cwd) {
+      const restoreArgv = resolveAgentRestoreArgv({
+        agent: opts.agent,
+        cwd: wsSnapshot.cwd,
+        originalArgv: [opts.agent],
+        externalSessionId,
+      });
+      updateTmuxPaneCommandLaunch(session, restoreArgv ? renderCommand(restoreArgv) : undefined, wsSnapshot.cwd);
+    }
+
     let model = opts.model as string | undefined;
     let provider = opts.provider as string | undefined;
     let modelId = opts.modelId as string | undefined;

@@ -160,11 +160,28 @@ export function tmuxPaneCommandMetadataSetOptionArguments(paneID: string, metada
   ];
 }
 
+export function tmuxPaneCommandLaunchSetOptionArguments(paneID: string, launchCommand: string, cwd?: string): string[][] {
+  return [
+    ...(cwd ? [["set-option", "-p", "-q", "-t", paneID, "@agents_command_cwd", cwd]] : []),
+    ["set-option", "-p", "-q", "-t", paneID, "@agents_command_launch", launchCommand],
+  ];
+}
+
 export function setTmuxPaneCommandMetadata(paneID: string | undefined, input: TmuxPaneCommandMetadataInput): boolean {
   if (!paneID?.startsWith("%")) return false;
   const metadata = buildTmuxPaneCommandMetadata(input);
   let ok = true;
   for (const args of tmuxPaneCommandMetadataSetOptionArguments(paneID, metadata)) {
+    const result = execFileCapture("tmux", args);
+    if (result.status !== 0) ok = false;
+  }
+  return ok;
+}
+
+export function updateTmuxPaneCommandLaunch(paneID: string | undefined, launchCommand: string | undefined, cwd?: string): boolean {
+  if (!paneID?.startsWith("%") || !launchCommand) return false;
+  let ok = true;
+  for (const args of tmuxPaneCommandLaunchSetOptionArguments(paneID, launchCommand, cwd)) {
     const result = execFileCapture("tmux", args);
     if (result.status !== 0) ok = false;
   }

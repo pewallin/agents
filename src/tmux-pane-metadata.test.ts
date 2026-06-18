@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTmuxPaneCommandMetadata,
+  tmuxPaneCommandLaunchSetOptionArguments,
   tmuxPaneCommandMetadataSetOptionArguments,
 } from "./tmux-pane-metadata.js";
 
@@ -47,6 +48,13 @@ describe("tmux pane command metadata", () => {
       "%37",
       "@agents_command_content_kind",
       "agent",
+    ]);
+  });
+
+  it("renders narrow launch metadata updates without replacing inventory identity", () => {
+    expect(tmuxPaneCommandLaunchSetOptionArguments("%37", "codex resume thread-123", "/repo")).toEqual([
+      ["set-option", "-p", "-q", "-t", "%37", "@agents_command_cwd", "/repo"],
+      ["set-option", "-p", "-q", "-t", "%37", "@agents_command_launch", "codex resume thread-123"],
     ]);
   });
 });
