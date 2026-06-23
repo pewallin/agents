@@ -1,6 +1,7 @@
 import { loadConfig, getProfileNames, resolveProfile, type Config, type LaunchProfile } from "./config.js";
 import { scan, runtimeStates, getSessionHistory, type AgentPane, type AgentRuntimeState, type AgentSessionHistoryGroup } from "./scanner.js";
 import { resumeAgentSession, type AgentSessionResumeResult, type ResumeAgentSessionOptions } from "./resume.js";
+import { listDoneProjection, recordDoneEvent, updateDoneProjection } from "./done.js";
 import type { RuntimeLocator, RuntimeStateEvent, RuntimeStateEventEntity, RuntimeStateEventOperation, RuntimeMux } from "./runtime-events.js";
 import {
   listImplementationTargets,
@@ -45,6 +46,19 @@ import {
   type RestorableWorkspace,
   type WorkspacePathState,
 } from "./workspace.js";
+export {
+  AGENTS_DONE_CONTRACT_VERSION,
+  AgentDoneError,
+  listDoneProjection,
+  recordDoneEvent,
+  updateDoneProjection,
+  type AgentDoneProjection,
+  type AgentDoneRecord,
+  type AgentDoneRecordInput,
+  type AgentPinnedSession,
+  type DoneTmuxContext,
+  type DoneUpdateOptions,
+} from "./done.js";
 
 export type {
   AgentPane,
@@ -117,6 +131,18 @@ export function listAgentSessionHistory(opts: { agent?: string; cwd?: string; pa
 
 export function resumeAgentSessionInPane(options: ResumeAgentSessionOptions): AgentSessionResumeResult {
   return resumeAgentSession(options);
+}
+
+export function listAgentDoneProjection() {
+  return listDoneProjection();
+}
+
+export function recordAgentDoneEvent(input: Parameters<typeof recordDoneEvent>[0]) {
+  return recordDoneEvent(input);
+}
+
+export function updateAgentDoneProjection(options: Parameters<typeof updateDoneProjection>[0]) {
+  return updateDoneProjection(options);
 }
 
 export function resolveWorkspaceCommand(options: LaunchWorkspaceOptions = {}): ResolvedWorkspaceLaunch {

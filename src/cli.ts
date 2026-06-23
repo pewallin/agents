@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import type { ModelSource } from "./state.js";
+import type { AgentDoneRecordInput } from "./done.js";
 import { switchBack } from "./back.js";
 import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
 
@@ -154,6 +155,7 @@ const [
   tmuxPaneMetadata,
   implementationRuntime,
   usageMod,
+  doneMod,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -167,6 +169,7 @@ const [
   import("./tmux-pane-metadata.js"),
   import("./implementation-runtime.js"),
   import("./usage.js"),
+  import("./done.js"),
 ]);
 
 const { Command } = commander;
@@ -195,6 +198,7 @@ const {
   listTargetAgentSessions,
 } = implementationRuntime;
 const { fetchAgentUsageSnapshot } = usageMod;
+const { AgentDoneError, listDoneProjection, recordDoneEvent, updateDoneProjection } = doneMod;
 
 const CODEX_UPDATE_PREFLIGHT_TTL_MS = 15 * 60 * 1000;
 const CODEX_UPDATE_PREFLIGHT_WAIT_MS = 10 * 60 * 1000;
@@ -345,6 +349,42 @@ function handleRuntimeError(error: unknown, opts: { json?: boolean }): never {
   process.exit(1);
 }
 
+function handleDoneError(error: unknown, opts: { json?: boolean }): never {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = error instanceof AgentDoneError ? error.code : "unexpected_error";
+  if (opts.json || !process.stderr.isTTY) {
+    console.error(JSON.stringify({ ok: false, contractVersion: 1, code, message }, null, 2));
+  } else {
+    console.error(message);
+  }
+  process.exit(1);
+}
+
+function parseBooleanOption(value: string | undefined, name: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off"].includes(normalized)) return false;
+  throw new AgentDoneError("invalid_boolean", `${name} must be true or false.`);
+}
+
+async function readJSONFromStdin(): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const input = Buffer.concat(chunks).toString("utf8").trim();
+  if (!input) {
+    throw new AgentDoneError("missing_input", "Expected a Done event JSON payload on stdin.");
+  }
+  try {
+    return JSON.parse(input) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new AgentDoneError("invalid_json", `Invalid Done event JSON: ${message}`);
+  }
+}
+
 async function loadUiModules() {
   const [reactMod, ink, dashboardMod, selectMod, agentTableMod] = await Promise.all([
     import("react"),
@@ -463,6 +503,76 @@ program
       const account = source.account?.label || source.account?.id;
       const suffix = account ? ` (${account})` : "";
       console.log(`${source.providerLabel || source.provider}${suffix}: ${source.status}`);
+    }
+  });
+
+const doneCommand = program
+  .command("done")
+  .description("Manage persisted Done events and pinned agent sessions");
+
+doneCommand
+  .command("list")
+  .description("List persisted Done events and pinned agent sessions")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const projection = listDoneProjection();
+      if (opts.json || !process.stdout.isTTY) {
+        console.log(JSON.stringify(projection, null, 2));
+        return;
+      }
+      const records = projection.records.filter((record) => !record.acknowledged && !record.cleared);
+      console.log(`${projection.pinnedSessions.length} pinned sessions, ${records.length} recent Done records.`);
+    } catch (error) {
+      handleDoneError(error, opts);
+    }
+  });
+
+doneCommand
+  .command("record")
+  .description("Record or upsert a Done event from JSON on stdin")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    try {
+      const payload = await readJSONFromStdin();
+      const projection = recordDoneEvent(payload as AgentDoneRecordInput);
+      if (opts.json || !process.stdout.isTTY) {
+        console.log(JSON.stringify(projection, null, 2));
+        return;
+      }
+      console.log("Recorded Done event.");
+    } catch (error) {
+      handleDoneError(error, opts);
+    }
+  });
+
+doneCommand
+  .command("update")
+  .description("Update Done event state or session pin state")
+  .option("--session-identity <id>", "Stable agent session identity for pin/unpin")
+  .option("--external-session-id <id>", "External agent session id for pin/unpin")
+  .option("--done-event-id <id>", "Done event id for acknowledge/clear")
+  .option("--pin <true|false>", "Pin or unpin a session")
+  .option("--acknowledge <true|false>", "Acknowledge or unacknowledge a Done event")
+  .option("--clear <true|false>", "Clear or restore a Done event")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const projection = updateDoneProjection({
+        sessionIdentity: opts.sessionIdentity,
+        externalSessionID: opts.externalSessionId,
+        doneEventID: opts.doneEventId,
+        pin: parseBooleanOption(opts.pin, "--pin"),
+        acknowledge: parseBooleanOption(opts.acknowledge, "--acknowledge"),
+        clear: parseBooleanOption(opts.clear, "--clear"),
+      });
+      if (opts.json || !process.stdout.isTTY) {
+        console.log(JSON.stringify(projection, null, 2));
+        return;
+      }
+      console.log("Updated Done state.");
+    } catch (error) {
+      handleDoneError(error, opts);
     }
   });
 

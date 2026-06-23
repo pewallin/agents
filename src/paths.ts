@@ -57,6 +57,10 @@ export function getRuntimeStateEventsPath(): string {
   return process.env.AGENTS_RUNTIME_STATE_EVENTS_PATH || join(getRuntimeDir(), "state-events.jsonl");
 }
 
+export function getDoneStorePath(): string {
+  return process.env.AGENTS_DONE_STORE_PATH || join(resolveAgentsHome(), "recent-done.json");
+}
+
 export function ensureAgentsDirs(): void {
   mkdirSync(getAgentsHome(), { recursive: true });
   mkdirSync(getStateDir(), { recursive: true });
