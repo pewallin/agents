@@ -1033,14 +1033,14 @@ describe("resolveAgentIntentTitle", () => {
 });
 
 describe("shouldTreatCodexWorkingAsIdle", () => {
-  it("treats stale codex working state as idle when the pane shows a prompt", () => {
+  it("does not infer idle from stale codex working state when the pane shows a prompt", () => {
     const session = `%vitest-codex-stale-${Date.now()}`;
     const statePath = join(getStateDir(), `codex-${session}.json`);
     reportState("codex", session, "working");
     try {
       const entry = JSON.parse(readFileSync(statePath, "utf8")) as { ts: number };
       writeFileSync(statePath, JSON.stringify({ ...entry, state: "working", ts: entry.ts - 180, agent: "codex", session }));
-      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session)).toBe(true);
+      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session)).toBe(false);
     } finally {
       try { unlinkSync(statePath); } catch {}
     }
@@ -1057,7 +1057,7 @@ describe("shouldTreatCodexWorkingAsIdle", () => {
     }
   });
 
-  it("treats interrupted codex turns as idle as soon as the pane shows a prompt", () => {
+  it("treats interrupted codex turns as idle from the Codex op log", () => {
     const session = `%vitest-codex-interrupt-${Date.now()}`;
     const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
     const statePath = join(getStateDir(), `codex-${session}.json`);
@@ -1120,7 +1120,7 @@ describe("codex hook-backed detection", () => {
       const entry = JSON.parse(readFileSync(statePath, "utf8")) as { ts: number };
       writeFileSync(statePath, JSON.stringify({ ...entry, state: "working", ts: entry.ts - 180, agent: "codex", session }));
       const detector = getDetector("codex");
-      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session)).toBe(true);
+      expect(shouldTreatCodexWorkingAsIdle("› Implement {feature}\n", "agents-app", session)).toBe(false);
       expect(detector.isWorking("› Implement {feature}\n", "agents-app", session)).toBe(true);
       expect(detector.isIdle("› Implement {feature}\n", "agents-app", session)).toBe(false);
     } finally {
@@ -1128,7 +1128,7 @@ describe("codex hook-backed detection", () => {
     }
   });
 
-  it("converts stale codex working to idle after two unchanged cleanup samples", () => {
+  it("does not convert stale codex working to idle from repeated prompt samples", () => {
     const session = `%vitest-codex-cleanup-${Date.now()}`;
     const statePath = join(getStateDir(), `codex-${session}.json`);
     const prompt = "› Implement {feature}\n";
@@ -1140,19 +1140,8 @@ describe("codex hook-backed detection", () => {
       reconcileStaleCodexWorkingState(prompt, "agents-app", session);
       expect(getAgentStateEntry("codex", session)?.state).toBe("working");
 
-      const withCleanup = JSON.parse(readFileSync(statePath, "utf8")) as {
-        cleanup?: { observedAt?: number };
-      };
-      writeFileSync(statePath, JSON.stringify({
-        ...withCleanup,
-        cleanup: {
-          ...withCleanup.cleanup,
-          observedAt: (withCleanup.cleanup?.observedAt ?? Math.floor(Date.now() / 1000)) - 31,
-        },
-      }));
-
       reconcileStaleCodexWorkingState(prompt, "agents-app", session);
-      expect(getAgentStateEntry("codex", session)?.state).toBe("idle");
+      expect(getAgentStateEntry("codex", session)?.state).toBe("working");
     } finally {
       try { unlinkSync(statePath); } catch {}
     }

@@ -1,9 +1,8 @@
-import { createHash } from "crypto";
 import { existsSync, statSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { exec } from "./shell.js";
-import { getAgentState, getAgentStateEntry, recordCleanupObservation, reportState, upsertStateSnapshotEntry } from "./state.js";
+import { getAgentState, getAgentStateEntry, reportState, upsertStateSnapshotEntry } from "./state.js";
 import { stateDuration, stateExternalSessionId } from "./scanner-state-runtime.js";
 import type { StateEntry, StateSnapshot } from "./state.js";
 import type { AgentStatus } from "./scanner-types.js";
@@ -33,9 +32,6 @@ let codexStreamDisconnectCache: {
   latestDisconnects: Map<string, CodexStreamDisconnectEntry>;
 } | null = null;
 
-const CODEX_STALE_WORKING_MIN_AGE_SECONDS = 120;
-const CODEX_STALE_WORKING_SAMPLE_INTERVAL_SECONDS = 30;
-const CODEX_STALE_WORKING_REQUIRED_SAMPLES = 2;
 const CODEX_STREAM_DISCONNECT_ACTIVE_SECONDS = 180;
 
 function codexLogTimestamp(line: string): number | undefined {
@@ -233,34 +229,17 @@ export function getDetector(agent: string, snapshot?: StateSnapshot): AgentDetec
   }
 }
 
-function normalizeCleanupContent(content: string): string {
-  return content
-    .replace(/\r\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function cleanupContentHash(content: string): string {
-  return createHash("sha1").update(content).digest("hex");
-}
-
 export function shouldTreatCodexWorkingAsIdle(
-  content: string,
-  title: string,
+  _content: string,
+  _title: string,
   paneId?: string,
   snapshot?: StateSnapshot,
   codexOps: Map<string, CodexOpEntry> = latestCodexOpEntries(),
 ): boolean {
   if (!paneId) return false;
   const entry = getAgentStateEntry("codex", paneId, snapshot);
-  const interrupted = isCodexInterruptedAfterState(entry, paneId, snapshot, codexOps);
-  if (entry?.state === "working" && !interrupted) {
-    const age = Math.floor(Date.now() / 1000) - entry.ts;
-    if (age < CODEX_STALE_WORKING_MIN_AGE_SECONDS) return false;
-  }
   if (isCodexApprovalPending(paneId, snapshot, codexOps)) return false;
-  if (genericDetector.isApproval(content, paneId)) return false;
-  return genericDetector.isIdle(content, title, paneId);
+  return isCodexInterruptedAfterState(entry, paneId, snapshot, codexOps);
 }
 
 export function reconcileStaleCodexWorkingState(
@@ -272,63 +251,22 @@ export function reconcileStaleCodexWorkingState(
 ): void {
   if (!paneId) return;
   const entry = getAgentStateEntry("codex", paneId, snapshot);
-  if (!entry || entry.state !== "working") {
-    const updated = recordCleanupObservation("codex", paneId, null);
-    if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
-    return;
-  }
+  if (!entry || entry.state !== "working") return;
 
-  if (!shouldTreatCodexWorkingAsIdle(content, title, paneId, snapshot, codexOps)) {
-    const updated = recordCleanupObservation("codex", paneId, null);
-    if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
-    return;
-  }
-
-  const normalized = normalizeCleanupContent(content);
-  if (!normalized) {
-    const updated = recordCleanupObservation("codex", paneId, null);
-    if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
-    return;
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const nextHash = cleanupContentHash(normalized);
-  const previous = entry.cleanup;
-  const interrupted = isCodexInterruptedAfterState(entry, paneId, snapshot, codexOps);
-
-  if (previous?.contentHash === nextHash
-      && previous.observedAt
-      && now - previous.observedAt < CODEX_STALE_WORKING_SAMPLE_INTERVAL_SECONDS) {
-    return;
-  }
-
-  const unchangedSamples = previous?.contentHash === nextHash
-    ? (previous.unchangedSamples ?? 1) + 1
-    : 1;
-
-  if (interrupted || unchangedSamples >= CODEX_STALE_WORKING_REQUIRED_SAMPLES) {
-    const updated = reportState("codex", paneId, "idle", {
-      ...(entry.provider ? { provider: entry.provider } : {}),
-      ...(entry.modelId ? { modelId: entry.modelId } : {}),
-      ...(entry.modelLabel ? { modelLabel: entry.modelLabel } : {}),
-      ...(entry.modelSource ? { modelSource: entry.modelSource } : {}),
-      ...(entry.model ? { model: entry.model } : {}),
-      ...(entry.externalSessionId ? { externalSessionId: entry.externalSessionId } : {}),
-      ...(entry.context ? { context: entry.context } : {}),
-      ...(entry.workspace ? { workspace: entry.workspace } : {}),
-      ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
-      ...(entry.contextMax !== undefined ? { contextMax: entry.contextMax } : {}),
-    });
-    if (snapshot) upsertStateSnapshotEntry(snapshot, updated);
-    return;
-  }
-
-  const updated = recordCleanupObservation("codex", paneId, {
-    contentHash: nextHash,
-    observedAt: now,
-    unchangedSamples,
+  if (!shouldTreatCodexWorkingAsIdle(content, title, paneId, snapshot, codexOps)) return;
+  const updated = reportState("codex", paneId, "idle", {
+    ...(entry.provider ? { provider: entry.provider } : {}),
+    ...(entry.modelId ? { modelId: entry.modelId } : {}),
+    ...(entry.modelLabel ? { modelLabel: entry.modelLabel } : {}),
+    ...(entry.modelSource ? { modelSource: entry.modelSource } : {}),
+    ...(entry.model ? { model: entry.model } : {}),
+    ...(entry.externalSessionId ? { externalSessionId: entry.externalSessionId } : {}),
+    ...(entry.context ? { context: entry.context } : {}),
+    ...(entry.workspace ? { workspace: entry.workspace } : {}),
+    ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
+    ...(entry.contextMax !== undefined ? { contextMax: entry.contextMax } : {}),
   });
-  if (updated && snapshot) upsertStateSnapshotEntry(snapshot, updated);
+  if (snapshot) upsertStateSnapshotEntry(snapshot, updated);
 }
 
 export const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode", "kiro", "hermes"]);
