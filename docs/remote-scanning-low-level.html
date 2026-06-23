@@ -1,0 +1,1258 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agents remote scanning - low level</title>
+  <style>
+    :root {
+      --ink: #151515;
+      --muted: #68665f;
+      --paper: #f6f1e7;
+      --paper-2: #ebe3d4;
+      --line: #c9bda8;
+      --coal: #1c1f20;
+      --coal-2: #272b2c;
+      --rust: #b95435;
+      --gold: #c08a2b;
+      --green: #3c7b58;
+      --cyan: #2f718a;
+      --violet: #6e5a8f;
+      --cream: #fffaf0;
+      --shadow: 0 20px 55px rgba(28, 31, 32, 0.16);
+      --mono: "SFMono-Regular", "Menlo", "Monaco", "Consolas", monospace;
+      --body: "Avenir Next", "Gill Sans", "Segoe UI", sans-serif;
+      --display: "DIN Condensed", "Avenir Next Condensed", "Impact", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(28, 31, 32, 0.045) 1px, transparent 1px) 0 0 / 28px 28px,
+        linear-gradient(0deg, rgba(28, 31, 32, 0.035) 1px, transparent 1px) 0 0 / 28px 28px,
+        radial-gradient(circle at 14% 12%, rgba(192, 138, 43, 0.18), transparent 24rem),
+        radial-gradient(circle at 84% 8%, rgba(47, 113, 138, 0.14), transparent 22rem),
+        var(--paper);
+      font-family: var(--body);
+      line-height: 1.42;
+    }
+
+    button,
+    select {
+      font: inherit;
+    }
+
+    code,
+    pre {
+      font-family: var(--mono);
+      font-size: 0.86rem;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 18px;
+      background: rgba(28, 31, 32, 0.96);
+      color: #efe8dc;
+      border-right: 1px solid rgba(255, 250, 240, 0.16);
+      overflow: auto;
+    }
+
+    .brand {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(255, 250, 240, 0.34);
+      background:
+        linear-gradient(135deg, transparent 44%, rgba(255, 250, 240, 0.8) 45%, rgba(255, 250, 240, 0.8) 52%, transparent 53%),
+        linear-gradient(90deg, var(--rust), var(--gold));
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: var(--display);
+      font-size: 2rem;
+      line-height: 0.9;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      color: #bfb4a2;
+      font-size: 0.82rem;
+    }
+
+    .nav-title {
+      margin: 22px 0 8px;
+      color: #bfb4a2;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .nav {
+      display: grid;
+      gap: 8px;
+    }
+
+    .nav a,
+    .rail-button {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      min-height: 38px;
+      padding: 8px 10px;
+      color: #efe8dc;
+      text-decoration: none;
+      background: rgba(255, 250, 240, 0.06);
+      border: 1px solid rgba(255, 250, 240, 0.11);
+      border-radius: 6px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .nav a:hover,
+    .rail-button:hover,
+    .rail-button.active {
+      border-color: rgba(255, 250, 240, 0.34);
+      background: rgba(255, 250, 240, 0.12);
+    }
+
+    .dot {
+      flex: 0 0 auto;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--gold);
+      box-shadow: 0 0 0 3px rgba(192, 138, 43, 0.18);
+    }
+
+    .dot.local { background: var(--green); box-shadow: 0 0 0 3px rgba(60, 123, 88, 0.18); }
+    .dot.remote { background: var(--rust); box-shadow: 0 0 0 3px rgba(185, 84, 53, 0.18); }
+    .dot.meta { background: var(--cyan); box-shadow: 0 0 0 3px rgba(47, 113, 138, 0.18); }
+    .dot.watch { background: var(--violet); box-shadow: 0 0 0 3px rgba(110, 90, 143, 0.2); }
+
+    main {
+      min-width: 0;
+      padding: 28px;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
+      gap: 18px;
+      align-items: stretch;
+      min-height: calc(100vh - 56px);
+    }
+
+    .panel {
+      background: rgba(255, 250, 240, 0.72);
+      border: 1px solid rgba(94, 81, 62, 0.22);
+      box-shadow: var(--shadow);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .panel-pad {
+      padding: 22px;
+    }
+
+    .lede {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100%;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--rust);
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+    }
+
+    h2 {
+      margin: 0;
+      font-family: var(--display);
+      font-size: clamp(3.2rem, 7vw, 7rem);
+      line-height: 0.82;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 1.25rem;
+      letter-spacing: 0;
+    }
+
+    h4 {
+      margin: 0 0 8px;
+      font-size: 0.95rem;
+      letter-spacing: 0;
+    }
+
+    .subhead {
+      max-width: 68ch;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .thesis-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .thesis {
+      padding: 14px;
+      background: rgba(28, 31, 32, 0.05);
+      border: 1px solid rgba(94, 81, 62, 0.18);
+      border-radius: 6px;
+    }
+
+    .thesis strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--coal);
+    }
+
+    .thesis span {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .terminal-card {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 100%;
+      background: var(--coal);
+      color: #efe8dc;
+    }
+
+    .terminal-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255, 250, 240, 0.13);
+      background: #151717;
+    }
+
+    .lights {
+      display: flex;
+      gap: 7px;
+    }
+
+    .lights span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--rust);
+    }
+
+    .lights span:nth-child(2) {
+      background: var(--gold);
+    }
+
+    .lights span:nth-child(3) {
+      background: var(--green);
+    }
+
+    .terminal-title {
+      color: #bfb4a2;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+
+    .diagram {
+      position: relative;
+      min-height: 470px;
+      padding: 18px;
+    }
+
+    #topologyCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .diagram-layer {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      z-index: 1;
+    }
+
+    .node-card {
+      min-height: 110px;
+      padding: 13px;
+      border: 1px solid rgba(255, 250, 240, 0.16);
+      background: rgba(255, 250, 240, 0.07);
+      border-radius: 6px;
+      backdrop-filter: blur(3px);
+    }
+
+    .node-card.active {
+      border-color: rgba(255, 250, 240, 0.6);
+      background: rgba(255, 250, 240, 0.13);
+    }
+
+    .node-card small {
+      display: block;
+      margin-bottom: 8px;
+      color: #cfc2ad;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    .node-card strong {
+      display: block;
+      margin-bottom: 5px;
+      color: #fff7e9;
+    }
+
+    .node-card span {
+      color: #cfc2ad;
+      font-size: 0.86rem;
+    }
+
+    .section {
+      margin-top: 26px;
+    }
+
+    .section-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
+      gap: 18px;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0 0;
+    }
+
+    .seg {
+      padding: 8px 11px;
+      color: var(--ink);
+      background: rgba(28, 31, 32, 0.04);
+      border: 1px solid rgba(94, 81, 62, 0.24);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .seg.active,
+    .seg:hover {
+      color: #fff7e9;
+      background: var(--coal);
+      border-color: var(--coal);
+    }
+
+    .codebox {
+      margin: 0;
+      padding: 16px;
+      color: #efe8dc;
+      background: var(--coal);
+      border: 1px solid rgba(255, 250, 240, 0.12);
+      border-radius: 7px;
+      overflow: auto;
+      white-space: pre;
+    }
+
+    .codebox .dim {
+      color: #9b9285;
+    }
+
+    .callout {
+      padding: 16px;
+      background: rgba(192, 138, 43, 0.12);
+      border: 1px solid rgba(192, 138, 43, 0.28);
+      border-radius: 7px;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .low-level-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .low-level-list li {
+      padding: 12px;
+      border-left: 4px solid var(--cyan);
+      background: rgba(255, 250, 240, 0.64);
+    }
+
+    .flow-shell {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      gap: 14px;
+    }
+
+    .flow-steps {
+      display: grid;
+      gap: 8px;
+    }
+
+    .step-button {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 10px;
+      align-items: center;
+      min-height: 52px;
+      padding: 8px;
+      text-align: left;
+      color: var(--ink);
+      background: rgba(28, 31, 32, 0.04);
+      border: 1px solid rgba(94, 81, 62, 0.22);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .step-button.active {
+      background: var(--coal);
+      color: #efe8dc;
+      border-color: var(--coal);
+    }
+
+    .step-number {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      color: #fff7e9;
+      background: var(--rust);
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+    }
+
+    .step-button.active .step-number {
+      background: var(--gold);
+      color: var(--coal);
+    }
+
+    .step-title {
+      display: block;
+      font-weight: 700;
+    }
+
+    .step-subtitle {
+      display: block;
+      color: inherit;
+      opacity: 0.7;
+      font-size: 0.82rem;
+    }
+
+    .detail-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .kv div {
+      padding: 10px;
+      background: rgba(28, 31, 32, 0.05);
+      border: 1px solid rgba(94, 81, 62, 0.17);
+      border-radius: 6px;
+    }
+
+    .kv span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .kv strong {
+      display: block;
+      margin-top: 4px;
+      font-family: var(--mono);
+      font-size: 0.86rem;
+      overflow-wrap: anywhere;
+    }
+
+    .packet-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .packet-card {
+      padding: 16px;
+      background: rgba(255, 250, 240, 0.72);
+      border: 1px solid rgba(94, 81, 62, 0.22);
+      border-radius: 7px;
+    }
+
+    .packet-card h4 {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      color: #fff7e9;
+      background: var(--coal);
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+
+    .source-table {
+      display: grid;
+      gap: 8px;
+    }
+
+    .source-row {
+      display: grid;
+      grid-template-columns: 1fr 1.6fr;
+      gap: 10px;
+      align-items: start;
+      padding: 11px;
+      background: rgba(28, 31, 32, 0.05);
+      border: 1px solid rgba(94, 81, 62, 0.16);
+      border-radius: 6px;
+    }
+
+    .source-row code {
+      color: var(--rust);
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .source-row span {
+      color: var(--muted);
+    }
+
+    .wide {
+      grid-column: 1 / -1;
+    }
+
+    .footer {
+      margin: 28px 0 4px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    @media (max-width: 1180px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: relative;
+        height: auto;
+      }
+
+      .summary,
+      .section-grid,
+      .flow-shell {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      main {
+        padding: 16px;
+      }
+
+      .thesis-grid,
+      .packet-grid,
+      .kv,
+      .diagram-layer {
+        grid-template-columns: 1fr;
+      }
+
+      .source-row {
+        grid-template-columns: 1fr;
+      }
+
+      h2 {
+        font-size: 3.3rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <h1>Remote Scan</h1>
+          <p>AgentsNext + agents CLI</p>
+        </div>
+      </div>
+
+      <div class="nav-title">Snabbnavigering</div>
+      <nav class="nav" aria-label="Sections">
+        <a href="#top"><span class="dot"></span> Topologi</a>
+        <a href="#flow"><span class="dot remote"></span> Scansekvens</a>
+        <a href="#install"><span class="dot local"></span> CLI-install</a>
+        <a href="#payloads"><span class="dot meta"></span> Payloads</a>
+        <a href="#watchers"><span class="dot watch"></span> Watchers</a>
+        <a href="#sources"><span class="dot"></span> Källor</a>
+      </nav>
+
+      <div class="nav-title">Lager</div>
+      <div class="nav" id="layerRail"></div>
+    </aside>
+
+    <main id="top">
+      <section class="summary">
+        <div class="panel lede panel-pad">
+          <div>
+            <p class="eyebrow">Låg nivå - nuvarande implementation</p>
+            <h2>Remote scanning är lokal scanning över SSH</h2>
+            <p class="subhead">
+              Appen skannar inte processer själv på remote host. Den hämtar först rå tmux-inventering
+              via SSH, och enrichar sedan panes med `agents ls --json --no-interactive --tmux` som
+              körs på samma remote host mot samma tmux-server.
+            </p>
+          </div>
+
+          <div class="thesis-grid">
+            <div class="thesis">
+              <strong>Host runtime är truth</strong>
+              <span>tmux äger sessions, windows, panes, cwd och pane-id. Appen visar och koordinerar.</span>
+            </div>
+            <div class="thesis">
+              <strong>CLI är metadata-provider</strong>
+              <span>`agents` klassar agentprocesser, hook-state, modell, branch och status.</span>
+            </div>
+            <div class="thesis">
+              <strong>Remote CLI är pinnad</strong>
+              <span>App-managed install matchar manifestets `gitCommit` mot appens expected commit.</span>
+            </div>
+          </div>
+
+          <div class="callout">
+            <strong>Viktig gräns</strong>
+            Remote hosten behandlas som en egen lokal maskin: appen transporterar kommandon med SSH,
+            men `tmux`, `ps`, `git`, hook-state och `~/.agents/...` läses på remote-sidan.
+          </div>
+        </div>
+
+        <div class="panel terminal-card">
+          <div class="terminal-top">
+            <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div class="terminal-title">topology.current</div>
+          </div>
+          <div class="diagram">
+            <canvas id="topologyCanvas" aria-hidden="true"></canvas>
+            <div class="diagram-layer" id="nodeGrid"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-grid" id="flow">
+        <div class="panel panel-pad">
+          <p class="eyebrow">Scansekvens</p>
+          <h3>Från app-refresh till agent metadata</h3>
+          <p>
+            Ett inventory-refresh är två separata steg. Steg ett ger pane-inventering från tmux.
+            Steg två enrichar de pane-id:n som faktiskt finns i inventariet med agentmetadata från CLI:t.
+          </p>
+          <div class="controls" id="flowTabs"></div>
+        </div>
+        <div class="panel panel-pad flow-shell">
+          <div class="flow-steps" id="flowSteps"></div>
+          <div class="detail-grid">
+            <div>
+              <h3 id="stepHeading"></h3>
+              <p id="stepBody"></p>
+            </div>
+            <div class="kv" id="stepFacts"></div>
+            <pre class="codebox" id="stepCode"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-grid" id="install">
+        <div class="panel panel-pad">
+          <p class="eyebrow">Install och uppdatering</p>
+          <h3>Två vägar in, samma slutläge</h3>
+          <ul class="low-level-list">
+            <li>
+              <strong>Bootstrap-scriptet</strong> är operator/app-onboarding: det planerar `tmux`,
+              Node/npm, git, CLI, helper tools och en default tmux-session. Dry-run är default.
+            </li>
+            <li>
+              <strong>App-managed ensure</strong> körs innan remote metadata-fetch när ingen explicit
+              `agentsInstallPath` är konfigurerad. Den är idempotent och exit:ar direkt om manifestet matchar.
+            </li>
+            <li>
+              <strong>Hook-setup</strong> hålls separat: CLI:t kör `autoSetupIfNeeded()` vid start och spawnear
+              `agents setup --quiet` i bakgrunden om hook-definitionernas hash har ändrats.
+            </li>
+          </ul>
+        </div>
+        <div class="panel panel-pad">
+          <div class="controls" id="installTabs"></div>
+          <h3 id="installHeading"></h3>
+          <p id="installBody"></p>
+          <pre class="codebox" id="installCode"></pre>
+        </div>
+      </section>
+
+      <section class="section" id="payloads">
+        <div class="panel panel-pad">
+          <p class="eyebrow">Payloads</p>
+          <h3>Vilken data går över gränsen?</h3>
+          <div class="packet-grid" id="packetGrid"></div>
+        </div>
+      </section>
+
+      <section class="section section-grid" id="watchers">
+        <div class="panel panel-pad">
+          <p class="eyebrow">Watchers</p>
+          <h3>Scanning är pull, refresh-triggers är push-ish</h3>
+          <p>
+            Själva inventariet hämtas via `tmux list-panes` och `agents ls`. Watchers gör inte en full
+            scan själva. De tailar eventfiler och skickar "refresh requested" eller agent runtime events
+            tillbaka till appens state machine.
+          </p>
+          <div class="controls" id="watchTabs"></div>
+        </div>
+        <div class="panel panel-pad">
+          <h3 id="watchHeading"></h3>
+          <p id="watchBody"></p>
+          <pre class="codebox" id="watchCode"></pre>
+        </div>
+      </section>
+
+      <section class="section section-grid">
+        <div class="panel panel-pad">
+          <p class="eyebrow">Felmoder</p>
+          <h3>Vad händer när något saknas?</h3>
+          <ul class="low-level-list">
+            <li><strong>Remote host timeout:</strong> host-fetchen får en failure-rad, men andra hosts kan fortfarande ge partial inventory.</li>
+            <li><strong>`tmux` saknas:</strong> integration-promptern markerar `blocked:tmux-missing`; bootstrap behövs eftersom appens integration inte installerar paket.</li>
+            <li><strong>CLI saknas eller är fel commit:</strong> app-managed ensure installerar/uppdaterar om ingen explicit preferred path är satt.</li>
+            <li><strong>Hook-state saknas:</strong> processdetektion hittar fortfarande agentprocessen, men hook-auktoritativa agenter faller konservativt mot idle tills hooks rapporterar.</li>
+            <li><strong>Metadata missar pane-id:</strong> appen enrichar bara pane-id:n från tmux-inventariet och ignorerar okända CLI-payloads.</li>
+          </ul>
+        </div>
+        <div class="panel panel-pad">
+          <p class="eyebrow">Mental modell</p>
+          <pre class="codebox">AgentsNext
+  fetchInventory()
+    local tmux list-panes
+    ssh remote /bin/sh -lc 'tmux list-panes ...'
+  refreshAgentMetadata()
+    local agents ls --json --tmux
+    ssh remote /bin/sh -lc '
+      ensure managed agents cli
+      TMUX=/tmp/tmux-$(id -u)/default,0,0
+      "$AGENTS_BIN" ls --json --no-interactive --tmux
+    '
+
+Remote host
+  ~/.agents/agents-cli/source        # git checkout
+  ~/.local/bin/agents                # node wrapper
+  ~/.agents/agents-app/install.json  # app-managed manifest
+  ~/.agents/agents-app/state/*.json  # hook state
+  ~/.agents/agents-app/runtime/state-events.jsonl
+  ~/.agents/agents-app/app/runtime/tmux-events/agents-app-events.log</pre>
+        </div>
+      </section>
+
+      <section class="section" id="sources">
+        <div class="panel panel-pad">
+          <p class="eyebrow">Källor i kodbasen</p>
+          <h3>De faktiska seams som sidan bygger på</h3>
+          <div class="source-table" id="sourceTable"></div>
+          <p class="footer">
+            Genererad som en statisk HTML-artefakt. Ingen extern JS, inga externa stylesheets.
+          </p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const layers = [
+      {
+        id: "app",
+        kind: "local",
+        label: "AgentsNext app",
+        file: "AgentsNext/AgentsNextApp.swift",
+        text: "Startar inventory service, metadata service, runtime watches och remote integration bootstrap.",
+        command: "WorkspaceFeature.refresh -> inventoryClient.fetchInventory() -> agentsInventoryMetadataClient.refreshAgentMetadata()"
+      },
+      {
+        id: "ssh",
+        kind: "remote",
+        label: "Transport",
+        file: "TerminalHostEndpoint.processInvocation",
+        text: "Alla remote kommandon blir /usr/bin/ssh [-p port] user@host /bin/sh -c '<PATH setup>; <command>'.",
+        command: "/usr/bin/ssh -p 2200 peter@devbox /bin/sh -c 'PATH=$HOME/.local/bin:...; /bin/sh -lc ...'"
+      },
+      {
+        id: "tmux",
+        kind: "local",
+        label: "Host tmux",
+        file: "TMuxInventoryFetchExecutor",
+        text: "tmux är live-källan för panes, sessions, windows, cwd, pane titles och app-owned metadata.",
+        command: "tmux list-panes -a -F '#{pane_id}__AGENTS_FIELD_1F__#{session_name}...'"
+      },
+      {
+        id: "cli",
+        kind: "meta",
+        label: "agents CLI",
+        file: "src/scanner.ts",
+        text: "Kör på hosten och klassar pane-processer via tmux, ps, hook-state, git branch och agenthistorik.",
+        command: "agents ls --json --no-interactive --tmux"
+      },
+      {
+        id: "state",
+        kind: "watch",
+        label: "Hook state",
+        file: "~/.agents/agents-app/state",
+        text: "Agent hooks skriver JSON per agent+pane. Scanner merge:ar primary och contributor state.",
+        command: "~/.agents/agents-app/state/codex-%123.json"
+      },
+      {
+        id: "ui",
+        kind: "meta",
+        label: "Inventory model",
+        file: "InventoryPane",
+        text: "Appen merge:ar tmux-pane-inventering med CLI-agentmetadata per PaneRef(hostID, paneID).",
+        command: "InventoryPane.withAgentInfo(InventoryAgentContent)"
+      }
+    ];
+
+    const flows = {
+      inventory: {
+        label: "Inventory pull",
+        steps: [
+          {
+            title: "Workspace refresh",
+            subtitle: "App state starts the scan",
+            body: "WorkspaceFeature kör `inventoryClient.fetchInventory()`. På desktop är det MultiHostTMuxInventoryService.",
+            facts: [["owner", "AgentsAppCore"], ["mode", "pull"], ["result", "[InventoryPane]"]],
+            code: "case .refresh:\n  inventory = try await inventoryClient.fetchInventory()\n  await send(.inventoryFetched(.success(inventory)))"
+          },
+          {
+            title: "Build host requests",
+            subtitle: "local + configured remotes",
+            body: "Local host får index 0. Varje configured remote endpoint får egen request med endpoint.displayLabel.",
+            facts: [["timeout", "2s per host"], ["parallelism", "TaskGroup"], ["partial", "allowed"]],
+            code: "requests = [local]\nrequests += endpoints.enumerated().map { endpoint in\n  MultiHostInventoryFetchRequest(label: endpoint.displayLabel) {\n    try await remoteService.fetchInventory()\n  }\n}"
+          },
+          {
+            title: "Remote tmux probe",
+            subtitle: "resolve command and create default session",
+            body: "Remote service hittar tmux via `command -v tmux || true`, fallbackar till `tmux`, och skapar en `agents` session om tmux-servern är tom.",
+            facts: [["probe", "command -v tmux"], ["session", "agents"], ["transport", "ssh"]],
+            code: "command -v tmux || true\n\nif ! tmux list-sessions -F '#{session_name}' >/dev/null 2>&1; then\n  tmux new-session -d -s agents >/dev/null 2>&1 || tmux has-session -t '=agents:'\nfi"
+          },
+          {
+            title: "List panes",
+            subtitle: "same shape local and remote",
+            body: "TMuxInventoryFetchExecutor kör samma `list-panes` format oavsett host. Remote skillnaden är bara invocationTransform via SSH.",
+            facts: [["command", "tmux list-panes"], ["separator", "portable tokens"], ["parser", "TMuxInventoryAdapter"]],
+            code: "tmux list-panes -a -F \"#{pane_id}__AGENTS_FIELD_1F__#{session_name}__AGENTS_FIELD_1F__...__AGENTS_RECORD_1E__\""
+          },
+          {
+            title: "Parse panes",
+            subtitle: "raw tmux -> InventoryPane",
+            body: "Parsern bygger PaneRef(hostID, paneID), session/window/pane index, cwd, title, current command, app-owned markers och command metadata.",
+            facts: [["identity", "hostID + paneID"], ["content", "terminal/command/editor/agent"], ["agent", "not yet"]],
+            code: "InventoryPane(\n  ref: PaneRef(hostID: hostID, paneID: paneID),\n  session: session,\n  cwd: rawCwd,\n  title: title,\n  currentCommand: command,\n  contentKind: baseKind\n)"
+          }
+        ]
+      },
+      metadata: {
+        label: "Metadata enrich",
+        steps: [
+          {
+            title: "Debounce",
+            subtitle: "after inventory changes",
+            body: "När inventory revision ändras skickas `.refreshAgentMetadata`, med 350 ms debounce innan CLI:n körs.",
+            facts: [["delay", "350 ms"], ["input", "inventorySnapshot"], ["cancel", "in flight"]],
+            code: "case .refreshAgentMetadata:\n  try? await Task.sleep(for: .milliseconds(350))\n  await send(.performAgentMetadataRefresh)"
+          },
+          {
+            title: "Group by host",
+            subtitle: "allowed pane refs only",
+            body: "Metadata-service grupperar panes per host och skickar bara de PaneRef som kom från tmux-inventariet.",
+            facts: [["guard", "allowedPaneRefs"], ["backoff", "60s failure"], ["merge", "per PaneRef"]],
+            code: "let panesByHost = Dictionary(grouping: inventory, by: \\.ref.hostID)\nlet refs = Set(hostPanes.map(\\.ref))\ntry await service.fetchMetadata(paneRefs: refs)"
+          },
+          {
+            title: "Ensure remote CLI",
+            subtitle: "idempotent before metadata",
+            body: "Om host config inte har explicit `agentsInstallPath`, kör appen managed install-scriptet först. Matchande manifest gör detta till en snabb no-op.",
+            facts: [["manifest", ".agents/agents-app/install.json"], ["commit", "expected"], ["skip", "preferred path"]],
+            code: "if preferredAgentsPath == nil {\n  ssh host /bin/sh -lc '<AgentsManagedCLIInstallScript.ensureScript>'\n}"
+          },
+          {
+            title: "Run agents ls",
+            subtitle: "host-local scanner",
+            body: "Remote CLI körs med explicit TMUX-socket assignment för default tmux-servern och path resolution via manifest.",
+            facts: [["command", "agents ls --json"], ["mux", "--tmux"], ["env", "TMUX=/tmp/tmux-$(id -u)/default,0,0"]],
+            code: "TMUX=/tmp/tmux-$(id -u)/default,0,0;\n\"$AGENTS_BIN\" ls --json --no-interactive --tmux"
+          },
+          {
+            title: "Merge agent info",
+            subtitle: "agent content overlays pane",
+            body: "Parsern accepterar bara payloads vars tmuxPaneId/paneId/session finns i allowedPaneRefs. De blir InventoryAgentContent på motsvarande InventoryPane.",
+            facts: [["key", "tmuxPaneId"], ["unknown", "ignored"], ["output", "agentInfo"]],
+            code: "let paneRef = PaneRef(hostID: hostID, paneID: paneID)\nguard allowedPaneRefs.contains(paneRef) else { continue }\nmetadataByPaneRef[paneRef] = payload.agentContent"
+          }
+        ]
+      },
+      cli: {
+        label: "Inside agents CLI",
+        steps: [
+          {
+            title: "Commander entry",
+            subtitle: "`agents ls --json`",
+            body: "CLI:t initierar mux, kör auto-setup check och `list`-kommandot anropar `scan()`.",
+            facts: [["file", "src/cli.ts"], ["global", "--tmux"], ["output", "JSON array"]],
+            code: "program.command('list').alias('ls')\n  .option('--json')\n  .action((opts) => {\n    const agents = scan();\n    console.log(JSON.stringify(agents, null, 2));\n  })"
+          },
+          {
+            title: "tmux list-panes",
+            subtitle: "CLI-level format",
+            body: "Scanner hämtar pane metadata med separatorn `§`: pane target, pane pid, title, window name, foreground command, window activity, tty, pane id och cwd.",
+            facts: [["source", "tmux"], ["sessions", "skip _agents_"], ["content", "no capture in current path"]],
+            code: "tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}'"
+          },
+          {
+            title: "Process tree",
+            subtitle: "one ps pass",
+            body: "Scanner bygger process tree en gång och letar agentprocess under pane PID. Om det missar letar den på samma TTY.",
+            facts: [["ps", "pid ppid comm tty cpu rss args"], ["fallback", "TTY"], ["wrappers", "node/npm/npx/etc"]],
+            code: "ps -eo pid=,ppid=,comm=,tty=,%cpu=,rss=,args=\nfindAgentLeafInTree(panePid, tree) ?? findAgentOnTtyProcessInTree(tty, tree)"
+          },
+          {
+            title: "State snapshot",
+            subtitle: "hook files + contributors",
+            body: "Hook-state läses från `~/.agents/agents-app/state` och `state-contrib`, merge:as per agent+pane och avgör status för hook-auktoritativa agenter.",
+            facts: [["primary", "state/*.json"], ["contrib", "state-contrib/*.json"], ["maxAge", "86400s cleanup"]],
+            code: "readStateSnapshot()\n  primaryByKey: agent\\0pane\n  contributorsByKey: agent\\0pane\n  mergedByKey: primary or highest-priority contributor"
+          },
+          {
+            title: "Build AgentPane",
+            subtitle: "what app parses",
+            body: "Resultatet innehåller pane-id, agent kind, status, detail, cwd, branch, model/provider, token context och state provenance.",
+            facts: [["status", "attention/question/working/stalled/idle"], ["branch", "git -C cwd"], ["identity", "tmuxPaneId"]],
+            code: "{\n  pane, paneId, tmuxPaneId, title,\n  agent, status, detail,\n  cwd, branch, provider, modelId,\n  contextTokens, contextMax, stateSource\n}"
+          }
+        ]
+      }
+    };
+
+    const installs = {
+      bootstrap: {
+        label: "Remote bootstrap",
+        heading: "Operator path: planera och applicera",
+        body: "Bootstrap-scriptet är för fresh remote hosts. Dry-run är default, JSON-plan används av integrationer, och `--yes` applicerar. Scriptet använder inte sudo.",
+        code: "curl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \\\n  | bash -s -- --dry-run --json\n\n# Apply approved plan\ncurl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \\\n  | bash -s -- --yes --expected-agents-commit <sha>\n\n# End state\n~/.agents/agents-cli/source\n~/.local/bin/agents\n~/.agents/agents-app/install.json"
+      },
+      managed: {
+        label: "App-managed ensure",
+        heading: "Metadata path: idempotent install före scan",
+        body: "RemoteAgentsInventoryMetadataService kör ensure-scriptet innan `agents ls`. Om manifestets path är executable och commit matchar expected commit avslutas scriptet direkt.",
+        code: "agents_manifest_path=$(manifest path)\nagents_manifest_commit=$(manifest gitCommit)\n\nif [ -x \"$agents_manifest_path\" ] && commit_matches \"$agents_manifest_commit\" \"$EXPECTED\"; then\n  exit 0\nfi\n\ngit clone/fetch https://github.com/pewallin/agents.git ~/.agents/agents-cli/source\ngit checkout <ref or expected commit>\nnpm --prefix ~/.agents/agents-cli/source install\nnpm --prefix ~/.agents/agents-cli/source run build\nwrite ~/.local/bin/agents\nwrite ~/.agents/agents-app/install.json"
+      },
+      pinning: {
+        label: "Commit pinning",
+        heading: "Expected commit kommer från app build",
+        body: "`AgentsCLIExpectedGitCommit` läses från env eller Info.plist. Lokala launch scripts sätter den från `../agents` HEAD. Dirty runtime source varnas, men remote hosts får bara committad kod om du inte sätter commit explicit.",
+        code: "AGENTS_CLI_EXPECTED_GIT_COMMIT=$(git -C ../agents rev-parse HEAD)\nxcodebuild ... AGENTS_CLI_EXPECTED_GIT_COMMIT=\"$AGENTS_CLI_EXPECTED_GIT_COMMIT\"\n\n# Runtime read path\nProcessInfo.environment[\"AGENTS_CLI_EXPECTED_GIT_COMMIT\"]\n  ?? Bundle.main[\"AgentsCLIExpectedGitCommit\"]"
+      },
+      hooks: {
+        label: "Hook updates",
+        heading: "CLI start håller hook-integrationer aktuella",
+        body: "`agents` beräknar hash över hook configs och extension-filer. Om hashen skiljer från `~/.agents/agents-app/.setup-hash`, spawneas `agents setup --quiet` detached.",
+        code: "autoSetupIfNeeded()\n  current = sha256(hook defs + extension files).slice(0, 16)\n  stored = read ~/.agents/agents-app/.setup-hash\n  if current != stored:\n    spawn(process.execPath, [cli, 'setup', '--quiet'], detached=true)"
+      }
+    };
+
+    const packets = [
+      {
+        title: "tmux list-panes payload",
+        tag: "raw inventory",
+        text: "Host-local format från appens TMuxInventoryAdapter. Det här ger pane identity och runtime shape, inte agentstatus.",
+        code: "#{pane_id}\n#{session_name}\n#{window_index}\n#{window_id}\n#{pane_index}\n#{pane_current_path}\n#{pane_title}\n#{pane_current_command}\n#{pid}\n#{@agents_uuid}\n#{@agents_internal}\n#{@agents_owned}\n#{pane_dead}\n#{pane_dead_status}\n#{pane_start_command}\n#{@agents_command_id}\n#{@agents_command_title}\n#{@agents_command_content_kind}\n#{@agents_command_cwd}\n#{@agents_command_source_pane}\n#{@agents_command_launch}"
+      },
+      {
+        title: "agents ls payload",
+        tag: "agent metadata",
+        text: "CLI JSON array. Appen parsar lossy och accepterar flera namnvarianter för pane-id och model-id.",
+        code: "[\n  {\n    \"tmuxPaneId\": \"%42\",\n    \"paneId\": \"session:1\",\n    \"agent\": \"Codex\",\n    \"status\": \"working\",\n    \"detail\": \"12s\",\n    \"intent\": \"fix remote scanning\",\n    \"cwd\": \"~/code/agents\",\n    \"branch\": \"main\",\n    \"provider\": \"openai\",\n    \"modelId\": \"gpt-5-codex\",\n    \"contextTokens\": 91234,\n    \"contextMax\": 272000,\n    \"stateSource\": \"primary\"\n  }\n]"
+      },
+      {
+        title: "install.json",
+        tag: "managed cli",
+        text: "Manifestet är appens remote lookup-källa när ingen preferred path är konfigurerad.",
+        code: "{\n  \"manager\": \"agents-app-managed\",\n  \"version\": \"1.0.0+abc123\",\n  \"path\": \"/Users/peter/.local/bin/agents\",\n  \"sourceRoot\": \"/Users/peter/.agents/agents-cli/source\",\n  \"repoUrl\": \"https://github.com/pewallin/agents.git\",\n  \"ref\": \"main\",\n  \"gitCommit\": \"abc123...\",\n  \"installedAt\": \"2026-06-17T09:12:00Z\"\n}"
+      },
+      {
+        title: "state-events.jsonl",
+        tag: "runtime watch",
+        text: "Hooks skriver statefiler och append:ar runtime events. Remote watcher tailar de senaste 200 raderna och fortsätter med `-F`.",
+        code: "{\"v\":1,\"ts\":1781680000,\"entity\":\"primary_state\",\"op\":\"upsert\",\"agent\":\"codex\",\"surfaceId\":\"%42\",\"mux\":\"tmux\",\"state\":\"working\",\"intent\":\"remote scan doc\",\"externalSessionId\":\"019...\"}"
+      }
+    ];
+
+    const watchers = {
+      tmux: {
+        label: "tmux lifecycle",
+        heading: "tmux hooks triggar inventory refresh",
+        body: "Remote integration installerar app-owned hook script under `~/.agents/agents-app/app/runtime`. Hooks 90-99 används för tmux lifecycle events. Appen tailar eventfilen och debouncar events till refresh.",
+        code: "tmux set-hook -g \"after-new-window[$chosen_index]\" \\\n  \"run-shell \\\"$script_path after-new-window #{session_name} #{window_name} #{window_index} #{pane_id}\\\"\"\n\n/bin/sh -lc 'mkdir -p \"$event_dir\"; touch \"$event_file\"; tail -n 0 -F \"$event_file\"'"
+      },
+      runtime: {
+        label: "agent runtime",
+        heading: "agent hooks triggar state changes",
+        body: "CLI hooks skriver JSON state och append:ar state-events. Appen tailar remote state-events med replay på 200 rader så den kan återfå senaste runtime-status efter reconnect.",
+        code: "/bin/sh -lc 'mkdir -p \"$HOME/.agents/agents-app/runtime\"; touch \"$HOME/.agents/agents-app/runtime/state-events.jsonl\"; tail -n 200 -F \"$HOME/.agents/agents-app/runtime/state-events.jsonl\"'\n\n# event decoder maps surfaceId + hostID -> AgentsRuntimeWatchEvent"
+      },
+      janitor: {
+        label: "watch janitor",
+        heading: "orphaned remote tail-processer städas lokalt",
+        body: "Vid app bootstrap letar janitorn efter lokala ssh/tail processer som blivit parentPID 1 och matchar appens remote eventfiler. De får SIGTERM och sedan SIGKILL om de lever kvar.",
+        code: "ps -axo pid=,ppid=,command=\n\nmatch:\n  parentPID == 1\n  command contains 'tail -n <n> -F'\n  command contains '/.agents/agents-app/'\n  command contains '/runtime/state-events.jsonl' or '/app/runtime/tmux-events/agents-app-events.log'"
+      }
+    };
+
+    const sources = [
+      ["agents-app/AgentsNext/State/MultiHostTMuxInventoryService.swift", "Multi-host orchestration, 2s timeout, remote service, default tmux session creation."],
+      ["agents-app/AgentsNext/Terminal/TerminalHostEndpoint.swift", "SSH invocation wrapping, PATH setup and interactive attach command shape."],
+      ["agents-app/AgentsCore/Sources/AgentsCore/TMuxInventoryAdapter.swift", "Raw tmux list-panes format and InventoryPane parsing."],
+      ["agents-app/AgentsNext/State/AgentsInventoryMetadataClient.swift", "Local/remote agents metadata refresh, managed install, and remote agents command resolution."],
+      ["agents-app/AgentsCore/Sources/AgentsCore/AgentsManagedCLIInstall.swift", "App-managed CLI ensure script, manifest format and expected commit matching."],
+      ["agents-app/AgentsCore/Sources/AgentsCore/AgentsCommandResolver.swift", "How AGENTS_BIN is resolved from preferred path, manifest, wrapper, npm or PATH."],
+      ["agents/src/scanner.ts", "CLI scan path: tmux list-panes, process detection, branch cache, state merge and AgentPane JSON."],
+      ["agents/src/scanner-discovery.ts", "Process tree parsing, agent process names, wrapper process detection and TTY fallback."],
+      ["agents/src/state.ts + runtime-events.ts", "Hook state files, contributor merge, event append and stale cleanup."],
+      ["agents/scripts/bootstrap-remote.sh", "Fresh remote bootstrap, dry-run JSON plan, install root, wrapper and manifest writing."]
+    ];
+
+    function dotClass(kind) {
+      if (kind === "local") return "local";
+      if (kind === "remote") return "remote";
+      if (kind === "meta") return "meta";
+      if (kind === "watch") return "watch";
+      return "";
+    }
+
+    function renderLayers(activeId = "app") {
+      const rail = document.getElementById("layerRail");
+      const grid = document.getElementById("nodeGrid");
+      rail.innerHTML = "";
+      grid.innerHTML = "";
+      for (const layer of layers) {
+        const button = document.createElement("button");
+        button.className = `rail-button ${layer.id === activeId ? "active" : ""}`;
+        button.innerHTML = `<span class="dot ${dotClass(layer.kind)}"></span><span>${layer.label}</span>`;
+        button.addEventListener("click", () => renderLayers(layer.id));
+        rail.appendChild(button);
+
+        const card = document.createElement("div");
+        card.className = `node-card ${layer.id === activeId ? "active" : ""}`;
+        card.innerHTML = `<small>${layer.file}</small><strong>${layer.label}</strong><span>${layer.text}</span>`;
+        card.addEventListener("click", () => renderLayers(layer.id));
+        grid.appendChild(card);
+      }
+      drawTopology(activeId);
+    }
+
+    function drawTopology(activeId) {
+      const canvas = document.getElementById("topologyCanvas");
+      const box = canvas.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.floor(box.width * scale));
+      canvas.height = Math.max(1, Math.floor(box.height * scale));
+      const ctx = canvas.getContext("2d");
+      ctx.scale(scale, scale);
+      ctx.clearRect(0, 0, box.width, box.height);
+      const points = [
+        [box.width * 0.27, box.height * 0.22],
+        [box.width * 0.73, box.height * 0.22],
+        [box.width * 0.27, box.height * 0.50],
+        [box.width * 0.73, box.height * 0.50],
+        [box.width * 0.27, box.height * 0.78],
+        [box.width * 0.73, box.height * 0.78]
+      ];
+      const activeIndex = layers.findIndex((layer) => layer.id === activeId);
+      ctx.lineWidth = 2;
+      for (let i = 0; i < points.length - 1; i++) {
+        const [x1, y1] = points[i];
+        const [x2, y2] = points[i + 1];
+        ctx.strokeStyle = i === activeIndex || i + 1 === activeIndex ? "rgba(192, 138, 43, 0.85)" : "rgba(255, 250, 240, 0.16)";
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.bezierCurveTo(box.width * 0.50, y1, box.width * 0.50, y2, x2, y2);
+        ctx.stroke();
+      }
+      points.forEach(([x, y], index) => {
+        const isActive = index === activeIndex;
+        ctx.fillStyle = isActive ? "#c08a2b" : "rgba(255, 250, 240, 0.2)";
+        ctx.beginPath();
+        ctx.arc(x, y, isActive ? 8 : 5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function renderFlowTabs(activeKey = "inventory", activeStep = 0) {
+      const tabs = document.getElementById("flowTabs");
+      tabs.innerHTML = "";
+      Object.entries(flows).forEach(([key, flow]) => {
+        const button = document.createElement("button");
+        button.className = `seg ${key === activeKey ? "active" : ""}`;
+        button.textContent = flow.label;
+        button.addEventListener("click", () => renderFlowTabs(key, 0));
+        tabs.appendChild(button);
+      });
+      renderFlow(activeKey, activeStep);
+    }
+
+    function renderFlow(activeKey, activeStep) {
+      const flow = flows[activeKey];
+      const steps = document.getElementById("flowSteps");
+      steps.innerHTML = "";
+      flow.steps.forEach((step, index) => {
+        const button = document.createElement("button");
+        button.className = `step-button ${index === activeStep ? "active" : ""}`;
+        button.innerHTML = `<span class="step-number">${String(index + 1).padStart(2, "0")}</span><span><span class="step-title">${step.title}</span><span class="step-subtitle">${step.subtitle}</span></span>`;
+        button.addEventListener("click", () => renderFlow(activeKey, index));
+        steps.appendChild(button);
+      });
+      const step = flow.steps[activeStep];
+      document.getElementById("stepHeading").textContent = step.title;
+      document.getElementById("stepBody").textContent = step.body;
+      document.getElementById("stepCode").textContent = step.code;
+      const facts = document.getElementById("stepFacts");
+      facts.innerHTML = step.facts.map(([key, value]) => `<div><span>${key}</span><strong>${value}</strong></div>`).join("");
+    }
+
+    function renderInstall(activeKey = "bootstrap") {
+      const tabs = document.getElementById("installTabs");
+      tabs.innerHTML = "";
+      Object.entries(installs).forEach(([key, item]) => {
+        const button = document.createElement("button");
+        button.className = `seg ${key === activeKey ? "active" : ""}`;
+        button.textContent = item.label;
+        button.addEventListener("click", () => renderInstall(key));
+        tabs.appendChild(button);
+      });
+      const item = installs[activeKey];
+      document.getElementById("installHeading").textContent = item.heading;
+      document.getElementById("installBody").textContent = item.body;
+      document.getElementById("installCode").textContent = item.code;
+    }
+
+    function renderPackets() {
+      const grid = document.getElementById("packetGrid");
+      grid.innerHTML = packets.map((packet) => `
+        <div class="packet-card">
+          <h4><span>${packet.title}</span><span class="tag">${packet.tag}</span></h4>
+          <p>${packet.text}</p>
+          <pre class="codebox">${escapeHTML(packet.code)}</pre>
+        </div>
+      `).join("");
+    }
+
+    function renderWatch(activeKey = "tmux") {
+      const tabs = document.getElementById("watchTabs");
+      tabs.innerHTML = "";
+      Object.entries(watchers).forEach(([key, item]) => {
+        const button = document.createElement("button");
+        button.className = `seg ${key === activeKey ? "active" : ""}`;
+        button.textContent = item.label;
+        button.addEventListener("click", () => renderWatch(key));
+        tabs.appendChild(button);
+      });
+      const item = watchers[activeKey];
+      document.getElementById("watchHeading").textContent = item.heading;
+      document.getElementById("watchBody").textContent = item.body;
+      document.getElementById("watchCode").textContent = item.code;
+    }
+
+    function renderSources() {
+      const table = document.getElementById("sourceTable");
+      table.innerHTML = sources.map(([path, note]) => `
+        <div class="source-row">
+          <code>${escapeHTML(path)}</code>
+          <span>${escapeHTML(note)}</span>
+        </div>
+      `).join("");
+    }
+
+    function escapeHTML(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    renderLayers();
+    renderFlowTabs();
+    renderInstall();
+    renderPackets();
+    renderWatch();
+    renderSources();
+    window.addEventListener("resize", () => {
+      const active = document.querySelector(".rail-button.active span:last-child")?.textContent;
+      const layer = layers.find((candidate) => candidate.label === active) ?? layers[0];
+      drawTopology(layer.id);
+    });
+  </script>
+</body>
+</html>
