@@ -230,6 +230,23 @@ describe("tmux-resurrect metadata restore", () => {
     });
   });
 
+  it("lets explicit pane metadata correct stale normalized agent session commands", () => {
+    const resurrectContent = [
+      "pane\tproduct-master\t4\t0\t: \t0\tpi\t:/repo\t1\tzsh\t:pi --yolo --session stale-belgium-session",
+      "",
+    ].join("\n");
+    const metadataContent = [
+      "product-master|4|0|uuid|pi|Pi|agent|/repo||||||||||pi --yolo --session product-session",
+      "",
+    ].join("\n");
+
+    const result = applyTmuxResurrectMetadataLaunches(resurrectContent, metadataContent);
+
+    expect(result.changed).toBe(1);
+    expect(result.content).toContain(":pi --yolo --session product-session");
+    expect(result.content).not.toContain("stale-belgium-session");
+  });
+
   it("prints config-driven agent and command restore processes", () => {
     withIsolatedAgentsHome((root) => {
       writeConfig(root, {

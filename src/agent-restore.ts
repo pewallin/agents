@@ -599,6 +599,7 @@ function resolvedLaunchForMetadata(entry: MetadataPaneEntry): ResolvedMetadataLa
 }
 
 function shouldApplyMetadataLaunch(savedFullCommand: string | undefined, launch: ResolvedMetadataLaunch): boolean {
+  if (launch.source === "metadata") return true;
   if (isShellishFullCommand(savedFullCommand)) return true;
   return !firstAgentToken(launch.command);
 }
