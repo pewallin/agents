@@ -180,6 +180,35 @@ function optionsWithValues(agent: string): Set<string> {
   switch (agent.toLowerCase()) {
     case "codex":
       return new Set(["-c", "--config", "-m", "--model", "-p", "--profile", "--cd", "--cwd", "--sandbox", "--ask-for-approval", "--approval-policy", "--model-provider"]);
+    case "opencode":
+      return new Set(["--prompt", "--session"]);
+    case "pi":
+      return new Set([
+        "--provider",
+        "--model",
+        "--api-key",
+        "--system-prompt",
+        "--append-system-prompt",
+        "--mode",
+        "--session",
+        "--session-id",
+        "--fork",
+        "--session-dir",
+        "--name",
+        "-n",
+        "--models",
+        "--tools",
+        "-t",
+        "--exclude-tools",
+        "-xt",
+        "--thinking",
+        "--extension",
+        "-e",
+        "--skill",
+        "--prompt-template",
+        "--theme",
+        "--export",
+      ]);
     default:
       return new Set(["--resume", "--session"]);
   }
@@ -212,6 +241,8 @@ function explicitTargetFromArgs(agent: string, argv: string[]): string | undefin
     }
     case "opencode":
     case "pi": {
+      const sessionArg = args.find((arg) => arg.startsWith("--session="));
+      if (sessionArg) return sessionArg.slice("--session=".length) || undefined;
       const sessionIndex = args.indexOf("--session");
       const target = sessionIndex >= 0 ? args[sessionIndex + 1] : undefined;
       return target && !target.startsWith("-") ? target : undefined;
@@ -299,6 +330,85 @@ function stripFlagAndValue(args: string[], flags: Set<string>): string[] {
     result.push(arg);
   }
   return result;
+}
+
+function sessionRestoreTargetFlags(agent: string): Set<string> {
+  switch (agent.toLowerCase()) {
+    case "opencode":
+      return new Set(["--session"]);
+    case "pi":
+      return new Set(["--session", "--session-id", "--fork", "--resume", "-r"]);
+    default:
+      return new Set();
+  }
+}
+
+function sessionRestorePromptValueFlags(agent: string): Set<string> {
+  switch (agent.toLowerCase()) {
+    case "opencode":
+      return new Set(["--prompt"]);
+    default:
+      return new Set();
+  }
+}
+
+function shouldDropSessionRestorePositionals(agent: string): boolean {
+  switch (agent.toLowerCase()) {
+    case "opencode":
+    case "pi":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function stripSessionRestorePromptArgs(agent: string, argv: string[]): string[] {
+  if (!shouldDropSessionRestorePositionals(agent)) return argv;
+
+  const idx = agentIndex(argv, agent);
+  if (idx < 0) return argv;
+
+  const valueOptions = optionsWithValues(agent);
+  const targetFlags = sessionRestoreTargetFlags(agent);
+  const promptValueFlags = sessionRestorePromptValueFlags(agent);
+  const beforeAndAgent = argv.slice(0, idx + 1);
+  const args = argv.slice(idx + 1);
+  const result: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--continue") continue;
+    if (arg === "--") break;
+
+    const equalsIndex = arg.indexOf("=");
+    const flagName = equalsIndex >= 0 ? arg.slice(0, equalsIndex) : arg;
+    if (targetFlags.has(flagName) || promptValueFlags.has(flagName)) {
+      if (equalsIndex < 0) i += 1;
+      continue;
+    }
+
+    if (equalsIndex >= 0) {
+      result.push(arg);
+      continue;
+    }
+
+    if (valueOptions.has(arg)) {
+      result.push(arg);
+      const value = args[i + 1];
+      if (value !== undefined) {
+        result.push(value);
+        i += 1;
+      }
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      result.push(arg);
+      continue;
+    }
+  }
+
+  return [...beforeAndAgent, ...result];
 }
 
 function originalBaseArgv(agent: string, originalArgv?: string[]): string[] | undefined {
@@ -470,7 +580,8 @@ export function resolveAgentRestoreArgv(options: AgentRestoreCommandOptions): st
 
   const profileArgv = profileArgvForAgent(agent);
   const originalBase = originalBaseArgv(agent, originalArgv);
-  const baseArgv = mergeBaseArgv(profileArgv, originalBase, defaultBaseArgv(agent));
+  const mergedBaseArgv = mergeBaseArgv(profileArgv, originalBase, defaultBaseArgv(agent));
+  const baseArgv = sessionId ? stripSessionRestorePromptArgs(agent, mergedBaseArgv) : mergedBaseArgv;
 
   if (!sessionId) {
     return baseArgv;

@@ -90,7 +90,7 @@ describe("getRestorableWorkspacesFromStates", () => {
     expect(result).toHaveLength(2);
     expect(result[0].agent).toBe("claude");
     expect(result[0].cwd).toBe("/Users/test/code/myapp");
-    expect(result[0].command).toBe("claude");
+    expect(result[0].command).toBe("claude --dangerously-skip-permissions");
     expect(result[0].context).toBe("Fixing bugs");
     expect(result[1].agent).toBe("pi");
     expect(result[1].cwd).toBe("/Users/test/code/other");

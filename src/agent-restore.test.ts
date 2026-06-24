@@ -149,6 +149,67 @@ describe("resolveAgentRestoreCommand", () => {
     });
   });
 
+  it("drops accidental Pi prompt positionals when restoring an existing session", () => {
+    expect(resolveAgentRestoreCommand({
+      agent: "pi",
+      cwd: "/repo",
+      originalArgv: ["pi", "--yolo", "--session", "pi-session-123", "tmux", "pane", "%40"],
+    })).toBe("pi --yolo --session pi-session-123");
+  });
+
+  it("keeps Pi runtime flags while dropping prompt positionals during session restore", () => {
+    expect(resolveAgentRestoreCommand({
+      agent: "pi",
+      cwd: "/repo",
+      originalArgv: [
+        "pi",
+        "--yolo",
+        "--model",
+        "openai/gpt-5.5",
+        "--thinking",
+        "high",
+        "--session",
+        "pi-session-123",
+        "tmux",
+        "pane",
+        "%40",
+      ],
+    })).toBe("pi --yolo --model openai/gpt-5.5 --thinking high --session pi-session-123");
+  });
+
+  it("accepts equals-style Pi session restore targets", () => {
+    expect(resolveAgentRestoreCommand({
+      agent: "pi",
+      cwd: "/repo",
+      originalArgv: ["pi", "--yolo", "--session=pi-session-123", "tmux", "pane", "%40"],
+    })).toBe("pi --yolo --session pi-session-123");
+  });
+
+  it("drops other Pi session-target flags when restoring an existing session", () => {
+    expect(resolveAgentRestoreCommand({
+      agent: "pi",
+      cwd: "/repo",
+      externalSessionId: "pi-session-123",
+      originalArgv: ["pi", "--yolo", "--fork", "old-session", "tmux", "pane", "%40"],
+    })).toBe("pi --yolo --session pi-session-123");
+  });
+
+  it("drops OpenCode prompts when restoring an existing session", () => {
+    expect(resolveAgentRestoreCommand({
+      agent: "opencode",
+      cwd: "/repo",
+      originalArgv: ["opencode", "--prompt", "tmux pane %40", "--session=opencode-session-123"],
+    })).toBe("opencode --session opencode-session-123");
+  });
+
+  it("keeps Pi prompt positionals when starting fresh without a session id", () => {
+    expect(resolveAgentRestoreCommand({
+      agent: "pi",
+      cwd: "/repo",
+      originalArgv: ["pi", "--yolo", "resume this task"],
+    })).toBe("pi --yolo 'resume this task'");
+  });
+
 });
 
 describe("normalizeTmuxResurrectContent", () => {
