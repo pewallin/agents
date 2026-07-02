@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { execFileSync } from "child_process";
-import { mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { codexReasoningEffortForSession } from "./scanner-history.js";
 import { loadConfig, resolveProfile, type CommandConfigEntry } from "./config.js";
@@ -93,6 +93,10 @@ export function renderCommand(argv: string[]): string {
 }
 
 const AMBIGUOUS_LAST_CLAIM_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_CODEX_RESTORE_STAGGER_MS = 1500;
+const CODEX_RESTORE_STAGGER_LOCK_WAIT_MS = 5000;
+const CODEX_RESTORE_STAGGER_LOCK_STALE_MS = 15000;
+const CODEX_RESTORE_STAGGER_MAX_FUTURE_MS = 2 * 60 * 1000;
 const SHELL_COMMAND_NAMES = new Set(["$shell", "bash", "fish", "login", "nu", "sh", "tmux", "zsh"]);
 const AGENT_COMMAND_NAMES = new Set(["claude", "codex", "copilot", "kiro", "kiro-cli", "kiro-cli-chat", "opencode", "pi"]);
 
@@ -555,6 +559,80 @@ function claimAmbiguousLast(agent: string, cwd: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+function codexRestoreStaggerMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.AGENTS_CODEX_RESTORE_STAGGER_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_CODEX_RESTORE_STAGGER_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_CODEX_RESTORE_STAGGER_MS;
+  return parsed;
+}
+
+function readNumericFile(path: string): number | undefined {
+  try {
+    const value = Number.parseInt(readFileSync(path, "utf-8").trim(), 10);
+    return Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function acquireDirectoryLock(
+  lockPath: string,
+  sleepMs: (ms: number) => void,
+  nowMs: () => number
+): boolean {
+  const startedAt = nowMs();
+  while (true) {
+    try {
+      mkdirSync(lockPath);
+      return true;
+    } catch {
+      try {
+        if (nowMs() - statSync(lockPath).mtimeMs > CODEX_RESTORE_STAGGER_LOCK_STALE_MS) {
+          rmSync(lockPath, { recursive: true, force: true });
+          continue;
+        }
+      } catch {}
+
+      if (nowMs() - startedAt > CODEX_RESTORE_STAGGER_LOCK_WAIT_MS) return false;
+      sleepMs(25);
+    }
+  }
+}
+
+export function claimCodexRestoreLaunchDelayMs(options: {
+  env?: NodeJS.ProcessEnv;
+  nowMs?: () => number;
+  sleepMs?: (ms: number) => void;
+} = {}): number {
+  const intervalMs = codexRestoreStaggerMs(options.env);
+  if (intervalMs === 0) return 0;
+
+  const nowMs = options.nowMs || Date.now;
+  const sleepMs = options.sleepMs || ((ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
+  const staggerDir = join(getRuntimeTempDir(), "codex-restore-stagger");
+  const lockPath = join(staggerDir, "lock");
+  const nextStartPath = join(staggerDir, "next-start");
+
+  mkdirSync(staggerDir, { recursive: true });
+  if (!acquireDirectoryLock(lockPath, sleepMs, nowMs)) return 0;
+
+  try {
+    const now = nowMs();
+    const persistedNextStart = readNumericFile(nextStartPath);
+    const nextStart = persistedNextStart === undefined
+      || persistedNextStart < now
+      || persistedNextStart > now + CODEX_RESTORE_STAGGER_MAX_FUTURE_MS
+      ? now
+      : persistedNextStart;
+    const delayMs = Math.max(0, nextStart - now);
+    writeFileSync(nextStartPath, `${nextStart + intervalMs}\n`);
+    return delayMs;
+  } finally {
+    rmSync(lockPath, { recursive: true, force: true });
   }
 }
 

@@ -185,6 +185,7 @@ const {
   normalizeTmuxResurrectFile,
   resolveAgentRestoreArgv,
   renderCommand,
+  claimCodexRestoreLaunchDelayMs,
   applyTmuxResurrectMetadataLaunchesFile,
   tmuxResurrectRestoreProcessesForFiles,
 } = agentRestore;
@@ -285,6 +286,7 @@ function runResurrectAgent(agent: string, args: string[]): never {
 
   if (agent.toLowerCase() === "codex") {
     runCodexUpdatePreflight(argv);
+    sleepSync(claimCodexRestoreLaunchDelayMs());
   }
 
   const result = spawnSync(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });

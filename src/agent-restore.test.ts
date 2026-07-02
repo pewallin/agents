@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import {
   applyTmuxResurrectMetadataLaunches,
+  claimCodexRestoreLaunchDelayMs,
   normalizeTmuxResurrectContent,
   resolveAgentRestoreCommand,
   tmuxResurrectRestoreProcesses,
@@ -210,6 +211,54 @@ describe("resolveAgentRestoreCommand", () => {
     })).toBe("pi --yolo 'resume this task'");
   });
 
+});
+
+describe("claimCodexRestoreLaunchDelayMs", () => {
+  it("allocates staggered launch slots for parallel Codex restores", () => {
+    withIsolatedAgentsHome(() => {
+      const env = { ...process.env, AGENTS_CODEX_RESTORE_STAGGER_MS: "2000" };
+      const options = {
+        env,
+        nowMs: () => 1000,
+        sleepMs: () => {},
+      };
+
+      expect(claimCodexRestoreLaunchDelayMs(options)).toBe(0);
+      expect(claimCodexRestoreLaunchDelayMs(options)).toBe(2000);
+      expect(claimCodexRestoreLaunchDelayMs(options)).toBe(4000);
+    });
+  });
+
+  it("can disable Codex restore staggering", () => {
+    withIsolatedAgentsHome(() => {
+      const env = { ...process.env, AGENTS_CODEX_RESTORE_STAGGER_MS: "0" };
+      const options = {
+        env,
+        nowMs: () => 1000,
+        sleepMs: () => {},
+      };
+
+      expect(claimCodexRestoreLaunchDelayMs(options)).toBe(0);
+      expect(claimCodexRestoreLaunchDelayMs(options)).toBe(0);
+    });
+  });
+
+  it("does not delay on stale restore schedules", () => {
+    withIsolatedAgentsHome(() => {
+      const env = { ...process.env, AGENTS_CODEX_RESTORE_STAGGER_MS: "2000" };
+
+      expect(claimCodexRestoreLaunchDelayMs({
+        env,
+        nowMs: () => 1000,
+        sleepMs: () => {},
+      })).toBe(0);
+      expect(claimCodexRestoreLaunchDelayMs({
+        env,
+        nowMs: () => 1000 + 3 * 60 * 1000,
+        sleepMs: () => {},
+      })).toBe(0);
+    });
+  });
 });
 
 describe("normalizeTmuxResurrectContent", () => {
