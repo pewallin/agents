@@ -68,6 +68,8 @@ export interface ResumeStateSeed {
   externalSessionId?: string;
 }
 
+type TmuxPaneLookup = (paneFilter: string) => string | undefined;
+
 function normalizeAgentName(agent: string): string {
   const normalized = agent.split("/").pop()?.toLowerCase() || agent.toLowerCase();
   if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
@@ -220,12 +222,60 @@ export function renderResumeRespawnCommand(argv: string[]): string {
   ].join("; ");
 }
 
-export function resolveResumePane(paneFilter: string, panes: AgentPane[] = scan()): AgentPane | undefined {
-  return panes.find((pane) => matchesHistoryPaneFilter(pane, paneFilter));
+function lookupTmuxPaneForResume(paneFilter: string): string | undefined {
+  const result = execFileCapture("tmux", [
+    "display-message",
+    "-p",
+    "-t",
+    paneFilter,
+    "#{pane_id}\t#{pane_current_path}\t#{pane_title}\t#{window_id}\t#{pane_dead}",
+  ]);
+  if (result.status !== 0 || !result.stdout) return undefined;
+  return result.stdout;
+}
+
+function fallbackAgentPaneFromTmuxDisplay(
+  paneFilter: string,
+  agent: string,
+  lookup: TmuxPaneLookup,
+): AgentPane | undefined {
+  const output = lookup(paneFilter);
+  if (!output) return undefined;
+
+  const [tmuxPaneIdRaw, cwdRaw, titleRaw, windowIdRaw] = output.split("\t");
+  const tmuxPaneId = tmuxPaneIdRaw?.trim();
+  if (!tmuxPaneId) return undefined;
+
+  const normalizedAgent = normalizeAgentName(agent);
+  return {
+    pane: tmuxPaneId,
+    paneId: tmuxPaneId,
+    tmuxPaneId,
+    title: titleRaw?.trim() || normalizedAgent,
+    agent: normalizedAgent,
+    status: "idle",
+    cpuPercent: 0,
+    memoryMB: 0,
+    ...(cwdRaw?.trim() ? { cwd: normalizeHistoryCwd(cwdRaw.trim()) } : {}),
+    ...(windowIdRaw?.trim() ? { windowId: windowIdRaw.trim() } : {}),
+  };
+}
+
+export function resolveResumePane(
+  paneFilter: string,
+  panes: AgentPane[] = scan(),
+  fallbackAgent?: string,
+  tmuxPaneLookup: TmuxPaneLookup = lookupTmuxPaneForResume,
+): AgentPane | undefined {
+  const scannedPane = panes.find((pane) => matchesHistoryPaneFilter(pane, paneFilter));
+  if (scannedPane) return scannedPane;
+
+  if (!fallbackAgent?.trim()) return undefined;
+  return fallbackAgentPaneFromTmuxDisplay(paneFilter, fallbackAgent, tmuxPaneLookup);
 }
 
 export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSessionResumeResult {
-  const pane = resolveResumePane(options.pane);
+  const pane = resolveResumePane(options.pane, scan(), options.agent);
   if (!pane) {
     return {
       ok: false,
