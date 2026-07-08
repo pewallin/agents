@@ -269,6 +269,14 @@ function runCodexUpdatePreflight(argv: string[]): void {
   }
 }
 
+function clearScreenBeforeTuiRestore(agent: string): void {
+  if (agent.toLowerCase() !== "pi") return;
+  if (!process.stdout.isTTY) return;
+
+  // tmux-resurrect sends restore commands into a shell; Pi does not clear that shell line.
+  process.stdout.write("\x1b[2J\x1b[H");
+}
+
 function runResurrectAgent(agent: string, args: string[]): never {
   const originalArgv = [agent, ...(args || [])];
   const argv = resolveAgentRestoreArgv({
@@ -288,6 +296,8 @@ function runResurrectAgent(agent: string, args: string[]): never {
     runCodexUpdatePreflight(argv);
     sleepSync(claimCodexRestoreLaunchDelayMs());
   }
+
+  clearScreenBeforeTuiRestore(agent);
 
   const result = spawnSync(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });
   if (result.error) {
