@@ -42,6 +42,7 @@ def first_text:
 
 STATE="idle"
 DETAIL=""
+INTENT=""
 CLEAR_DETAIL=false
 case "$EVENT" in
   agentSpawn)
@@ -50,7 +51,8 @@ case "$EVENT" in
     ;;
   userPromptSubmit)
     STATE="working"
-    DETAIL=$(printf '%s' "$PROMPT_RAW" | awk 'NF { print; exit }')
+    INTENT=$(printf '%s' "$PROMPT_RAW" | awk 'NF { print; exit }')
+    CLEAR_DETAIL=true
     ;;
   preToolUse|postToolUse)
     STATE="working"
@@ -69,6 +71,7 @@ case "$EVENT" in
 esac
 
 DETAIL=$(printf '%s' "$DETAIL" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-160)
+INTENT=$(printf '%s' "$INTENT" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-160)
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
@@ -96,7 +99,9 @@ ARGS=(report --agent kiro --state "$STATE" --session "$SESSION")
 if [ -n "$SESSION_ID" ] && [ "$SESSION_ID" != "null" ]; then
   ARGS+=(--external-session-id "$SESSION_ID")
 fi
-if [ -n "$DETAIL" ] && [ "$DETAIL" != "null" ]; then
+if [ -n "$INTENT" ] && [ "$INTENT" != "null" ]; then
+  ARGS+=(--intent "$INTENT" --clear-detail)
+elif [ -n "$DETAIL" ] && [ "$DETAIL" != "null" ]; then
   ARGS+=(--detail "$DETAIL")
 elif [ "$CLEAR_DETAIL" = true ]; then
   ARGS+=(--clear-detail)
