@@ -38,38 +38,38 @@ if [ -z "$MODEL_ID" ] && [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
 fi
 
 # Try to read context data from statusline bridge file
-CTX_ARGS=""
+CTX_ARGS=()
 if [ -n "$SESSION_ID" ]; then
   BRIDGE="/tmp/claude-ctx-${SESSION_ID}.json"
   if [ -f "$BRIDGE" ]; then
     USED_TOKENS=$(jq -r '.used_tokens // empty' "$BRIDGE" 2>/dev/null)
     MAX_TOKENS=$(jq -r '.max_tokens // empty' "$BRIDGE" 2>/dev/null)
     if [ -n "$USED_TOKENS" ] && [ "$USED_TOKENS" != "null" ]; then
-      CTX_ARGS="--context-tokens $USED_TOKENS"
+      CTX_ARGS+=(--context-tokens "$USED_TOKENS")
       if [ -n "$MAX_TOKENS" ] && [ "$MAX_TOKENS" != "null" ]; then
-        CTX_ARGS="$CTX_ARGS --context-max $MAX_TOKENS"
+        CTX_ARGS+=(--context-max "$MAX_TOKENS")
       fi
     fi
   fi
 fi
 
-SESSION_ARGS=""
+SESSION_ARGS=()
 if [ -n "$SESSION_ID" ]; then
-  SESSION_ARGS="--external-session-id $SESSION_ID"
+  SESSION_ARGS+=(--external-session-id "$SESSION_ID")
 fi
 
-MODEL_ARGS=""
+MODEL_ARGS=()
 if [ -n "$PROVIDER" ] && [ "$PROVIDER" != "null" ]; then
-  MODEL_ARGS="$MODEL_ARGS --provider $PROVIDER"
+  MODEL_ARGS+=(--provider "$PROVIDER")
 fi
 if [ -n "$MODEL_ID" ] && [ "$MODEL_ID" != "null" ]; then
-  MODEL_ARGS="$MODEL_ARGS --model-id $MODEL_ID"
+  MODEL_ARGS+=(--model-id "$MODEL_ID")
 fi
 if [ -n "$MODEL_LABEL" ] && [ "$MODEL_LABEL" != "null" ]; then
-  MODEL_ARGS="$MODEL_ARGS --model-label $MODEL_LABEL"
+  MODEL_ARGS+=(--model-label "$MODEL_LABEL")
 fi
 if [ -n "$PROVIDER" ] || [ -n "$MODEL_ID" ] || [ -n "$MODEL_LABEL" ]; then
-  MODEL_ARGS="$MODEL_ARGS --model-source hook"
+  MODEL_ARGS+=(--model-source hook)
 fi
 
-agents report --agent claude --state "$STATE" --session "$SESSION" $SESSION_ARGS $CTX_ARGS $MODEL_ARGS
+agents report --agent claude --state "$STATE" --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"

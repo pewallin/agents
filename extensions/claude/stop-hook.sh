@@ -20,7 +20,7 @@ if [ "$ACTIVE" = "true" ]; then
 fi
 
 # Read context data from statusline bridge file
-CTX_ARGS=""
+CTX_ARGS=()
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 MODEL=$(printf '%s' "$INPUT" | jq -r '.model // empty' 2>/dev/null)
 MODEL_ID=$(printf '%s' "$INPUT" | jq -r '.model_id // .modelId // empty' 2>/dev/null)
@@ -32,9 +32,9 @@ if [ -n "$SESSION_ID" ]; then
     USED_TOKENS=$(jq -r '.used_tokens // empty' "$BRIDGE" 2>/dev/null)
     MAX_TOKENS=$(jq -r '.max_tokens // empty' "$BRIDGE" 2>/dev/null)
     if [ -n "$USED_TOKENS" ] && [ "$USED_TOKENS" != "null" ]; then
-      CTX_ARGS="--context-tokens $USED_TOKENS"
+      CTX_ARGS+=(--context-tokens "$USED_TOKENS")
       if [ -n "$MAX_TOKENS" ] && [ "$MAX_TOKENS" != "null" ]; then
-        CTX_ARGS="$CTX_ARGS --context-max $MAX_TOKENS"
+        CTX_ARGS+=(--context-max "$MAX_TOKENS")
       fi
     fi
   fi
@@ -60,26 +60,26 @@ MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // ""')
 # Only the tail of the message matters — earlier questions in the
 # conversation (code comments, URLs, explanations) are not relevant.
 TAIL=$(printf '%s' "$MSG" | grep -v '^[[:space:]]*$' | tail -3)
-SESSION_ARGS=""
+SESSION_ARGS=()
 if [ -n "$SESSION_ID" ]; then
-  SESSION_ARGS="--external-session-id $SESSION_ID"
+  SESSION_ARGS+=(--external-session-id "$SESSION_ID")
 fi
-MODEL_ARGS=""
+MODEL_ARGS=()
 if [ -n "$PROVIDER" ] && [ "$PROVIDER" != "null" ]; then
-  MODEL_ARGS="$MODEL_ARGS --provider $PROVIDER"
+  MODEL_ARGS+=(--provider "$PROVIDER")
 fi
 if [ -n "$MODEL_ID" ] && [ "$MODEL_ID" != "null" ]; then
-  MODEL_ARGS="$MODEL_ARGS --model-id $MODEL_ID"
+  MODEL_ARGS+=(--model-id "$MODEL_ID")
 fi
 if [ -n "$MODEL_LABEL" ] && [ "$MODEL_LABEL" != "null" ]; then
-  MODEL_ARGS="$MODEL_ARGS --model-label $MODEL_LABEL"
+  MODEL_ARGS+=(--model-label "$MODEL_LABEL")
 fi
 if [ -n "$PROVIDER" ] || [ -n "$MODEL_ID" ] || [ -n "$MODEL_LABEL" ]; then
-  MODEL_ARGS="$MODEL_ARGS --model-source hook"
+  MODEL_ARGS+=(--model-source hook)
 fi
 
 if printf '%s' "$TAIL" | grep -Fq '?'; then
-  agents report --agent claude --state question --session "$SESSION" $SESSION_ARGS $CTX_ARGS $MODEL_ARGS
+  agents report --agent claude --state question --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"
 else
-  agents report --agent claude --state idle --session "$SESSION" $SESSION_ARGS $CTX_ARGS $MODEL_ARGS
+  agents report --agent claude --state idle --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"
 fi
