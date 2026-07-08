@@ -793,9 +793,19 @@ function shouldApplyMetadataLaunch(savedFullCommand: string | undefined, launch:
   return !firstAgentToken(launch.command);
 }
 
-function paneProcessEntryForCommand(command: string): string | undefined {
+function explicitAgentSessionTarget(command: string): { agent: string; target: string } | undefined {
+  const agent = firstAgentToken(command);
+  if (!agent) return undefined;
+  const target = explicitTargetFromArgs(normalizeAgentName(agent), commandArgv(command));
+  return target ? { agent, target } : undefined;
+}
+
+function paneProcessEntryForCommand(command: string, options: { wrapExplicitAgentSession?: boolean } = {}): string | undefined {
   const agent = firstAgentToken(command);
   if (agent) {
+    if (!options.wrapExplicitAgentSession && explicitAgentSessionTarget(command)) {
+      return `~${tokenBasename(agent)}`;
+    }
     return `~${tokenBasename(agent)} -> agents resurrect agent ${normalizeAgentName(agent)} *`;
   }
 
@@ -804,19 +814,27 @@ function paneProcessEntryForCommand(command: string): string | undefined {
   return `~${tokenBasename(executable)}`;
 }
 
-function configuredRestoreProcessEntries(): string[] {
+function configuredRestoreProcessEntries(agentsWithExplicitSessionLaunches: Set<string> = new Set()): string[] {
   const config = loadConfig();
   const entries: string[] = [];
 
   for (const profile of Object.values(config.profiles)) {
     if (!profile.command) continue;
-    const entry = paneProcessEntryForCommand(renderConfiguredCommand(profile.command, profile.env));
+    const command = renderConfiguredCommand(profile.command, profile.env);
+    const explicit = explicitAgentSessionTarget(command);
+    const agent = explicit?.agent || firstAgentToken(command);
+    if (agent && agentsWithExplicitSessionLaunches.has(normalizeAgentName(agent))) continue;
+    const entry = paneProcessEntryForCommand(command, { wrapExplicitAgentSession: true });
     if (entry) entries.push(entry);
   }
 
   for (const command of config.commands) {
     if (!command.command || command.id === "shell") continue;
-    const entry = paneProcessEntryForCommand(renderConfiguredCommand(command.command, command.environment));
+    const rendered = renderConfiguredCommand(command.command, command.environment);
+    const explicit = explicitAgentSessionTarget(rendered);
+    const agent = explicit?.agent || firstAgentToken(rendered);
+    if (agent && agentsWithExplicitSessionLaunches.has(normalizeAgentName(agent))) continue;
+    const entry = paneProcessEntryForCommand(rendered, { wrapExplicitAgentSession: true });
     if (entry) entries.push(entry);
   }
 
@@ -825,7 +843,24 @@ function configuredRestoreProcessEntries(): string[] {
 
 export function tmuxResurrectRestoreProcesses(content = "", metadataContent = ""): string[] {
   const entries = new Set<string>();
-  for (const entry of configuredRestoreProcessEntries()) entries.add(entry);
+  const agentsWithExplicitSessionLaunches = new Set<string>();
+
+  for (const metadata of parseMetadataEntries(metadataContent)) {
+    const launch = resolvedLaunchForMetadata(metadata);
+    if (!launch) continue;
+    const explicit = explicitAgentSessionTarget(launch.command);
+    if (explicit) agentsWithExplicitSessionLaunches.add(normalizeAgentName(explicit.agent));
+  }
+
+  for (const line of content.split("\n")) {
+    const fields = line.split("\t");
+    if (fields[0] !== "pane" || fields.length < 11) continue;
+    const savedFullCommand = fields[10]?.startsWith(":") ? fields[10].slice(1) : fields[10];
+    const explicit = explicitAgentSessionTarget(savedFullCommand || "");
+    if (explicit) agentsWithExplicitSessionLaunches.add(normalizeAgentName(explicit.agent));
+  }
+
+  for (const entry of configuredRestoreProcessEntries(agentsWithExplicitSessionLaunches)) entries.add(entry);
 
   for (const metadata of parseMetadataEntries(metadataContent)) {
     const launch = resolvedLaunchForMetadata(metadata);

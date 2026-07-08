@@ -378,4 +378,42 @@ describe("tmux-resurrect metadata restore", () => {
       expect(processes).not.toContain("~zsh");
     });
   });
+
+  it("uses bare agent process matches when saved launches already include stable session ids", () => {
+    withIsolatedAgentsHome((root) => {
+      writeConfig(root, {
+        profiles: {
+          claude: { command: "claude --dangerously-skip-permissions" },
+          codex: { command: "codex --dangerously-bypass-approvals-and-sandbox" },
+          kiro: { command: "kiro-cli chat -a" },
+          pi: { command: "pi --yolo" },
+        },
+      });
+      const resurrectContent = [
+        "pane\tagents\t7\t0\t:\t0\tClaude\t:/repo\t1\tzsh\t:claude --dangerously-skip-permissions --resume claude-session",
+        "pane\tagents\t8\t0\t:\t0\tPi\t:/repo\t1\tzsh\t:pi --yolo --session pi-session",
+        "pane\tagents\t9\t0\t:\t0\tCodex\t:/repo\t1\tzsh\t:codex --dangerously-bypass-approvals-and-sandbox resume codex-session",
+        "pane\tagents\t10\t0\t:\t0\tKiro\t:/repo\t1\tzsh\t:kiro-cli chat -a --resume-id kiro-session",
+        "",
+      ].join("\n");
+      const metadataContent = [
+        "agents|7|0|uuid|claude|Claude|agent|/repo||||||||||claude --dangerously-skip-permissions --resume claude-session",
+        "agents|8|0|uuid|pi|Pi|agent|/repo||||||||||pi --yolo --session pi-session",
+        "agents|9|0|uuid|codex|Codex|agent|/repo||||||||||codex --dangerously-bypass-approvals-and-sandbox resume codex-session",
+        "agents|10|0|uuid|kiro|Kiro|agent|/repo||||||||||kiro-cli chat -a --resume-id kiro-session",
+        "",
+      ].join("\n");
+
+      const processes = tmuxResurrectRestoreProcesses(resurrectContent, metadataContent);
+
+      expect(processes).toContain("~claude");
+      expect(processes).toContain("~pi");
+      expect(processes).toContain("~codex");
+      expect(processes).toContain("~kiro-cli");
+      expect(processes).not.toContain("~claude -> agents resurrect agent claude *");
+      expect(processes).not.toContain("~pi -> agents resurrect agent pi *");
+      expect(processes).not.toContain("~codex -> agents resurrect agent codex *");
+      expect(processes).not.toContain("~kiro-cli -> agents resurrect agent kiro *");
+    });
+  });
 });
