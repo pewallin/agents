@@ -3,7 +3,7 @@ import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
-import { agentResumeInvocation, agentStatusRequiresForce, renderResumeRespawnCommand, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
+import { agentResumeInvocation, agentStatusRequiresForce, renderResumeRespawnCommand, resolveResumePane, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
 import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
@@ -754,6 +754,36 @@ describe("resume helpers", () => {
       target: "new-session",
       targetKind: "new-session",
     });
+  });
+
+  it("resolves explicit-agent panes from tmux metadata when scan has lost the pane", () => {
+    const pane = resolveResumePane(
+      "%dead",
+      [],
+      "codex",
+      () => "%dead\t/Users/peter/code/agents-app\tcodex\t@7\t1",
+    );
+
+    expect(pane).toMatchObject({
+      pane: "%dead",
+      paneId: "%dead",
+      tmuxPaneId: "%dead",
+      agent: "codex",
+      status: "idle",
+      cwd: "/Users/peter/code/agents-app",
+      windowId: "@7",
+    });
+  });
+
+  it("does not resolve scan-missing panes without an explicit agent", () => {
+    const pane = resolveResumePane(
+      "%dead",
+      [],
+      undefined,
+      () => "%dead\t/Users/peter/code/agents-app\tcodex\t@7\t1",
+    );
+
+    expect(pane).toBeUndefined();
   });
 
   it("builds claude, codex, copilot, pi, opencode, and kiro resume invocations", () => {
