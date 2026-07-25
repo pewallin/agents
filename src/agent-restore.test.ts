@@ -7,6 +7,7 @@ import {
   claimCodexRestoreLaunchDelayMs,
   normalizeTmuxResurrectContent,
   resolveAgentRestoreCommand,
+  tmuxResurrectMetadataCaptures,
   tmuxResurrectRestoreProcesses,
 } from "./agent-restore.js";
 import { reloadConfig } from "./config.js";
@@ -295,6 +296,64 @@ describe("normalizeTmuxResurrectContent", () => {
 });
 
 describe("tmux-resurrect metadata restore", () => {
+  it("captures stable restore launches from live agent panes before save", () => {
+    withIsolatedAgentsHome((root) => {
+      writeConfig(root, {
+        profiles: {
+          claude: { command: "claude --dangerously-skip-permissions" },
+          codex: { command: "codex --dangerously-bypass-approvals-and-sandbox" },
+          pi: { command: "pi --yolo" },
+        },
+      });
+
+      expect(tmuxResurrectMetadataCaptures([
+        {
+          tmuxPaneId: "%47",
+          agent: "codex",
+          cwd: "/repo/agents-app",
+          externalSessionId: "codex-session",
+        },
+        {
+          tmuxPaneId: "%62",
+          agent: "pi",
+          cwd: "/repo/belgium-scripts",
+          commandLaunch: "pi --yolo --session /tmp/pi-session.jsonl",
+        },
+        {
+          tmuxPaneId: "%63",
+          agent: "claude",
+          cwd: "/repo/shape",
+          commandLaunch: "claude --dangerously-skip-permissions",
+        },
+        {
+          tmuxPaneId: "%64",
+          agent: "pi",
+          cwd: "/repo/other",
+          commandLaunch: "codex resume wrong-agent-session",
+        },
+        {
+          tmuxPaneId: "zellij-pane",
+          agent: "codex",
+          cwd: "/repo/ignored",
+          externalSessionId: "ignored-session",
+        },
+      ])).toEqual([
+        {
+          paneID: "%47",
+          agent: "codex",
+          cwd: "/repo/agents-app",
+          launchCommand: "codex --dangerously-bypass-approvals-and-sandbox resume codex-session",
+        },
+        {
+          paneID: "%62",
+          agent: "pi",
+          cwd: "/repo/belgium-scripts",
+          launchCommand: "pi --yolo --session /tmp/pi-session.jsonl",
+        },
+      ]);
+    });
+  });
+
   it("fills missing command launches from configured commands and preserves command cwd", () => {
     withIsolatedAgentsHome((root) => {
       writeConfig(root, {

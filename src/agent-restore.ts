@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { execFileSync } from "child_process";
 import { mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { basename, join } from "path";
 import { codexReasoningEffortForSession } from "./scanner-history.js";
 import { loadConfig, resolveProfile, type CommandConfigEntry } from "./config.js";
@@ -13,6 +14,21 @@ export interface AgentRestoreCommandOptions {
   originalArgv?: string[];
   originalCommand?: string;
   externalSessionId?: string;
+}
+
+export interface TmuxResurrectMetadataCaptureInput {
+  tmuxPaneId: string;
+  agent: string;
+  cwd?: string;
+  externalSessionId?: string;
+  commandLaunch?: string;
+}
+
+export interface TmuxResurrectMetadataCapture {
+  paneID: string;
+  agent: string;
+  cwd: string;
+  launchCommand: string;
 }
 
 export function splitCommandArgv(command: string): string[] {
@@ -685,6 +701,52 @@ export function resolveAgentRestoreArgv(options: AgentRestoreCommandOptions): st
 export function resolveAgentRestoreCommand(options: AgentRestoreCommandOptions): string | undefined {
   const argv = resolveAgentRestoreArgv(options);
   return argv ? renderCommand(argv) : undefined;
+}
+
+function absoluteRestoreCwd(cwd: string): string {
+  if (cwd === "~") return homedir();
+  if (cwd.startsWith("~/")) return join(homedir(), cwd.slice(2));
+  return cwd;
+}
+
+export function tmuxResurrectMetadataCaptures(
+  panes: TmuxResurrectMetadataCaptureInput[],
+): TmuxResurrectMetadataCapture[] {
+  const captures: TmuxResurrectMetadataCapture[] = [];
+  const seenPanes = new Set<string>();
+
+  for (const pane of panes) {
+    if (!pane.tmuxPaneId.startsWith("%") || !pane.cwd || seenPanes.has(pane.tmuxPaneId)) continue;
+    const agent = normalizeAgentName(pane.agent);
+    const cwd = absoluteRestoreCwd(pane.cwd);
+    let launchCommand: string | undefined;
+
+    if (pane.externalSessionId) {
+      const argv = resolveAgentRestoreArgv({
+        agent,
+        cwd,
+        originalArgv: [agent],
+        externalSessionId: pane.externalSessionId,
+      });
+      if (argv) launchCommand = renderCommand(argv);
+    } else if (pane.commandLaunch) {
+      const explicit = explicitAgentSessionTarget(pane.commandLaunch);
+      if (explicit && normalizeAgentName(explicit.agent) === agent) {
+        launchCommand = pane.commandLaunch;
+      }
+    }
+    if (!launchCommand) continue;
+
+    captures.push({
+      paneID: pane.tmuxPaneId,
+      agent,
+      cwd,
+      launchCommand,
+    });
+    seenPanes.add(pane.tmuxPaneId);
+  }
+
+  return captures;
 }
 
 export function resolveStateRestoreCommand(entry: StateEntry): string | undefined {

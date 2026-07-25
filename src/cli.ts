@@ -180,13 +180,14 @@ const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
-const { backfillTmuxPaneCommandMetadata, setTmuxPaneCommandMetadata, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
+const { backfillTmuxPaneCommandMetadata, readTmuxPaneCommandLaunch, setTmuxPaneCommandMetadata, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
 const {
   normalizeTmuxResurrectFile,
   resolveAgentRestoreArgv,
   renderCommand,
   claimCodexRestoreLaunchDelayMs,
   applyTmuxResurrectMetadataLaunchesFile,
+  tmuxResurrectMetadataCaptures,
   tmuxResurrectRestoreProcessesForFiles,
 } = agentRestore;
 const {
@@ -332,6 +333,28 @@ function printResurrectProcesses(file: string | undefined, metadataFile: string 
     return;
   }
   console.log(processes.join("\n"));
+}
+
+function captureResurrectMetadata(opts: { json?: boolean }): void {
+  const captures = tmuxResurrectMetadataCaptures(scan().map((pane) => ({
+    ...pane,
+    commandLaunch: readTmuxPaneCommandLaunch(pane.tmuxPaneId),
+  })));
+  let updated = 0;
+  const failed: string[] = [];
+
+  for (const capture of captures) {
+    const ok = updateTmuxPaneCommandLaunch(capture.paneID, capture.launchCommand, capture.cwd);
+    if (ok) updated += 1;
+    else failed.push(capture.paneID);
+  }
+
+  if (opts.json) {
+    console.log(JSON.stringify({ scanned: captures.length, updated, failed }, null, 2));
+  } else {
+    console.log(updated);
+  }
+  if (failed.length > 0) process.exitCode = 1;
 }
 
 function printRuntimeResult(result: unknown, opts: { json?: boolean }, fallback: string): void {
@@ -890,6 +913,14 @@ resurrect
   .allowUnknownOption(true)
   .action((agent: string, args: string[]) => {
     runResurrectAgent(agent, args);
+  });
+
+resurrect
+  .command("capture-metadata")
+  .description("Capture live agent launches into tmux pane metadata before save")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    captureResurrectMetadata(opts);
   });
 
 resurrect

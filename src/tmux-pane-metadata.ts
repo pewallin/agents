@@ -178,6 +178,13 @@ export function setTmuxPaneCommandMetadata(paneID: string | undefined, input: Tm
   return ok;
 }
 
+export function readTmuxPaneCommandLaunch(paneID: string | undefined): string | undefined {
+  if (!paneID?.startsWith("%")) return undefined;
+  const result = execFileCapture("tmux", ["show-option", "-p", "-qv", "-t", paneID, "@agents_command_launch"]);
+  if (result.status !== 0) return undefined;
+  return result.stdout.trim() || undefined;
+}
+
 export function updateTmuxPaneCommandLaunch(paneID: string | undefined, launchCommand: string | undefined, cwd?: string): boolean {
   if (!paneID?.startsWith("%") || !launchCommand) return false;
   let ok = true;
