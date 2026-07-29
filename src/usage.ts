@@ -109,6 +109,7 @@ interface CopilotQuotaSnapshot {
   remaining?: number | string;
   percent_remaining?: number | string;
   quota_id?: string;
+  unlimited?: boolean;
 }
 
 interface CopilotUsageResponse {
@@ -296,31 +297,31 @@ async function fetchCopilotUsage(provider: ProviderConfig, env: NodeJS.ProcessEn
 }
 
 export function copilotSourceFromAPIResponse(payload: CopilotUsageResponse, account?: AgentUsageAccount): AgentUsageSource {
+  const usesCredits = payload.token_based_billing === true;
   const snapshotQuotas = usableCopilotSnapshotQuotas(payload.quota_snapshots);
   const premium = usableCopilotQuota(payload.quota_snapshots?.premium_interactions)
     ?? snapshotQuotas.find(({ key }) => isPremiumCopilotQuotaKey(key))?.quota
-    ?? monthlyCopilotQuota(payload.monthly_quotas?.completions, payload.limited_user_quotas?.completions, "completions");
+    ?? (!usesCredits
+      ? monthlyCopilotQuota(payload.monthly_quotas?.completions, payload.limited_user_quotas?.completions, "completions")
+      : undefined);
   const chat = usableCopilotQuota(payload.quota_snapshots?.chat)
     ?? snapshotQuotas.find(({ key }) => isChatCopilotQuotaKey(key))?.quota
-    ?? monthlyCopilotQuota(payload.monthly_quotas?.chat, payload.limited_user_quotas?.chat, "chat");
+    ?? (!usesCredits
+      ? monthlyCopilotQuota(payload.monthly_quotas?.chat, payload.limited_user_quotas?.chat, "chat")
+      : undefined);
   const selected = premium ?? chat ?? snapshotQuotas[0]?.quota;
-
-  if (payload.token_based_billing) {
-    const plan = cleanString(payload.copilot_plan);
-    const planLabel = plan ? ` ${plan}` : "";
-    const legacyCounter = selected
-      ? ` Legacy request counter from the internal API: ${Math.max(0, selected.entitlement - selected.remaining)}/${selected.entitlement} requests.`
-      : "";
-    return unavailableSource(
-      "copilot",
-      `Copilot${planLabel} uses pooled AI credit billing. The internal Copilot quota endpoint does not expose AI credit usage.${legacyCounter}`,
-      "api",
-    );
-  }
 
   if (!selected) {
     const plan = cleanString(payload.copilot_plan);
     const planSuffix = plan ? ` Plan: ${plan}.` : "";
+    if (payload.token_based_billing) {
+      const planLabel = plan ? ` ${plan}` : "";
+      return unavailableSource(
+        "copilot",
+        `Copilot${planLabel} uses pooled AI credit billing, but the internal API returned no usable AI credit quota.`,
+        "api",
+      );
+    }
     return unavailableSource("copilot", `Copilot API returned no usable quota snapshot.${planSuffix}`, "api");
   }
 
@@ -328,13 +329,13 @@ export function copilotSourceFromAPIResponse(payload: CopilotUsageResponse, acco
   const used = Math.max(0, selected.entitlement - selected.remaining);
   const windows: AgentUsageWindow[] = [
     {
-      kind: "requests",
-      label: "Requests",
+      kind: usesCredits ? "credits" : "requests",
+      label: usesCredits ? "AI Credits" : "Requests",
       status: "available",
       used,
       limit: selected.entitlement,
       remaining: selected.remaining,
-      unit: "requests",
+      unit: usesCredits ? "credits" : "requests",
       ...(reset ? { resetsAt: reset } : {}),
       source: "api",
     },
@@ -397,7 +398,7 @@ function normalizeGitHubAPIHost(host?: string): string {
 }
 
 function usableCopilotQuota(snapshot?: CopilotQuotaSnapshot): CopilotUsableQuota | undefined {
-  if (!snapshot) return undefined;
+  if (!snapshot || snapshot.unlimited) return undefined;
   const entitlement = numberValue(snapshot.entitlement);
   const remaining = numberValue(snapshot.remaining);
   if (entitlement === undefined || remaining === undefined || entitlement <= 0) return undefined;

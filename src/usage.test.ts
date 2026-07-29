@@ -142,6 +142,8 @@ describe("Copilot usage mapping", () => {
     const source = copilotSourceFromAPIResponse({
       copilot_plan: "business",
       token_based_billing: true,
+      monthly_quotas: { completions: 300 },
+      limited_user_quotas: { completions: 120 },
       quota_snapshots: {
         premium_interactions: {
           entitlement: 0,
@@ -165,24 +167,54 @@ describe("Copilot usage mapping", () => {
     expect(source.errorMessage).toContain("Copilot business");
   });
 
-  it("keeps token-based billing unavailable when GitHub also returns a legacy request counter", () => {
+  it("maps a finite token-based billing snapshot to AI credits", () => {
+    const source = copilotSourceFromAPIResponse({
+      copilot_plan: "business",
+      token_based_billing: true,
+      quota_reset_date: "2026-08-01T00:00:00Z",
+      quota_snapshots: {
+        premium_interactions: {
+          entitlement: 15000,
+          remaining: 11001,
+          percent_remaining: 73.3,
+          quota_id: "premium_interactions",
+        },
+      },
+    });
+
+    expect(source.status).toBe("available");
+    expect(source.windows).toHaveLength(1);
+    expect(source.windows[0]).toMatchObject({
+      kind: "credits",
+      label: "AI Credits",
+      status: "available",
+      used: 3999,
+      limit: 15000,
+      remaining: 11001,
+      unit: "credits",
+      resetsAt: "2026-08-01T00:00:00Z",
+      source: "api",
+    });
+  });
+
+  it("keeps explicitly unlimited token-based billing snapshots unavailable", () => {
     const source = copilotSourceFromAPIResponse({
       copilot_plan: "business",
       token_based_billing: true,
       quota_snapshots: {
         premium_interactions: {
-          entitlement: 12000,
-          remaining: 5640,
-          percent_remaining: 47,
+          entitlement: 15000,
+          remaining: 11001,
+          percent_remaining: 73.3,
           quota_id: "premium_interactions",
+          unlimited: true,
         },
       },
     });
 
     expect(source.status).toBe("unavailable");
     expect(source.windows).toEqual([]);
-    expect(source.errorMessage).toContain("pooled AI credit billing");
-    expect(source.errorMessage).toContain("6360/12000 requests");
+    expect(source.errorMessage).toContain("no usable AI credit quota");
   });
 
   it("uses renamed premium-like snapshot quota keys", () => {
