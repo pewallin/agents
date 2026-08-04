@@ -13,6 +13,7 @@ import { resolveStatusFromContent } from "./scanner-detection.js";
 import { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
 import type { SiblingPane, WindowSnapshot } from "./pane-ops.js";
 import { buildBranchCache, buildBranchCacheAsync, buildProcessTree, buildProcessTreeAsync, detectAgentProcess, findAgentLeafInTree, findAgentOnTtyProcessInTree, findLeafProcessSync } from "./scanner-discovery.js";
+import type { AgentLeafProcess } from "./scanner-discovery.js";
 import { extractClaudeRenameTitleFromTranscript, extractLatestCodexSessionTitlesFromIndexLines, loadHistoryForAgent, normalizeHistoryCwd, resolveAgentDisplayTitle } from "./scanner-history.js";
 import type { AgentSessionHistoryItem } from "./scanner-history.js";
 import type { AgentPane, AgentRuntimeState, AgentStatus } from "./scanner-types.js";
@@ -93,6 +94,65 @@ export function externalSessionIdFromProcessArgs(agent: string, args?: string): 
     default:
       return undefined;
   }
+}
+
+export function resolveTmuxAgentProcess(
+  matchedProcess: AgentLeafProcess | null,
+  commandContentKind?: string,
+  commandLaunch?: string,
+  hasActiveRuntimeEvidence = false,
+  allowMetadataFallback = true,
+): AgentLeafProcess | null {
+  if (matchedProcess) return matchedProcess;
+  if (!allowMetadataFallback || !hasActiveRuntimeEvidence || commandContentKind !== "agent" || !commandLaunch) return null;
+  const agentName = detectAgentProcess("", commandLaunch);
+  return agentName ? { agentName, process: null } : null;
+}
+
+export function hasActiveTmuxMetadataRuntimeEvidence(
+  commandLaunch: string | undefined,
+  tmuxPaneId: string,
+  stateSnapshot: StateSnapshot,
+  agentsUUID?: string,
+  paneDead?: string,
+): boolean {
+  // AgentsNext web surfaces keep a live, UUID-owned shell pane while the agent
+  // runs outside the pane process tree. CLI-created panes have no UUID, and an
+  // exited app-launched terminal agent has pane_dead=1.
+  if (!commandLaunch || !agentsUUID || paneDead !== "0") return false;
+  const agentName = detectAgentProcess("", commandLaunch);
+  if (!agentName) return false;
+  const externalSessionId = externalSessionIdFromProcessArgs(agentName, commandLaunch);
+  if (!externalSessionId) return false;
+  const state = getAgentStateEntry(agentName, tmuxPaneId, stateSnapshot);
+  return state?.state !== "idle"
+    && state?.externalSessionId === externalSessionId;
+}
+
+const TMUX_SCAN_FIELD_SEPARATOR = "\u001f";
+const TMUX_SCAN_RECORD_SEPARATOR = "\u001e";
+const TMUX_SCAN_FORMAT = [
+  "#{session_name}:#{window_name}.#{pane_index}",
+  "#{pane_pid}",
+  "#{pane_title}",
+  "#{window_name}",
+  "#{pane_current_command}",
+  "#{window_activity}",
+  "#{pane_tty}",
+  "#{session_name}:#{window_index}",
+  "#{pane_id}",
+  "#{pane_current_path}",
+  "#{@agents_command_content_kind}",
+  "#{@agents_command_launch}",
+  "#{@agents_uuid}",
+  "#{pane_dead}",
+].join(TMUX_SCAN_FIELD_SEPARATOR) + TMUX_SCAN_RECORD_SEPARATOR;
+
+export function parseTmuxScanRecords(raw: string): string[][] {
+  return raw
+    .split(TMUX_SCAN_RECORD_SEPARATOR)
+    .filter(Boolean)
+    .map((record) => record.replace(/^\r?\n/, "").split(TMUX_SCAN_FIELD_SEPARATOR));
 }
 
 export function matchesHistoryPaneFilter(
@@ -253,11 +313,11 @@ export function resolveAgentIntentTitle(paneTitle: string, displayTitle?: string
 }
 
 // Sync version for CLI commands that don't need async
-export function scan(): AgentPane[] {
+export function scan(options: { requireProcess?: boolean } = {}): AgentPane[] {
   if (detectMultiplexer() === "zellij") {
     return processZellijPanes(getMux().listPanes());
   }
-  return scanSync();
+  return scanSync(options);
 }
 
 export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
@@ -273,7 +333,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
   }
 
   const raw = exec(
-    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
+    `tmux list-panes -a -F '${TMUX_SCAN_FORMAT}' 2>/dev/null`
   );
   if (!raw) return [];
 
@@ -282,11 +342,11 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
   const tree = buildProcessTree();
   const stateSnapshot = readStateSnapshot();
   const results: AgentRuntimeState[] = [];
+  const resolvedPaneIds = new Set<string>();
 
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    const [pane, pid, title, winname, _fgcmd, wactStr, tty, _paneId, tmuxPaneId] = line.split("§");
-    if (!paneSet.has(tmuxPaneId)) continue;
+  for (const fields of parseTmuxScanRecords(raw)) {
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, _paneId, tmuxPaneId, _cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead] = fields;
+    if (!paneSet.has(tmuxPaneId) || resolvedPaneIds.has(tmuxPaneId)) continue;
 
     const session = pane.split(":")[0];
     if (session.startsWith("_agents_")) continue;
@@ -294,8 +354,14 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
     const pidNum = parseInt(pid, 10) || 0;
     const leaf = findAgentLeafInTree(pidNum, tree);
     const ttyMatch = !leaf && tty ? findAgentOnTtyProcessInTree(tty, tree) : null;
-    const matchedProcess = leaf ?? ttyMatch;
+    const matchedProcess = resolveTmuxAgentProcess(
+      leaf ?? ttyMatch,
+      commandContentKind,
+      commandLaunch,
+      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead),
+    );
     if (!matchedProcess) continue;
+    resolvedPaneIds.add(tmuxPaneId);
     const agentName = matchedProcess.agentName;
 
     const resolvedTitle = resolvedPaneTitle(title, winname);
@@ -311,12 +377,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
     const modelInfo = resolveModelInfo(agentName, tmuxPaneId, content, stateSnapshot);
     const tokenInfo = storedTokens.contextTokens !== undefined || storedTokens.contextMax !== undefined
       ? storedTokens
-      : mergedContextTokens(
-        agentName,
-        tmuxPaneId,
-        content,
-        stateSnapshot,
-      );
+      : mergedContextTokens(agentName, tmuxPaneId, content, stateSnapshot);
 
     results.push({
       session: tmuxPaneId,
@@ -414,9 +475,9 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
   return results;
 }
 
-function scanSync(): AgentPane[] {
+function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
   const raw = exec(
-    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
+    `tmux list-panes -a -F '${TMUX_SCAN_FORMAT}' 2>/dev/null`
   );
   if (!raw) return [];
 
@@ -441,9 +502,8 @@ function scanSync(): AgentPane[] {
   const agentPanes: ParsedPane[] = [];
   const uniqueCwds = new Set<string>();
 
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
+  for (const fields of parseTmuxScanRecords(raw)) {
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead] = fields;
 
     const session = pane.split(":")[0];
     if (session.startsWith("_agents_")) continue;
@@ -451,7 +511,13 @@ function scanSync(): AgentPane[] {
     const pidNum = parseInt(pid, 10) || 0;
     const leaf = findAgentLeafInTree(pidNum, tree);
     const ttyMatch = !leaf && tty ? findAgentOnTtyProcessInTree(tty, tree) : null;
-    const matchedProcess = leaf ?? ttyMatch;
+    const matchedProcess = resolveTmuxAgentProcess(
+      leaf ?? ttyMatch,
+      commandContentKind,
+      commandLaunch,
+      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead),
+      !options.requireProcess,
+    );
     if (!matchedProcess) continue;
     const agentName = matchedProcess.agentName;
 
@@ -468,7 +534,7 @@ function scanSync(): AgentPane[] {
       tmuxPaneId,
       cwdRaw,
       agentName,
-      processArgs: matchedProcess.process?.args,
+      processArgs: matchedProcess.process?.args ?? commandLaunch,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
     });
@@ -534,11 +600,11 @@ export async function scanAsync(): Promise<AgentPane[]> {
     return processZellijPanes(getMux().listPanes());
   }
   const raw = await execAsync(
-    `tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index}§#{pane_pid}§#{pane_title}§#{window_name}§#{pane_current_command}§#{window_activity}§#{pane_tty}§#{session_name}:#{window_index}§#{pane_id}§#{pane_current_path}' 2>/dev/null`
+    `tmux list-panes -a -F '${TMUX_SCAN_FORMAT}' 2>/dev/null`
   );
   if (!raw) return [];
 
-  const lines = raw.split("\n").filter(Boolean);
+  const records = parseTmuxScanRecords(raw);
   const tree = await buildProcessTreeAsync();
   const stateSnapshot = readStateSnapshot();
   type ParsedPane = {
@@ -556,15 +622,20 @@ export async function scanAsync(): Promise<AgentPane[]> {
   const agentPanes: ParsedPane[] = [];
   const uniqueCwds = new Set<string>();
 
-  for (const line of lines) {
-    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw] = line.split("§");
+  for (const fields of records) {
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead] = fields;
     const session = pane.split(":")[0];
     if (session.startsWith("_agents_")) continue;
 
     const pidNum = parseInt(pid, 10) || 0;
     const leaf = findAgentLeafInTree(pidNum, tree);
     const ttyMatch = !leaf && tty ? findAgentOnTtyProcessInTree(tty, tree) : null;
-    const matchedProcess = leaf ?? ttyMatch;
+    const matchedProcess = resolveTmuxAgentProcess(
+      leaf ?? ttyMatch,
+      commandContentKind,
+      commandLaunch,
+      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead),
+    );
     if (!matchedProcess) continue;
     const agentName = matchedProcess.agentName;
 
@@ -577,7 +648,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
       tmuxPaneId,
       cwdRaw,
       agentName,
-      processArgs: matchedProcess.process?.args,
+      processArgs: matchedProcess.process?.args ?? commandLaunch,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
     });

@@ -1,11 +1,11 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, hasActiveTmuxMetadataRuntimeEvidence, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, parseTmuxScanRecords, reconcileStaleCodexWorkingState, resolveAgentIntentTitle, resolveTmuxAgentProcess, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { agentResumeInvocation, agentStatusRequiresForce, renderResumeRespawnCommand, resolveResumePane, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
-import { clearStateExternalSessionId, getAgentStateEntry, reportState } from "./state.js";
+import { clearStateExternalSessionId, createStateSnapshot, getAgentStateEntry, reportState } from "./state.js";
 import { getStateDir } from "./paths.js";
 import type { AgentPane } from "./scanner.js";
 
@@ -98,6 +98,79 @@ describe("detectAgentProcess", () => {
       "/Users/clawd/.he",
       "/Users/clawd/.hermes/hermes-agent/venv/bin/python3 /Users/clawd/.local/bin/hermes",
     )).toBe("hermes");
+  });
+});
+
+describe("resolveTmuxAgentProcess", () => {
+  it("falls back to explicit agent launch metadata when no process is attached", () => {
+    expect(resolveTmuxAgentProcess(
+      null,
+      "agent",
+      "codex --dangerously-bypass-approvals-and-sandbox resume thread-123",
+      true,
+    )).toEqual({ agentName: "codex", process: null });
+  });
+
+  it("does not treat terminal or arbitrary command metadata as a live agent identity", () => {
+    expect(resolveTmuxAgentProcess(null, "terminal", "codex resume thread-123", true)).toBeNull();
+    expect(resolveTmuxAgentProcess(null, "agent", "npm test", true)).toBeNull();
+  });
+
+  it("does not trust stale launch metadata without active runtime evidence", () => {
+    expect(resolveTmuxAgentProcess(null, "agent", "codex resume thread-123")).toBeNull();
+  });
+
+  it("can require a live process for workspace discovery", () => {
+    expect(resolveTmuxAgentProcess(null, "agent", "codex resume thread-123", true, false)).toBeNull();
+  });
+});
+
+describe("hasActiveTmuxMetadataRuntimeEvidence", () => {
+  const launch = "codex resume thread-123";
+
+  it("accepts non-idle state for the same session in a live AgentsNext pane", () => {
+    const snapshot = createStateSnapshot([
+      { agent: "codex", session: "%1", state: "working", ts: 1, externalSessionId: "thread-123" },
+    ], []);
+
+    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", snapshot, "pane-uuid", "0")).toBe(true);
+  });
+
+  it("rejects metadata-only panes without live AgentsNext ownership", () => {
+    const snapshot = createStateSnapshot([
+      { agent: "codex", session: "%1", state: "working", ts: 1, externalSessionId: "thread-123" },
+    ], []);
+
+    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", snapshot, undefined, "0")).toBe(false);
+    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", snapshot, "pane-uuid", "1")).toBe(false);
+    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", snapshot, "pane-uuid", undefined)).toBe(false);
+  });
+
+  it("rejects idle state and state for a different external session", () => {
+    const idle = createStateSnapshot([
+      { agent: "codex", session: "%1", state: "idle", ts: 1, externalSessionId: "thread-123" },
+    ], []);
+    const differentSession = createStateSnapshot([
+      { agent: "codex", session: "%1", state: "working", ts: 1, externalSessionId: "thread-456" },
+    ], []);
+
+    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", idle, "pane-uuid", "0")).toBe(false);
+    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", differentSession, "pane-uuid", "0")).toBe(false);
+  });
+});
+
+describe("parseTmuxScanRecords", () => {
+  it("preserves newlines and legacy delimiters in launch metadata", () => {
+    const field = "\u001f";
+    const record = "\u001e";
+    const launch = "codex resume thread-123\nprintf 'a § b'";
+    const fields = ["pane", "123", "title", "window", "zsh", "0", "tty", "pane-id", "%1", "/tmp", "agent", launch, "pane-uuid", "0"];
+    const raw = fields.join(field) + record + "\n" + fields.join(field) + record;
+
+    expect(parseTmuxScanRecords(raw)).toEqual([
+      fields,
+      fields,
+    ]);
   });
 });
 

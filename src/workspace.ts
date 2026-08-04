@@ -333,7 +333,7 @@ function sleepSync(ms: number): void {
 }
 
 function findDiscoveredWorkspacePane(paneId: string): WorkspaceLaunchDiscovery | undefined {
-  const found = scan().find((agent) => (
+  const found = scan({ requireProcess: true }).find((agent) => (
     agent.tmuxPaneId === paneId ||
     agent.paneId === paneId ||
     agent.pane === paneId

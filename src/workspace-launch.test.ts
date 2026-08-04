@@ -354,6 +354,7 @@ describe("createWorkspace", () => {
       status: "idle",
       cwd: "/tmp/demo",
     }));
+    expect(scanMock).toHaveBeenCalledWith({ requireProcess: true });
   });
 
   it("fails a required discovery launch when the scanner cannot find the pane", () => {
