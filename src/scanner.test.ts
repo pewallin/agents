@@ -133,7 +133,15 @@ describe("hasActiveTmuxMetadataRuntimeEvidence", () => {
       { agent: "codex", session: "%1", state: "working", ts: 1, externalSessionId: "thread-123" },
     ], []);
 
-    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", snapshot, "pane-uuid", "0")).toBe(true);
+    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", snapshot, "pane-uuid", "0", "url")).toBe(true);
+  });
+
+  it("rejects a live shell pane without an active web surface", () => {
+    const snapshot = createStateSnapshot([
+      { agent: "codex", session: "%1", state: "working", ts: 1, externalSessionId: "thread-123" },
+    ], []);
+
+    expect(hasActiveTmuxMetadataRuntimeEvidence(launch, "%1", snapshot, "pane-uuid", "0")).toBe(false);
   });
 
   it("rejects metadata-only panes without live AgentsNext ownership", () => {

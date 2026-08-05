@@ -115,11 +115,13 @@ export function hasActiveTmuxMetadataRuntimeEvidence(
   stateSnapshot: StateSnapshot,
   agentsUUID?: string,
   paneDead?: string,
+  workspaceRenderMode?: string,
 ): boolean {
   // AgentsNext web surfaces keep a live, UUID-owned shell pane while the agent
-  // runs outside the pane process tree. CLI-created panes have no UUID, and an
-  // exited app-launched terminal agent has pane_dead=1.
-  if (!commandLaunch || !agentsUUID || paneDead !== "0") return false;
+  // runs outside the pane process tree. The URL render mode distinguishes that
+  // surface from a shell pane carrying stale launch metadata. CLI-created panes
+  // have no UUID, and an exited app-launched terminal agent has pane_dead=1.
+  if (!commandLaunch || !agentsUUID || paneDead !== "0" || workspaceRenderMode !== "url") return false;
   const agentName = detectAgentProcess("", commandLaunch);
   if (!agentName) return false;
   const externalSessionId = externalSessionIdFromProcessArgs(agentName, commandLaunch);
@@ -146,6 +148,7 @@ const TMUX_SCAN_FORMAT = [
   "#{@agents_command_launch}",
   "#{@agents_uuid}",
   "#{pane_dead}",
+  "#{@agents_workspace_render}",
 ].join(TMUX_SCAN_FIELD_SEPARATOR) + TMUX_SCAN_RECORD_SEPARATOR;
 
 export function parseTmuxScanRecords(raw: string): string[][] {
@@ -345,7 +348,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
   const resolvedPaneIds = new Set<string>();
 
   for (const fields of parseTmuxScanRecords(raw)) {
-    const [pane, pid, title, winname, _fgcmd, wactStr, tty, _paneId, tmuxPaneId, _cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead] = fields;
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, _paneId, tmuxPaneId, _cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead, workspaceRenderMode] = fields;
     if (!paneSet.has(tmuxPaneId) || resolvedPaneIds.has(tmuxPaneId)) continue;
 
     const session = pane.split(":")[0];
@@ -358,7 +361,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
       leaf ?? ttyMatch,
       commandContentKind,
       commandLaunch,
-      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead),
+      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead, workspaceRenderMode),
     );
     if (!matchedProcess) continue;
     resolvedPaneIds.add(tmuxPaneId);
@@ -503,7 +506,7 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
   const uniqueCwds = new Set<string>();
 
   for (const fields of parseTmuxScanRecords(raw)) {
-    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead] = fields;
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead, workspaceRenderMode] = fields;
 
     const session = pane.split(":")[0];
     if (session.startsWith("_agents_")) continue;
@@ -515,7 +518,7 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
       leaf ?? ttyMatch,
       commandContentKind,
       commandLaunch,
-      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead),
+      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead, workspaceRenderMode),
       !options.requireProcess,
     );
     if (!matchedProcess) continue;
@@ -623,7 +626,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
   const uniqueCwds = new Set<string>();
 
   for (const fields of records) {
-    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead] = fields;
+    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead, workspaceRenderMode] = fields;
     const session = pane.split(":")[0];
     if (session.startsWith("_agents_")) continue;
 
@@ -634,7 +637,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
       leaf ?? ttyMatch,
       commandContentKind,
       commandLaunch,
-      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead),
+      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead, workspaceRenderMode),
     );
     if (!matchedProcess) continue;
     const agentName = matchedProcess.agentName;

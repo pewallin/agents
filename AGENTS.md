@@ -111,6 +111,16 @@ Test files: `src/*.test.ts` (excluded from tsc output via tsconfig.json).
 - `scanner.test.ts` — detector selection, generic detector regexes, filterAgents (27 tests)
 - `state.test.ts` — priority logic, session filtering (9 tests)
 
+## Git workflow
+
+Work directly on `main` by default and commit each completed, validated slice.
+Do not leave finished work uncommitted merely to avoid changing history;
+incorrect changes should normally be undone with a new `git revert` commit.
+
+Use a branch or worktree only when parallel work, review isolation, or an
+explicit user request makes it materially useful. Merge validated work back to
+`main` promptly.
+
 ## Issue tracking
 
 This project uses **beads** (`br`) for issue tracking. Issues live in `.beads/` and sync via git.
