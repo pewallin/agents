@@ -69,6 +69,9 @@ export interface ProcessTree {
 function preferredAgentProcess(a: AgentProcessMatch | null, b: AgentProcessMatch | null): AgentProcessMatch | null {
   if (!a) return b;
   if (!b) return a;
+  const aIsDirect = a.process ? detectAgentProcess(a.process.comm, "") === a.agentName : false;
+  const bIsDirect = b.process ? detectAgentProcess(b.process.comm, "") === b.agentName : false;
+  if (aIsDirect !== bIsDirect) return aIsDirect ? a : b;
   if (a.depth !== b.depth) return a.depth > b.depth ? a : b;
   const aMemory = a.process?.memoryMB ?? -1;
   const bMemory = b.process?.memoryMB ?? -1;

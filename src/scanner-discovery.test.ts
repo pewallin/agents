@@ -47,6 +47,34 @@ describe("findAgentLeafInTree", () => {
       process: processTree.byPid.get(42633),
     });
   });
+
+  it("prefers the direct Codex process over a deeper helper whose path contains Codex", () => {
+    const processTree = tree([
+      proc(
+        10,
+        1,
+        "codex",
+        "ttys001",
+        1,
+        20,
+        "codex --dangerously-bypass-approvals-and-sandbox resume thread-live",
+      ),
+      proc(
+        11,
+        10,
+        "SkyComputerUseClient",
+        "??",
+        0,
+        5,
+        "/Users/peter/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseClient mcp",
+      ),
+    ]);
+
+    expect(findAgentLeafInTree(10, processTree)).toEqual({
+      agentName: "codex",
+      process: processTree.byPid.get(10),
+    });
+  });
 });
 
 describe("findAgentOnTtyProcessInTree", () => {
