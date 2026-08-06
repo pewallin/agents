@@ -22,6 +22,8 @@ export interface RuntimeStateEvent extends RuntimeLocator {
   state?: RuntimeReportedState;
   intent?: string;
   clearIntent?: boolean;
+  responsePreview?: string;
+  clearResponsePreview?: boolean;
   detail?: string;
   externalSessionId?: string;
   stateSource?: RuntimeStateSource;
@@ -34,6 +36,8 @@ export interface RuntimeStateEventOptions {
   state?: RuntimeReportedState;
   intent?: string;
   clearIntent?: boolean;
+  responsePreview?: string;
+  clearResponsePreview?: boolean;
   detail?: string;
   externalSessionId?: string;
   stateSource?: RuntimeStateSource;
@@ -78,6 +82,8 @@ export function appendRuntimeStateEvent(
     ...(options.state ? { state: options.state } : {}),
     ...(options.intent ? { intent: options.intent } : {}),
     ...(options.clearIntent ? { clearIntent: true } : {}),
+    ...(options.responsePreview ? { responsePreview: options.responsePreview } : {}),
+    ...(options.clearResponsePreview ? { clearResponsePreview: true } : {}),
     ...(options.detail ? { detail: options.detail } : {}),
     ...(options.externalSessionId ? { externalSessionId: options.externalSessionId } : {}),
     ...(options.stateSource ? { stateSource: options.stateSource } : {}),

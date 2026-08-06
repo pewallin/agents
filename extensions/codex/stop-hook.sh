@@ -28,6 +28,7 @@ CONTEXT_MAX=$(printf '%s' "$INPUT" | jq -r '.context_max // .contextMax // .cont
 MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""' 2>/dev/null)
 LAST_LINE=$(printf '%s' "$MSG" | awk 'NF { last=$0 } END { print last }')
 QUESTION_DETAIL=$(printf '%s' "$MSG" | awk 'NF { print; exit }' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-160)
+RESPONSE_PREVIEW=$(printf '%s' "$MSG" | awk 'NF { gsub(/[[:space:]]+/, " "); sub(/^ /, ""); sub(/ $/, ""); printf "%s%s", separator, $0; separator=" " } END { print "" }' | cut -c1-320)
 
 agents_home() {
   if [ -n "${AGENTS_HOME:-}" ]; then
@@ -98,6 +99,11 @@ elif [ -x "$HOME/.local/bin/agents" ]; then
 fi
 
 ARGS=(report --agent codex --session "$SESSION")
+if [ -n "$RESPONSE_PREVIEW" ] && [ "$RESPONSE_PREVIEW" != "null" ]; then
+  ARGS+=(--response-preview "$RESPONSE_PREVIEW")
+else
+  ARGS+=(--clear-response-preview)
+fi
 if [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
   ARGS+=(--model "$MODEL")
 fi

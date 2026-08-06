@@ -140,6 +140,24 @@ describe("reportState", () => {
     });
   });
 
+  it("preserves a response preview until new work explicitly clears it", () => {
+    const session = `%vitest-response-preview-${Date.now()}`;
+
+    reportState("codex", session, "idle", { responsePreview: "Implemented the notification excerpt." });
+    reportState("codex", session, "question", {});
+
+    expect(getAgentStateEntry("codex", session)?.responsePreview).toBe("Implemented the notification excerpt.");
+
+    reportState("codex", session, "working", { clearResponsePreview: true });
+
+    expect(getAgentStateEntry("codex", session)?.responsePreview).toBeUndefined();
+    expect(readRuntimeStateEvents().at(-1)).toMatchObject({
+      agent: "codex",
+      surfaceId: session,
+      clearResponsePreview: true,
+    });
+  });
+
   it("does not carry session-scoped metadata across an external session change", () => {
     const session = `%vitest-session-boundary-${Date.now()}`;
 
@@ -160,6 +178,7 @@ describe("reportState", () => {
     expect(entry?.externalSessionId).toBe("thread-new");
     expect(entry?.detail).toBeUndefined();
     expect(entry?.intent).toBeUndefined();
+    expect(entry?.responsePreview).toBeUndefined();
     expect(entry?.model).toBeUndefined();
     expect(entry?.context).toBeUndefined();
     expect(entry?.contextTokens).toBeUndefined();

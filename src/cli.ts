@@ -970,6 +970,8 @@ program
   .option("--clear-detail", "Clear any previously reported activity detail")
   .option("--intent <text>", "Current user intent/prompt summary")
   .option("--clear-intent", "Clear any previously reported intent")
+  .option("--response-preview <text>", "Beginning of the latest assistant response")
+  .option("--clear-response-preview", "Clear any previously reported response preview")
   .option("--model <name>", "Backward-compatible model display string")
   .option("--provider <id>", "Model provider ID")
   .option("--model-id <id>", "Canonical model ID")
@@ -1072,6 +1074,8 @@ program
         clearDetail: !!opts.clearDetail,
         intent: opts.intent,
         clearIntent: !!opts.clearIntent,
+        responsePreview: opts.responsePreview,
+        clearResponsePreview: !!opts.clearResponsePreview,
         model,
         provider,
         modelId,

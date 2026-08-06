@@ -59,6 +59,9 @@ if [ -n "$SESSION_ID" ]; then
 fi
 
 MODEL_ARGS=()
+if [ "$STATE" = "working" ]; then
+  MODEL_ARGS+=(--clear-response-preview)
+fi
 if [ -n "$PROVIDER" ] && [ "$PROVIDER" != "null" ]; then
   MODEL_ARGS+=(--provider "$PROVIDER")
 fi

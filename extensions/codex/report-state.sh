@@ -123,6 +123,9 @@ else
 fi
 
 ARGS=(report --agent codex --state "$STATE" --session "$SESSION")
+if [ "$STATE" = "working" ]; then
+  ARGS+=(--clear-response-preview)
+fi
 if [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
   ARGS+=(--model "$MODEL")
 fi

@@ -29,6 +29,7 @@ export interface StateEntry extends ModelMetadata {
   session: string;
   detail?: string;         // transient activity detail (e.g. tool name, filename)
   intent?: string;         // stable user intent for the current/last prompt
+  responsePreview?: string; // bounded beginning of the latest assistant response
   externalSessionId?: string;
   context?: string;
   contextTokens?: number;
@@ -82,6 +83,7 @@ function runtimeStateEventOptionsForEntry(
   return {
     state: entry.state,
     ...(entry.intent ? { intent: entry.intent } : {}),
+    ...(entry.responsePreview ? { responsePreview: entry.responsePreview } : {}),
     ...(entry.detail ? { detail: entry.detail } : {}),
     ...(entry.externalSessionId ? { externalSessionId: entry.externalSessionId } : {}),
     ...(provenance?.source ? { stateSource: provenance.source } : {}),
@@ -333,6 +335,8 @@ function isReportOptions(value: unknown): value is ReportOptions {
       || "clearDetail" in value
       || "intent" in value
       || "clearIntent" in value
+      || "responsePreview" in value
+      || "clearResponsePreview" in value
       || "model" in value
       || "provider" in value
       || "modelId" in value
@@ -369,6 +373,8 @@ export interface ReportOptions extends ModelMetadata {
   clearDetail?: boolean;
   intent?: string;
   clearIntent?: boolean;
+  responsePreview?: string;
+  clearResponsePreview?: boolean;
   externalSessionId?: string;
   context?: string;
   workspace?: WorkspaceSnapshot;
@@ -387,7 +393,7 @@ export function reportState(agent: string, session: string, state: ReportedState
     ? optsOrContext
     : { context: optsOrContext as string | undefined, workspace, contextTokens, contextMax, model, externalSessionId };
 
-  let { detail, intent, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
+  let { detail, intent, responsePreview, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
   const existing = readStateFile(agent, session);
   const sessionChanged = extSessionId !== undefined
     && existing?.externalSessionId !== undefined
@@ -405,6 +411,11 @@ export function reportState(agent: string, session: string, state: ReportedState
   } else if (intent === undefined && !sessionChanged) {
     intent = existing?.intent;
   }
+  if (opts.clearResponsePreview) {
+    responsePreview = undefined;
+  } else if (responsePreview === undefined && !sessionChanged) {
+    responsePreview = existing?.responsePreview;
+  }
   if (extSessionId === undefined) extSessionId = existing?.externalSessionId;
   if (context === undefined && !sessionChanged) context = existing?.context;
   if (ctxTokens === undefined && !sessionChanged) ctxTokens = existing?.contextTokens;
@@ -421,6 +432,7 @@ export function reportState(agent: string, session: string, state: ReportedState
     agent,
     session,
     ...(intent ? { intent } : {}),
+    ...(responsePreview ? { responsePreview } : {}),
     ...(detail ? { detail } : {}),
     ...mergedModel,
     ...(extSessionId ? { externalSessionId: extSessionId } : {}),
@@ -433,6 +445,7 @@ export function reportState(agent: string, session: string, state: ReportedState
   appendRuntimeStateEvent("primary_state", "upsert", agent, session, {
     ...runtimeStateEventOptionsForEntry(agent, session, entry),
     ...(opts.clearIntent || (sessionChanged && intent === undefined) ? { clearIntent: true } : {}),
+    ...(opts.clearResponsePreview || (sessionChanged && responsePreview === undefined) ? { clearResponsePreview: true } : {}),
   });
   return entry;
 }

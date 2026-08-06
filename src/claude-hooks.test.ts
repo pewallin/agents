@@ -26,6 +26,7 @@ describe("Claude hook scripts", () => {
     expect(valueAfter(result.argv, "--model-label")).toBe("Claude Opus 4.6");
     expect(valueAfter(result.argv, "--model-id")).toBe("claude-opus-4-6");
     expect(valueAfter(result.argv, "--provider")).toBe("anthropic");
+    expect(result.argv).toContain("--clear-response-preview");
   });
 
   it("preserves model labels with spaces in stop hook reports", () => {
@@ -41,6 +42,7 @@ describe("Claude hook scripts", () => {
     expect(valueAfter(result.argv, "--model-label")).toBe("Claude Opus 4.6");
     expect(valueAfter(result.argv, "--model-id")).toBe("claude-opus-4-6");
     expect(valueAfter(result.argv, "--provider")).toBe("anthropic");
+    expect(valueAfter(result.argv, "--response-preview")).toBe("All done.");
   });
 });
 

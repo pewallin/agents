@@ -266,6 +266,7 @@ export function runtimeStateFromAgent(agent: AgentPane): AgentRuntimeState {
     cpuPercent: agent.cpuPercent,
     memoryMB: agent.memoryMB,
     ...(agent.intent ? { intent: agent.intent } : {}),
+    ...(agent.responsePreview ? { responsePreview: agent.responsePreview } : {}),
     ...(agent.detail ? { detail: agent.detail } : {}),
     ...(agent.provider ? { provider: agent.provider } : {}),
     ...(agent.modelId ? { modelId: agent.modelId } : {}),

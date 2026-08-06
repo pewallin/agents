@@ -60,6 +60,11 @@ export function stateIntent(agent: string, paneId?: string, snapshot?: StateSnap
   return entry?.intent;
 }
 
+export function stateResponsePreview(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
+  const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
+  return entry?.responsePreview;
+}
+
 export function stateContext(agent: string, paneId?: string, snapshot?: StateSnapshot): string | undefined {
   const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   return entry?.context;

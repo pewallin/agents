@@ -8,6 +8,7 @@ export interface AgentPane {
   tmuxPaneId: string;
   title: string;
   intent?: string;
+  responsePreview?: string;
   agent: string;
   status: AgentStatus;
   cpuPercent: number;
@@ -36,6 +37,7 @@ export interface AgentRuntimeState {
   cpuPercent: number;
   memoryMB: number;
   intent?: string;
+  responsePreview?: string;
   detail?: string;
   provider?: string;
   modelId?: string;

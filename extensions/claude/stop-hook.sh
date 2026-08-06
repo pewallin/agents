@@ -55,6 +55,7 @@ if [ -z "$MODEL_ID" ] && [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
 fi
 
 MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // ""')
+RESPONSE_PREVIEW=$(printf '%s' "$MSG" | awk 'NF { gsub(/[[:space:]]+/, " "); sub(/^ /, ""); sub(/ $/, ""); printf "%s%s", separator, $0; separator=" " } END { print "" }' | cut -c1-320)
 
 # Check if the last 3 non-empty lines contain a question mark.
 # Only the tail of the message matters — earlier questions in the
@@ -65,6 +66,11 @@ if [ -n "$SESSION_ID" ]; then
   SESSION_ARGS+=(--external-session-id "$SESSION_ID")
 fi
 MODEL_ARGS=()
+if [ -n "$RESPONSE_PREVIEW" ] && [ "$RESPONSE_PREVIEW" != "null" ]; then
+  MODEL_ARGS+=(--response-preview "$RESPONSE_PREVIEW")
+else
+  MODEL_ARGS+=(--clear-response-preview)
+fi
 if [ -n "$PROVIDER" ] && [ "$PROVIDER" != "null" ]; then
   MODEL_ARGS+=(--provider "$PROVIDER")
 fi

@@ -8,7 +8,7 @@ import { BACK_ENV, switchBack } from "./back.js";
 import type { ModelMetadata, ModelSource, StateSnapshot } from "./state.js";
 import type { MuxPaneInfo } from "./multiplexer.js";
 import { inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, runtimeStateFromAgent } from "./scanner-runtime.js";
-import { mergedContextTokens, resolveModelInfo, stateContext, stateDetail, stateExternalSessionId, stateIntent, stateProvenance, stateTokens, stateWorkspaceCwd } from "./scanner-state-runtime.js";
+import { mergedContextTokens, resolveModelInfo, stateContext, stateDetail, stateExternalSessionId, stateIntent, stateProvenance, stateResponsePreview, stateTokens, stateWorkspaceCwd } from "./scanner-state-runtime.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
 import { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
 import type { SiblingPane, WindowSnapshot } from "./pane-ops.js";
@@ -370,6 +370,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
     const resolvedTitle = resolvedPaneTitle(title, winname);
     const intent = stateIntent(agentName, tmuxPaneId, stateSnapshot)
       || resolveAgentIntentTitle(resolvedTitle);
+    const responsePreview = stateResponsePreview(agentName, tmuxPaneId, stateSnapshot);
     const wact = parseInt(wactStr, 10) || 0;
     const content = "";
     const { status, detail } = resolveStatusFromContent(resolvedTitle, wact, agentName, content, tmuxPaneId, stateSnapshot);
@@ -388,6 +389,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
       ...(intent ? { intent } : {}),
+      ...(responsePreview ? { responsePreview } : {}),
       ...(richDetail || detail ? { detail: richDetail || detail } : {}),
       ...modelInfo,
       ...(context ? { context } : {}),
@@ -451,6 +453,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const displayTitle = resolveAgentDisplayTitle(agentName, p.cwd, externalSessionId, titleClean);
     const intent = stateIntent(agentName, p.id, stateSnapshot)
       || resolveAgentIntentTitle(p.title, displayTitle, p.cwd);
+    const responsePreview = stateResponsePreview(agentName, p.id, stateSnapshot);
 
     results.push({
       pane: paneRef,
@@ -458,6 +461,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       tmuxPaneId: p.id,
       title: displayTitle,
       ...(intent ? { intent } : {}),
+      ...(responsePreview ? { responsePreview } : {}),
       agent: friendlyName(agentName),
       status,
       cpuPercent: 0,
@@ -567,6 +571,7 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
     const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
     const intent = stateIntent(p.agentName, p.tmuxPaneId, stateSnapshot)
       || resolveAgentIntentTitle(p.title, displayTitle, p.cwdRaw);
+    const responsePreview = stateResponsePreview(p.agentName, p.tmuxPaneId, stateSnapshot);
 
     results.push({
       pane: paneShort,
@@ -574,6 +579,7 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
       tmuxPaneId: p.tmuxPaneId,
       title: displayTitle,
       ...(intent ? { intent } : {}),
+      ...(responsePreview ? { responsePreview } : {}),
       agent: friendlyName(p.agentName),
       status,
       cpuPercent: p.cpuPercent,
@@ -678,6 +684,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
     const intent = stateIntent(p.agentName, p.tmuxPaneId, stateSnapshot)
       || resolveAgentIntentTitle(p.title, displayTitle, p.cwdRaw);
+    const responsePreview = stateResponsePreview(p.agentName, p.tmuxPaneId, stateSnapshot);
 
     return {
       pane: paneShort,
@@ -685,6 +692,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
       tmuxPaneId: p.tmuxPaneId,
       title: displayTitle,
       ...(intent ? { intent } : {}),
+      ...(responsePreview ? { responsePreview } : {}),
       agent: friendlyName(p.agentName),
       status,
       cpuPercent: p.cpuPercent,
