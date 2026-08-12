@@ -17,7 +17,7 @@ describe("resolveTmuxReportBinding", () => {
     });
   });
 
-  it("accepts matching identity stamped by a managed launcher", () => {
+  it("accepts matching identity stamped by a managed launcher without a pane-local process", () => {
     expect(resolveTmuxReportBinding({
       requestedSession: "%47",
       reportedAgent: "pi",
@@ -25,7 +25,6 @@ describe("resolveTmuxReportBinding", () => {
       commandId: "pi",
       commandContentKind: "agent",
       commandOwner: "launcher",
-      liveAgent: "pi",
     })).toEqual({
       owned: true,
       requestedSession: "%47",
@@ -34,10 +33,10 @@ describe("resolveTmuxReportBinding", () => {
     });
   });
 
-  it("rejects stale launcher metadata after the managed agent exits", () => {
+  it("rejects launcher metadata owned by a different agent", () => {
     expect(resolveTmuxReportBinding({
       requestedSession: "%47",
-      reportedAgent: "pi",
+      reportedAgent: "codex",
       paneCwd: "/repo",
       commandId: "pi",
       commandContentKind: "agent",

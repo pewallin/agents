@@ -5,7 +5,6 @@ export interface TmuxReportBindingInput {
   commandId?: string;
   commandContentKind?: string;
   commandOwner?: string;
-  liveAgent?: string;
   foregroundAgent?: string;
 }
 
@@ -26,8 +25,7 @@ export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxRep
   const reportedAgent = input.reportedAgent.trim().toLowerCase();
   const managedCommandMatches = input.commandOwner === "launcher"
     && input.commandContentKind === "agent"
-    && input.commandId?.trim().toLowerCase() === reportedAgent
-    && input.liveAgent?.trim().toLowerCase() === reportedAgent;
+    && input.commandId?.trim().toLowerCase() === reportedAgent;
 
   if (managedCommandMatches) {
     return {

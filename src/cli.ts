@@ -1014,9 +1014,6 @@ program
       const foregroundAgent = paneMetadata?.foregroundCommand
         ? detectAgentProcess(paneMetadata.foregroundCommand, paneMetadata.foregroundCommand) || undefined
         : undefined;
-      const liveAgent = foregroundAgent || (paneMetadata?.commandOwner === "launcher"
-        ? scan({ requireProcess: true }).find((pane) => pane.tmuxPaneId === session)?.agent
-        : undefined);
       const binding = resolveTmuxReportBinding({
         requestedSession: session,
         reportedAgent: opts.agent,
@@ -1024,7 +1021,6 @@ program
         commandId: paneMetadata?.commandId,
         commandContentKind: paneMetadata?.commandContentKind,
         commandOwner: paneMetadata?.commandOwner,
-        liveAgent,
         foregroundAgent,
       });
       if (!binding.owned) return;
