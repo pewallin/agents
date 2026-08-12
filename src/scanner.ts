@@ -96,6 +96,13 @@ export function externalSessionIdFromProcessArgs(agent: string, args?: string): 
   }
 }
 
+export function resolveAgentExternalSessionId(input: {
+  processSessionId?: string;
+  stateSessionId?: string;
+}): string | undefined {
+  return input.stateSessionId || input.processSessionId;
+}
+
 export function resolveTmuxAgentProcess(
   matchedProcess: AgentLeafProcess | null,
   commandContentKind?: string,
@@ -440,8 +447,10 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
     const titleClean = cleanTitle(p.title);
 
     const zellijCwd = p.cwd?.replace(homedir(), "~") || undefined;
-    const externalSessionId = externalSessionIdFromProcessArgs(agentName, processArgs)
-      || stateExternalSessionId(agentName, p.id, stateSnapshot);
+    const externalSessionId = resolveAgentExternalSessionId({
+      processSessionId: externalSessionIdFromProcessArgs(agentName, processArgs),
+      stateSessionId: stateExternalSessionId(agentName, p.id, stateSnapshot),
+    });
     const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
 
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
@@ -563,8 +572,10 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
     const titleClean = cleanTitle(p.title);
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
-    const externalSessionId = externalSessionIdFromProcessArgs(p.agentName, p.processArgs)
-      || stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
+    const externalSessionId = resolveAgentExternalSessionId({
+      processSessionId: externalSessionIdFromProcessArgs(p.agentName, p.processArgs),
+      stateSessionId: stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot),
+    });
     const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, content, stateSnapshot);
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, content, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
@@ -676,8 +687,10 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const titleClean = cleanTitle(p.title);
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
-    const externalSessionId = externalSessionIdFromProcessArgs(p.agentName, p.processArgs)
-      || stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot);
+    const externalSessionId = resolveAgentExternalSessionId({
+      processSessionId: externalSessionIdFromProcessArgs(p.agentName, p.processArgs),
+      stateSessionId: stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot),
+    });
     const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, content, stateSnapshot);
     const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, content, stateSnapshot);
     const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
