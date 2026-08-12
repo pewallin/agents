@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTmuxPaneCommandMetadata,
+  parseTmuxPaneReportMetadata,
   tmuxPaneCommandLaunchSetOptionArguments,
   tmuxPaneCommandMetadataSetOptionArguments,
 } from "./tmux-pane-metadata.js";
@@ -49,6 +50,15 @@ describe("tmux pane command metadata", () => {
       "@agents_command_content_kind",
       "agent",
     ]);
+    expect(tmuxPaneCommandMetadataSetOptionArguments("%37", metadata)).toContainEqual([
+      "set-option",
+      "-p",
+      "-q",
+      "-t",
+      "%37",
+      "@agents_command_owner",
+      "launcher",
+    ]);
   });
 
   it("renders narrow launch metadata updates without replacing inventory identity", () => {
@@ -56,5 +66,20 @@ describe("tmux pane command metadata", () => {
       ["set-option", "-p", "-q", "-t", "%37", "@agents_command_cwd", "/repo"],
       ["set-option", "-p", "-q", "-t", "%37", "@agents_command_launch", "codex resume thread-123"],
     ]);
+  });
+
+  it("parses pane ownership evidence without treating legacy metadata as launcher-owned", () => {
+    expect(parseTmuxPaneReportMetadata([
+      "/Users/peter/code/shape",
+      "pi",
+      "agent",
+      "",
+      "zsh",
+    ].join("\u001f"))).toEqual({
+      paneCwd: "/Users/peter/code/shape",
+      commandId: "pi",
+      commandContentKind: "agent",
+      foregroundCommand: "zsh",
+    });
   });
 });

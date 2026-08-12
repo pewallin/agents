@@ -104,29 +104,6 @@ function report(state: PiState, ctx: any, detail?: string | null, metadata: Repo
   });
 }
 
-let paneMetadataStamped = false;
-
-function setPaneOption(pane: string, option: string, value: string): void {
-  execFile("tmux", ["set-option", "-p", "-q", "-t", pane, option, value], (error) => {
-    if (error) debug("pane_metadata_error", { option, message: error.message });
-  });
-}
-
-function stampTmuxPaneMetadata(): void {
-  if (paneMetadataStamped) return;
-  if (!SESSION_ID.startsWith("%")) return;
-  paneMetadataStamped = true;
-
-  execFile("tmux", ["show-option", "-p", "-qv", "-t", SESSION_ID, "@agents_command_content_kind"], (error, stdout) => {
-    if (!error && stdout.trim()) return;
-    setPaneOption(SESSION_ID, "@agents_command_id", "pi");
-    setPaneOption(SESSION_ID, "@agents_command_title", "Pi");
-    setPaneOption(SESSION_ID, "@agents_command_content_kind", "agent");
-    setPaneOption(SESSION_ID, "@agents_command_cwd", process.cwd());
-    setPaneOption(SESSION_ID, "@agents_command_launch", "pi");
-  });
-}
-
 /** Check if the last 3 non-empty lines of a message contain a question mark. */
 function endsWithQuestion(message: any): boolean {
   try {
@@ -261,8 +238,6 @@ function shouldSettleIdleFromActivityBoundary({
 }
 
 const extension: ExtensionFactory = (pi: ExtensionAPI) => {
-  stampTmuxPaneMetadata();
-
   let activePrompt = false;
   let lastState: PiState | undefined;
   let lastDetail: string | undefined;

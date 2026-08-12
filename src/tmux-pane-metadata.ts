@@ -21,6 +21,16 @@ export interface TmuxPaneCommandMetadataInput {
   contentKind?: TmuxPaneContentKind;
 }
 
+export interface TmuxPaneReportMetadata {
+  paneCwd?: string;
+  commandId?: string;
+  commandContentKind?: string;
+  commandOwner?: string;
+  foregroundCommand?: string;
+}
+
+const REPORT_METADATA_SEPARATOR = "\u001f";
+
 const AGENT_COMMAND_NAMES = new Set(["claude", "codex", "copilot", "kiro", "kiro-cli", "kiro-cli-chat", "opencode", "pi", "hermes"]);
 
 function splitCommandArgv(command: string): string[] {
@@ -155,6 +165,7 @@ export function tmuxPaneCommandMetadataSetOptionArguments(paneID: string, metada
     ["set-option", "-p", "-q", "-t", paneID, "@agents_command_id", metadata.id],
     ["set-option", "-p", "-q", "-t", paneID, "@agents_command_title", metadata.title],
     ["set-option", "-p", "-q", "-t", paneID, "@agents_command_content_kind", metadata.contentKind],
+    ["set-option", "-p", "-q", "-t", paneID, "@agents_command_owner", "launcher"],
     ["set-option", "-p", "-q", "-t", paneID, "@agents_command_cwd", metadata.cwd],
     ["set-option", "-p", "-q", "-t", paneID, "@agents_command_launch", metadata.launchCommand],
   ];
@@ -178,6 +189,31 @@ export function setTmuxPaneCommandMetadata(paneID: string | undefined, input: Tm
   return ok;
 }
 
+export function parseTmuxPaneReportMetadata(raw: string): TmuxPaneReportMetadata {
+  const [paneCwd, commandId, commandContentKind, commandOwner, foregroundCommand] = raw.split(REPORT_METADATA_SEPARATOR);
+  return {
+    ...(paneCwd ? { paneCwd } : {}),
+    ...(commandId ? { commandId } : {}),
+    ...(commandContentKind ? { commandContentKind } : {}),
+    ...(commandOwner ? { commandOwner } : {}),
+    ...(foregroundCommand ? { foregroundCommand } : {}),
+  };
+}
+
+export function readTmuxPaneReportMetadata(paneID: string | undefined): TmuxPaneReportMetadata | undefined {
+  if (!paneID?.startsWith("%")) return undefined;
+  const format = [
+    "#{pane_current_path}",
+    "#{@agents_command_id}",
+    "#{@agents_command_content_kind}",
+    "#{@agents_command_owner}",
+    "#{pane_current_command}",
+  ].join(REPORT_METADATA_SEPARATOR);
+  const result = execFileCapture("tmux", ["display-message", "-p", "-t", paneID, format]);
+  if (result.status !== 0) return undefined;
+  return parseTmuxPaneReportMetadata(result.stdout);
+}
+
 export function readTmuxPaneCommandLaunch(paneID: string | undefined): string | undefined {
   if (!paneID?.startsWith("%")) return undefined;
   const result = execFileCapture("tmux", ["show-option", "-p", "-qv", "-t", paneID, "@agents_command_launch"]);
@@ -197,7 +233,7 @@ export function updateTmuxPaneCommandLaunch(paneID: string | undefined, launchCo
 
 export function backfillTmuxPaneCommandMetadata(paneID: string | undefined, input: TmuxPaneCommandMetadataInput): boolean {
   if (!paneID?.startsWith("%")) return false;
-  const existing = execFileCapture("tmux", ["show-option", "-p", "-qv", "-t", paneID, "@agents_command_content_kind"]);
+  const existing = execFileCapture("tmux", ["show-option", "-p", "-qv", "-t", paneID, "@agents_command_owner"]);
   if (existing.status === 0 && existing.stdout.trim()) return false;
   return setTmuxPaneCommandMetadata(paneID, input);
 }

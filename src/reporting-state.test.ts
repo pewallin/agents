@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 
 import {
   getAssistantStopReason,
@@ -15,6 +16,14 @@ describe("normalizeIntent", () => {
   it("ignores empty or non-string prompts", () => {
     expect(normalizeIntent(" \n\t ")).toBeUndefined();
     expect(normalizeIntent(undefined)).toBeUndefined();
+  });
+});
+
+describe("Pi reporter pane ownership", () => {
+  it("delegates tmux metadata ownership to the agents launcher", () => {
+    const source = readFileSync(new URL("../extensions/pi/dustbot-reporting.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/execFile\(\s*["']tmux["']/);
+    expect(source).not.toContain("set-option");
   });
 });
 

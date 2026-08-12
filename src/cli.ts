@@ -153,6 +153,7 @@ const [
   resumeMod,
   agentRestore,
   tmuxPaneMetadata,
+  reportBinding,
   implementationRuntime,
   usageMod,
   doneMod,
@@ -167,20 +168,22 @@ const [
   import("./resume.js"),
   import("./agent-restore.js"),
   import("./tmux-pane-metadata.js"),
+  import("./report-binding.js"),
   import("./implementation-runtime.js"),
   import("./usage.js"),
   import("./done.js"),
 ]);
 
 const { Command } = commander;
-const { scan, runtimeStates, getSessionHistory } = scanner;
+const { scan, runtimeStates, getSessionHistory, detectAgentProcess } = scanner;
 const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
-const { backfillTmuxPaneCommandMetadata, readTmuxPaneCommandLaunch, setTmuxPaneCommandMetadata, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
+const { backfillTmuxPaneCommandMetadata, readTmuxPaneCommandLaunch, readTmuxPaneReportMetadata, setTmuxPaneCommandMetadata, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
+const { resolveTmuxReportBinding } = reportBinding;
 const {
   normalizeTmuxResurrectFile,
   resolveAgentRestoreArgv,
@@ -1007,21 +1010,34 @@ program
     let wsSnapshot: undefined | { command: string; cwd: string; mux?: "tmux" | "zellij" };
     const muxKind = detectMultiplexer();
     if (muxKind === "tmux" && session?.startsWith("%")) {
-      try {
-        const paneCwd = execSync(
-          `tmux display-message -t ${session} -p '#{pane_current_path}'`,
-          { encoding: "utf-8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"] }
-        ).trim();
-        if (paneCwd) {
-          wsSnapshot = { command: opts.agent, cwd: paneCwd, mux: "tmux" };
-          backfillTmuxPaneCommandMetadata(session, {
-            agent: opts.agent,
-            command: opts.agent,
-            launchCommand: opts.agent,
-            cwd: paneCwd,
-          });
-        }
-      } catch {}
+      const paneMetadata = readTmuxPaneReportMetadata(session);
+      const foregroundAgent = paneMetadata?.foregroundCommand
+        ? detectAgentProcess(paneMetadata.foregroundCommand, paneMetadata.foregroundCommand) || undefined
+        : undefined;
+      const liveAgent = foregroundAgent || (paneMetadata?.commandOwner === "launcher"
+        ? scan({ requireProcess: true }).find((pane) => pane.tmuxPaneId === session)?.agent
+        : undefined);
+      const binding = resolveTmuxReportBinding({
+        requestedSession: session,
+        reportedAgent: opts.agent,
+        paneCwd: paneMetadata?.paneCwd,
+        commandId: paneMetadata?.commandId,
+        commandContentKind: paneMetadata?.commandContentKind,
+        commandOwner: paneMetadata?.commandOwner,
+        liveAgent,
+        foregroundAgent,
+      });
+      if (!binding.owned) return;
+
+      if (binding.paneCwd) {
+        wsSnapshot = { command: opts.agent, cwd: binding.paneCwd, mux: "tmux" };
+        backfillTmuxPaneCommandMetadata(session, {
+          agent: opts.agent,
+          command: opts.agent,
+          launchCommand: opts.agent,
+          cwd: binding.paneCwd,
+        });
+      }
     } else if (muxKind === "zellij" && process.env.PWD) {
       wsSnapshot = { command: opts.agent, cwd: process.env.PWD, mux: "zellij" };
     }
