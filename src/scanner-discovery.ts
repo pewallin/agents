@@ -1,5 +1,7 @@
-import { basename } from "path";
-import { exec, execAsync } from "./shell.js";
+import { existsSync } from "fs";
+import { basename, join } from "path";
+import { getRuntimeTempDir } from "./paths.js";
+import { exec, execAsync, execFileCapture } from "./shell.js";
 
 const PROCESS_TREE_PS_COMMAND = "ps -eo pid=,ppid=,comm=,tty=,%cpu=,rss=,args= 2>/dev/null";
 
@@ -25,11 +27,62 @@ interface AgentProcessMatch extends AgentLeafProcess {
 const AGENT_PROC_NAMES = ["claude", "copilot", "opencode", "codex", "cursor", "pi", "kiro", "kiro-cli", "kiro-cli-chat", "hermes"] as const;
 const AGENT_PROCS = new RegExp(`^(${AGENT_PROC_NAMES.join("|")})$`, "i");
 const WRAPPER_PROCS = new Set(["node", "bun", "bunx", "deno", "tsx", "ts-node", "env", "npm", "npx", "pnpm", "yarn"]);
+const CODEX_SESSION_PATH_RE = /\/sessions\/.*\/rollout-[^/]*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 const AGENT_PROC_ALIASES: Record<string, string> = {
   "kiro": "kiro",
   "kiro-cli": "kiro",
   "kiro-cli-chat": "kiro",
 };
+
+export function extractOpenCodexSessionIds(
+  output: string,
+  isIgnoredSession: (sessionId: string) => boolean = () => false,
+): Map<number, string> {
+  const candidatesByPid = new Map<number, Set<string>>();
+  let currentPid: number | undefined;
+
+  for (const line of output.split("\n")) {
+    if (line.startsWith("p")) {
+      const pid = Number(line.slice(1));
+      currentPid = Number.isInteger(pid) && pid > 0 ? pid : undefined;
+      continue;
+    }
+    if (!currentPid || !line.startsWith("n")) continue;
+    const sessionId = line.slice(1).match(CODEX_SESSION_PATH_RE)?.[1];
+    if (!sessionId || isIgnoredSession(sessionId)) continue;
+    const candidates = candidatesByPid.get(currentPid) ?? new Set<string>();
+    candidates.add(sessionId);
+    candidatesByPid.set(currentPid, candidates);
+  }
+
+  const sessionsByPid = new Map<number, string>();
+  for (const [pid, candidates] of candidatesByPid) {
+    if (candidates.size === 1) sessionsByPid.set(pid, [...candidates][0]);
+  }
+  return sessionsByPid;
+}
+
+function normalizedProcessIds(processIds: number[]): number[] {
+  return [...new Set(processIds.filter((pid) => Number.isInteger(pid) && pid > 0))];
+}
+
+function isInternalCodexSession(sessionId: string): boolean {
+  return existsSync(join(getRuntimeTempDir(), `codex-internal-${sessionId}`));
+}
+
+export function findOpenCodexSessionIds(processIds: number[]): Map<number, string> {
+  const pids = normalizedProcessIds(processIds);
+  if (pids.length === 0) return new Map();
+  const result = execFileCapture("lsof", ["-a", "-p", pids.join(","), "-Fn"]);
+  return extractOpenCodexSessionIds(result.stdout, isInternalCodexSession);
+}
+
+export async function findOpenCodexSessionIdsAsync(processIds: number[]): Promise<Map<number, string>> {
+  const pids = normalizedProcessIds(processIds);
+  if (pids.length === 0) return new Map();
+  const output = await execAsync(`lsof -a -p ${pids.join(",")} -Fn 2>/dev/null`);
+  return extractOpenCodexSessionIds(output, isInternalCodexSession);
+}
 
 function normalizeProcessToken(token: string): string {
   if (!token) return "";

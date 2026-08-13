@@ -1,7 +1,7 @@
 import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
-import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, getDetector, filterAgents, hasActiveTmuxMetadataRuntimeEvidence, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, parseTmuxScanRecords, reconcileStaleCodexWorkingState, resolveAgentExternalSessionId, resolveAgentIntentTitle, resolveTmuxAgentProcess, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, extractOpenCodexSessionIds, getDetector, filterAgents, hasActiveTmuxMetadataRuntimeEvidence, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, parseTmuxScanRecords, reconcileStaleCodexWorkingState, resolveAgentExternalSessionId, resolveAgentIntentTitle, resolveTmuxAgentProcess, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { agentResumeInvocation, agentStatusRequiresForce, renderResumeRespawnCommand, resolveResumePane, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
@@ -223,7 +223,54 @@ describe("externalSessionIdFromProcessArgs", () => {
   });
 });
 
+describe("extractOpenCodexSessionIds", () => {
+  it("keeps distinct live Codex sessions attached to their process IDs", () => {
+    const firstSession = "019ffa7b-8bfe-71a0-bdca-354642e27a47";
+    const secondSession = "019ffa74-c7ce-7d60-8ecd-4e0dc42db6cb";
+    const output = [
+      "p83030",
+      "n/Users/peter/.codex/state_5.sqlite",
+      `n/Users/peter/.codex/sessions/2026/08/13/rollout-2026-08-13T11-37-08-${firstSession}.jsonl`,
+      "p9146",
+      `n/Users/peter/.codex/sessions/2026/08/13/rollout-2026-08-13T11-29-45-${secondSession}.jsonl`,
+    ].join("\n");
+
+    expect(extractOpenCodexSessionIds(output)).toEqual(new Map([
+      [83030, firstSession],
+      [9146, secondSession],
+    ]));
+  });
+
+  it("does not guess when one Codex process has multiple sessions open", () => {
+    const output = [
+      "p83030",
+      "n/Users/peter/.codex/sessions/2026/08/13/rollout-2026-08-13T11-00-00-019ffa74-c7ce-7d60-8ecd-4e0dc42db6cb.jsonl",
+      "n/Users/peter/.codex/sessions/2026/08/13/rollout-2026-08-13T11-01-00-019ffa7b-8bfe-71a0-bdca-354642e27a47.jsonl",
+    ].join("\n");
+
+    expect(extractOpenCodexSessionIds(output)).toEqual(new Map());
+  });
+
+  it("excludes Codex sessions marked as internal", () => {
+    const internalSession = "019ffa74-c7ce-7d60-8ecd-4e0dc42db6cb";
+    const output = [
+      "p83030",
+      `n/Users/peter/.codex/sessions/2026/08/13/rollout-2026-08-13T11-00-00-${internalSession}.jsonl`,
+    ].join("\n");
+
+    expect(extractOpenCodexSessionIds(output, (sessionId) => sessionId === internalSession)).toEqual(new Map());
+  });
+});
+
 describe("resolveAgentExternalSessionId", () => {
+  it("keeps hook identity authoritative over an observed process session", () => {
+    expect(resolveAgentExternalSessionId({
+      observedProcessSessionId: "thread-from-open-rollout",
+      stateSessionId: "thread-from-current-hook",
+      processSessionId: "thread-from-launch-command",
+    })).toBe("thread-from-current-hook");
+  });
+
   it("prefers hook state when an AgentsNext agent runs outside the pane process tree", () => {
     expect(resolveAgentExternalSessionId({
       processSessionId: "thread-from-stale-launch",

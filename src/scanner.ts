@@ -12,7 +12,7 @@ import { mergedContextTokens, resolveModelInfo, stateContext, stateDetail, state
 import { resolveStatusFromContent } from "./scanner-detection.js";
 import { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
 import type { SiblingPane, WindowSnapshot } from "./pane-ops.js";
-import { buildBranchCache, buildBranchCacheAsync, buildProcessTree, buildProcessTreeAsync, detectAgentProcess, findAgentLeafInTree, findAgentOnTtyProcessInTree, findLeafProcessSync } from "./scanner-discovery.js";
+import { buildBranchCache, buildBranchCacheAsync, buildProcessTree, buildProcessTreeAsync, detectAgentProcess, findAgentLeafInTree, findAgentOnTtyProcessInTree, findLeafProcessSync, findOpenCodexSessionIds, findOpenCodexSessionIdsAsync } from "./scanner-discovery.js";
 import type { AgentLeafProcess } from "./scanner-discovery.js";
 import { extractClaudeRenameTitleFromTranscript, extractLatestCodexSessionTitlesFromIndexLines, loadHistoryForAgent, normalizeHistoryCwd, resolveAgentDisplayTitle } from "./scanner-history.js";
 import type { AgentSessionHistoryItem } from "./scanner-history.js";
@@ -21,7 +21,7 @@ export type { AgentPane, AgentRuntimeState, AgentStatus } from "./scanner-types.
 export type { AgentSessionHistoryItem } from "./scanner-history.js";
 export { extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent } from "./scanner-runtime.js";
 export { codexStreamDisconnectStatus, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, getDetector, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner-detection.js";
-export { detectAgentProcess } from "./scanner-discovery.js";
+export { detectAgentProcess, extractOpenCodexSessionIds } from "./scanner-discovery.js";
 export { extractClaudeRenameTitleFromTranscript, extractLatestCodexSessionTitlesFromIndexLines } from "./scanner-history.js";
 export { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
 
@@ -97,10 +97,11 @@ export function externalSessionIdFromProcessArgs(agent: string, args?: string): 
 }
 
 export function resolveAgentExternalSessionId(input: {
+  observedProcessSessionId?: string;
   processSessionId?: string;
   stateSessionId?: string;
 }): string | undefined {
-  return input.stateSessionId || input.processSessionId;
+  return input.stateSessionId || input.observedProcessSessionId || input.processSessionId;
 }
 
 export function resolveTmuxAgentProcess(
@@ -511,6 +512,7 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
     tmuxPaneId: string;
     cwdRaw: string;
     agentName: string;
+    processPid?: number;
     processArgs?: string;
     cpuPercent: number;
     memoryMB: number;
@@ -550,6 +552,7 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
       tmuxPaneId,
       cwdRaw,
       agentName,
+      processPid: matchedProcess.process?.pid,
       processArgs: matchedProcess.process?.args ?? commandLaunch,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
@@ -559,6 +562,11 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
 
   // Batch git branch lookup — single shell invocation for all unique cwds
   const branchCache = buildBranchCache(uniqueCwds);
+  const openCodexSessionIds = findOpenCodexSessionIds(
+    agentPanes
+      .filter((pane) => pane.agentName === "codex")
+      .flatMap((pane) => pane.processPid ? [pane.processPid] : []),
+  );
 
   // Pass 2: detect status and build results
   const results: AgentPane[] = [];
@@ -573,6 +581,7 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
     const externalSessionId = resolveAgentExternalSessionId({
+      observedProcessSessionId: p.processPid ? openCodexSessionIds.get(p.processPid) : undefined,
       processSessionId: externalSessionIdFromProcessArgs(p.agentName, p.processArgs),
       stateSessionId: stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot),
     });
@@ -635,6 +644,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     tmuxPaneId: string;
     cwdRaw: string;
     agentName: string;
+    processPid?: number;
     processArgs?: string;
     cpuPercent: number;
     memoryMB: number;
@@ -668,6 +678,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
       tmuxPaneId,
       cwdRaw,
       agentName,
+      processPid: matchedProcess.process?.pid,
       processArgs: matchedProcess.process?.args ?? commandLaunch,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
@@ -676,6 +687,11 @@ export async function scanAsync(): Promise<AgentPane[]> {
   }
 
   const branchCache = await buildBranchCacheAsync(uniqueCwds);
+  const openCodexSessionIds = await findOpenCodexSessionIdsAsync(
+    agentPanes
+      .filter((pane) => pane.agentName === "codex")
+      .flatMap((pane) => pane.processPid ? [pane.processPid] : []),
+  );
 
   const promises = agentPanes.map(async (p) => {
     const wact = parseInt(p.wactStr, 10) || 0;
@@ -688,6 +704,7 @@ export async function scanAsync(): Promise<AgentPane[]> {
     const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
     const branch = branchCache.get(p.cwdRaw);
     const externalSessionId = resolveAgentExternalSessionId({
+      observedProcessSessionId: p.processPid ? openCodexSessionIds.get(p.processPid) : undefined,
       processSessionId: externalSessionIdFromProcessArgs(p.agentName, p.processArgs),
       stateSessionId: stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot),
     });
