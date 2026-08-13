@@ -23,9 +23,11 @@ export interface TmuxPaneCommandMetadataInput {
 
 export interface TmuxPaneReportMetadata {
   paneCwd?: string;
+  paneOwner?: string;
   commandId?: string;
   commandContentKind?: string;
   commandOwner?: string;
+  commandLaunch?: string;
   foregroundCommand?: string;
 }
 
@@ -178,6 +180,13 @@ export function tmuxPaneCommandLaunchSetOptionArguments(paneID: string, launchCo
   ];
 }
 
+export function tmuxPaneBackfillLaunchCommand(reportedAgent: string, existingLaunch?: string): string {
+  const normalizedReportedAgent = normalizeAgentName(reportedAgent);
+  return existingLaunch && agentFromCommand(existingLaunch) === normalizedReportedAgent
+    ? existingLaunch
+    : reportedAgent;
+}
+
 export function setTmuxPaneCommandMetadata(paneID: string | undefined, input: TmuxPaneCommandMetadataInput): boolean {
   if (!paneID?.startsWith("%")) return false;
   const metadata = buildTmuxPaneCommandMetadata(input);
@@ -190,12 +199,14 @@ export function setTmuxPaneCommandMetadata(paneID: string | undefined, input: Tm
 }
 
 export function parseTmuxPaneReportMetadata(raw: string): TmuxPaneReportMetadata {
-  const [paneCwd, commandId, commandContentKind, commandOwner, foregroundCommand] = raw.split(REPORT_METADATA_SEPARATOR);
+  const [paneCwd, commandId, commandContentKind, commandOwner, foregroundCommand, paneOwner, commandLaunch] = raw.split(REPORT_METADATA_SEPARATOR);
   return {
     ...(paneCwd ? { paneCwd } : {}),
+    ...(paneOwner ? { paneOwner } : {}),
     ...(commandId ? { commandId } : {}),
     ...(commandContentKind ? { commandContentKind } : {}),
     ...(commandOwner ? { commandOwner } : {}),
+    ...(commandLaunch ? { commandLaunch } : {}),
     ...(foregroundCommand ? { foregroundCommand } : {}),
   };
 }
@@ -208,6 +219,8 @@ export function readTmuxPaneReportMetadata(paneID: string | undefined): TmuxPane
     "#{@agents_command_content_kind}",
     "#{@agents_command_owner}",
     "#{pane_current_command}",
+    "#{@agents_owned}",
+    "#{@agents_command_launch}",
   ].join(REPORT_METADATA_SEPARATOR);
   const result = execFileCapture("tmux", ["display-message", "-p", "-t", paneID, format]);
   if (result.status !== 0) return undefined;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildTmuxPaneCommandMetadata,
   parseTmuxPaneReportMetadata,
+  tmuxPaneBackfillLaunchCommand,
   tmuxPaneCommandLaunchSetOptionArguments,
   tmuxPaneCommandMetadataSetOptionArguments,
 } from "./tmux-pane-metadata.js";
@@ -68,6 +69,11 @@ describe("tmux pane command metadata", () => {
     ]);
   });
 
+  it("only preserves a specific backfill launch when it belongs to the reported agent", () => {
+    expect(tmuxPaneBackfillLaunchCommand("kiro", "kiro-cli chat -a --v3")).toBe("kiro-cli chat -a --v3");
+    expect(tmuxPaneBackfillLaunchCommand("codex", "pi --yolo")).toBe("codex");
+  });
+
   it("parses pane ownership evidence without treating legacy metadata as launcher-owned", () => {
     expect(parseTmuxPaneReportMetadata([
       "/Users/peter/code/shape",
@@ -75,10 +81,14 @@ describe("tmux pane command metadata", () => {
       "agent",
       "",
       "zsh",
+      "app_owned",
+      "pi --yolo --session session-123",
     ].join("\u001f"))).toEqual({
       paneCwd: "/Users/peter/code/shape",
+      paneOwner: "app_owned",
       commandId: "pi",
       commandContentKind: "agent",
+      commandLaunch: "pi --yolo --session session-123",
       foregroundCommand: "zsh",
     });
   });

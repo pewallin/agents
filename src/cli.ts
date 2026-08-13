@@ -182,8 +182,8 @@ const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
-const { backfillTmuxPaneCommandMetadata, readTmuxPaneCommandLaunch, readTmuxPaneReportMetadata, setTmuxPaneCommandMetadata, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
-const { resolveTmuxReportBinding } = reportBinding;
+const { backfillTmuxPaneCommandMetadata, readTmuxPaneCommandLaunch, readTmuxPaneReportMetadata, setTmuxPaneCommandMetadata, tmuxPaneBackfillLaunchCommand, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
+const { requiresTmuxReportProcessScan, resolveTmuxReportBinding } = reportBinding;
 const {
   normalizeTmuxResurrectFile,
   resolveAgentRestoreArgv,
@@ -1014,15 +1014,20 @@ program
       const foregroundAgent = paneMetadata?.foregroundCommand
         ? detectAgentProcess(paneMetadata.foregroundCommand, paneMetadata.foregroundCommand) || undefined
         : undefined;
-      const binding = resolveTmuxReportBinding({
+      const bindingInput = {
         requestedSession: session,
         reportedAgent: opts.agent,
         paneCwd: paneMetadata?.paneCwd,
+        paneOwner: paneMetadata?.paneOwner,
         commandId: paneMetadata?.commandId,
         commandContentKind: paneMetadata?.commandContentKind,
         commandOwner: paneMetadata?.commandOwner,
         foregroundAgent,
-      });
+      };
+      const liveAgent = requiresTmuxReportProcessScan(bindingInput)
+        ? scan({ requireProcess: true }).find((pane) => pane.tmuxPaneId === session)?.agent
+        : undefined;
+      const binding = resolveTmuxReportBinding({ ...bindingInput, liveAgent });
       if (!binding.owned) return;
 
       if (binding.paneCwd) {
@@ -1030,7 +1035,7 @@ program
         backfillTmuxPaneCommandMetadata(session, {
           agent: opts.agent,
           command: opts.agent,
-          launchCommand: opts.agent,
+          launchCommand: tmuxPaneBackfillLaunchCommand(opts.agent, paneMetadata?.commandLaunch),
           cwd: binding.paneCwd,
         });
       }
