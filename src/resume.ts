@@ -391,6 +391,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
       }
       reportState(resumeAgent, pane.tmuxPaneId, stateSeed.state, {
         clearDetail: true,
+        activity: false,
         ...(stateSeed.externalSessionId ? { externalSessionId: stateSeed.externalSessionId } : {}),
       });
     } catch {}

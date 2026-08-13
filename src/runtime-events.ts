@@ -29,6 +29,7 @@ export interface RuntimeStateEvent extends RuntimeLocator {
   stateSource?: RuntimeStateSource;
   primaryState?: RuntimeReportedState;
   auxiliaryReporters?: string[];
+  activity?: boolean;
 }
 
 export interface RuntimeStateEventOptions {
@@ -43,6 +44,7 @@ export interface RuntimeStateEventOptions {
   stateSource?: RuntimeStateSource;
   primaryState?: RuntimeReportedState;
   auxiliaryReporters?: string[];
+  activity?: boolean;
 }
 
 const DEFAULT_RUNTIME_STATE_EVENTS_MAX_BYTES = 5 * 1024 * 1024;
@@ -89,6 +91,7 @@ export function appendRuntimeStateEvent(
     ...(options.stateSource ? { stateSource: options.stateSource } : {}),
     ...(options.primaryState ? { primaryState: options.primaryState } : {}),
     ...(options.auxiliaryReporters?.length ? { auxiliaryReporters: options.auxiliaryReporters } : {}),
+    ...(options.activity !== undefined ? { activity: options.activity } : {}),
   };
 
   const eventPath = getRuntimeStateEventsPath();

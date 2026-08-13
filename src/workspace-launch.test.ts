@@ -201,12 +201,14 @@ describe("createWorkspace", () => {
       "claude",
       "%42",
       "idle",
-      undefined,
       expect.objectContaining({
-        command: "export FEATURE_FLAG='1'; claude --dangerously-skip-permissions",
-        cwd: "/tmp/demo",
-        mux: "tmux",
-        sessionName: "agents",
+        activity: false,
+        workspace: expect.objectContaining({
+          command: "export FEATURE_FLAG='1'; claude --dangerously-skip-permissions",
+          cwd: "/tmp/demo",
+          mux: "tmux",
+          sessionName: "agents",
+        }),
       }),
     );
   });

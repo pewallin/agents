@@ -255,6 +255,7 @@ export function reconcileStaleCodexWorkingState(
 
   if (!shouldTreatCodexWorkingAsIdle(content, title, paneId, snapshot, codexOps)) return;
   const updated = reportState("codex", paneId, "idle", {
+    activity: false,
     ...(entry.provider ? { provider: entry.provider } : {}),
     ...(entry.modelId ? { modelId: entry.modelId } : {}),
     ...(entry.modelLabel ? { modelLabel: entry.modelLabel } : {}),

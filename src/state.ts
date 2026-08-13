@@ -316,7 +316,10 @@ export function clearStateExternalSessionId(agent: string, session: string): Sta
 
   const { externalSessionId: _externalSessionId, ...entry } = existing;
   writeStateFile(agent, session, entry);
-  appendRuntimeStateEvent("primary_state", "upsert", agent, session, runtimeStateEventOptionsForEntry(agent, session, entry));
+  appendRuntimeStateEvent("primary_state", "upsert", agent, session, {
+    ...runtimeStateEventOptionsForEntry(agent, session, entry),
+    activity: false,
+  });
   return entry;
 }
 
@@ -347,6 +350,7 @@ function isReportOptions(value: unknown): value is ReportOptions {
       || "workspace" in value
       || "contextTokens" in value
       || "contextMax" in value
+      || "activity" in value
     );
 }
 
@@ -380,6 +384,7 @@ export interface ReportOptions extends ModelMetadata {
   workspace?: WorkspaceSnapshot;
   contextTokens?: number;
   contextMax?: number;
+  activity?: boolean;
 }
 
 export interface ContributorReportOptions {
@@ -444,6 +449,7 @@ export function reportState(agent: string, session: string, state: ReportedState
   writeStateFile(agent, session, entry);
   appendRuntimeStateEvent("primary_state", "upsert", agent, session, {
     ...runtimeStateEventOptionsForEntry(agent, session, entry),
+    activity: opts.activity ?? true,
     ...(opts.clearIntent || (sessionChanged && intent === undefined) ? { clearIntent: true } : {}),
     ...(opts.clearResponsePreview || (sessionChanged && responsePreview === undefined) ? { clearResponsePreview: true } : {}),
   });
@@ -496,6 +502,7 @@ export function reportContext(agent: string, session: string, context: string, o
   writeStateFile(agent, session, entry);
   appendRuntimeStateEvent("primary_state", "upsert", agent, session, {
     ...runtimeStateEventOptionsForEntry(agent, session, entry),
+    activity: opts.intent !== undefined || !!opts.clearIntent,
     ...(opts.clearIntent ? { clearIntent: true } : {}),
   });
   return entry;
@@ -526,6 +533,7 @@ export function reportContributorState(
   appendRuntimeStateEvent("contributor_state", "upsert", agent, session, {
     ...runtimeStateEventOptionsForEntry(agent, session, entry),
     reporter,
+    activity: true,
   });
 }
 
@@ -537,6 +545,7 @@ export function clearContributorState(agent: string, session: string, reporter: 
       appendRuntimeStateEvent("contributor_state", "remove", agent, session, {
         ...runtimeStateEventOptionsForEntry(agent, session),
         reporter,
+        activity: true,
       });
     }
   } catch {}

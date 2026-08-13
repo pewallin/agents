@@ -8,7 +8,7 @@ import { readFileSync } from "fs";
 // Since state.ts uses a hardcoded STATE_DIR, we test the exported
 // priority/filtering logic by constructing StateEntry arrays directly.
 
-import { clearContributorState, createStateSnapshot, deriveModelDisplay, getAgentState, getAgentStateEntry, getAgentStateProvenance, reportContributorState, reportState, upsertStateSnapshotEntry } from "./state.js";
+import { clearContributorState, createStateSnapshot, deriveModelDisplay, getAgentState, getAgentStateEntry, getAgentStateProvenance, reportContext, reportContributorState, reportState, upsertStateSnapshotEntry } from "./state.js";
 import type { StateEntry, ReportedState } from "./state.js";
 import { getRuntimeStateEventsPath } from "./paths.js";
 import type { RuntimeStateEvent } from "./runtime-events.js";
@@ -301,6 +301,53 @@ describe("runtime state events", () => {
       intent: "Run the test suite",
       externalSessionId: "ext-123",
       stateSource: "primary",
+      activity: true,
+    });
+  });
+
+  it("marks context-only runtime events as non-activity", () => {
+    reportState("codex", primarySurface, "idle", { externalSessionId: "ext-context" });
+    reportContext("codex", primarySurface, "95% left", {
+      externalSessionId: "ext-context",
+      contextTokens: 100,
+      contextMax: 2_000,
+    });
+
+    expect(readRuntimeStateEvents().at(-1)).toMatchObject({
+      entity: "primary_state",
+      agent: "codex",
+      surfaceId: primarySurface,
+      activity: false,
+    });
+  });
+
+  it("marks intent-bearing context reports as activity", () => {
+    reportState("codex", primarySurface, "idle", { externalSessionId: "ext-context-intent" });
+    reportContext("codex", primarySurface, "95% left", {
+      externalSessionId: "ext-context-intent",
+      intent: "Review the result",
+    });
+
+    expect(readRuntimeStateEvents().at(-1)).toMatchObject({
+      entity: "primary_state",
+      agent: "codex",
+      surfaceId: primarySurface,
+      intent: "Review the result",
+      activity: true,
+    });
+  });
+
+  it("allows internal state seeding to opt out of activity", () => {
+    reportState("codex", primarySurface, "idle", {
+      workspace: { command: "codex", cwd: "/code/app", mux: "tmux" },
+      activity: false,
+    });
+
+    expect(readRuntimeStateEvents().at(-1)).toMatchObject({
+      entity: "primary_state",
+      agent: "codex",
+      surfaceId: primarySurface,
+      activity: false,
     });
   });
 

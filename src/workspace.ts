@@ -472,7 +472,10 @@ function seedWorkspaceState(agentPaneId: string, agentCommand: string, snapshot:
       snapshot.sessionName = exec(`tmux display-message -t ${agentPaneId} -p '#{session_name}'`) || undefined;
     } catch {}
   }
-  reportState(agent, agentPaneId, "idle", undefined, snapshot);
+  reportState(agent, agentPaneId, "idle", {
+    workspace: snapshot,
+    activity: false,
+  });
 }
 
 function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): CreatedWorkspacePane {

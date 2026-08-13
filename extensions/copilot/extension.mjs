@@ -60,13 +60,48 @@ function report(state, extraArgs = []) {
   if (contextMax !== undefined) args.push("--context-max", String(contextMax));
   execFile(AGENTS_BIN, args, (err) => {
     if (err) {
-      // Silently ignore — agents CLI may not be on PATH
+      console.error(`[agents-reporting] agents report failed: ${err.message}`);
     }
   });
 }
 
+function handleSessionEvent(event) {
+  switch (event.type) {
+    case "session.start":
+      externalSessionId = event.data?.sessionId || externalSessionId;
+      applyModelSelection(event.data?.selectedModel, "github-copilot");
+      break;
+    case "session.model_change":
+      applyModelSelection(event.data?.newModel, currentProvider || "github-copilot");
+      break;
+    case "session.usage_info":
+    case "session.usage_checkpoint":
+      contextTokens = event.data?.currentTokens ?? event.data?.tokenUsage?.currentTokens ?? contextTokens;
+      contextMax = event.data?.tokenLimit ?? event.data?.tokenUsage?.tokenLimit ?? contextMax;
+      break;
+    case "permission.requested":
+      report("approval");
+      break;
+    case "tool.execution_start":
+      report(event.data?.toolName === "ask_user" ? "question" : "working");
+      break;
+    case "tool.execution_complete":
+    case "assistant.turn_start":
+      report("working");
+      break;
+    case "session.compaction_start":
+      report("working", ["--context", "compacting"]);
+      break;
+    case "session.compaction_complete":
+    case "session.idle":
+      report("idle");
+      break;
+  }
+}
+
 const session = await joinSession({
   onPermissionRequest: approveAll,
+  onEvent: handleSessionEvent,
   hooks: {
     onUserPromptSubmitted: async () => {
       report("working");
@@ -78,53 +113,3 @@ const session = await joinSession({
 });
 
 externalSessionId = session.sessionId;
-
-session.on("session.start", (event) => {
-  externalSessionId = event.data?.sessionId || session.sessionId;
-  applyModelSelection(event.data?.selectedModel, "github-copilot");
-});
-
-session.on("session.model_change", (event) => {
-  applyModelSelection(event.data?.newModel, currentProvider || "github-copilot");
-});
-
-// Context window tracking
-session.on("session.usage_info", (event) => {
-  if (event.data) {
-    contextTokens = event.data.currentTokens;
-    contextMax = event.data.tokenLimit;
-  }
-});
-
-// Permission prompt — agent needs user approval for a tool
-session.on("permission.requested", () => {
-  report("approval");
-});
-
-// Tool started — check if it's ask_user (question for user) or a regular tool
-session.on("tool.execution_start", (event) => {
-  if (event.data.toolName === "ask_user") {
-    report("question");
-  } else {
-    report("working");
-  }
-});
-
-// Tool finished — back to working (more tools may follow)
-session.on("tool.execution_complete", () => {
-  report("working");
-});
-
-// Compaction — report working state with context
-session.on("session.compaction_start", () => {
-  report("working", ["--context", "compacting"]);
-});
-
-session.on("session.compaction_complete", () => {
-  report("idle");
-});
-
-// Turn completed — agent is waiting for input
-session.on("session.idle", () => {
-  report("idle");
-});
