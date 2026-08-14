@@ -190,7 +190,7 @@ export const INTEGRATION_SPECS: AgentIntegrationSpec[] = [
       externalSessionId: true,
     },
     notes: [
-      "Setup creates the global Kiro agent config `agents-reporting` and sets it as the default when no Kiro default exists; launch with `--agent agents-reporting` when another default is configured.",
+      "Setup creates the Kiro v2 agent config `agents-reporting`, installs global Kiro v3 hooks, and sets the agent as the default when no Kiro default exists; launch with `--agent agents-reporting` when another default is configured.",
       "Approval is not reported until Kiro CLI exposes a dedicated hook event for permission prompts.",
     ],
   },

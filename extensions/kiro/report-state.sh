@@ -15,6 +15,17 @@ INPUT=$(cat)
 EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // .hookEventName // empty' 2>/dev/null)
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // .sessionId // empty' 2>/dev/null)
 TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // .toolName // empty' 2>/dev/null)
+
+# Kiro v3 also executes hooks embedded in a v2 agent config. Ignore those
+# PascalCase compatibility events so the global v3 hook remains authoritative.
+if [ "${AGENTS_KIRO_V2_HOOK:-}" = "1" ]; then
+  case "$EVENT" in
+    SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|Stop)
+      exit 0
+      ;;
+  esac
+fi
+
 PROMPT_RAW=$(printf '%s' "$INPUT" | jq -r '
 def first_text:
   if type == "string" then .
@@ -27,6 +38,9 @@ def first_text:
   end;
 (.prompt // .user_prompt // .userPrompt // .input // .message // empty) | first_text
 ' 2>/dev/null)
+if [ -z "$PROMPT_RAW" ] && [ -n "${USER_PROMPT:-}" ]; then
+  PROMPT_RAW="${USER_PROMPT:-}"
+fi
 ASSISTANT_RAW=$(printf '%s' "$INPUT" | jq -r '
 def first_text:
   if type == "string" then .
@@ -45,20 +59,20 @@ DETAIL=""
 INTENT=""
 CLEAR_DETAIL=false
 case "$EVENT" in
-  agentSpawn)
+  agentSpawn|SessionStart)
     STATE="idle"
     CLEAR_DETAIL=true
     ;;
-  userPromptSubmit)
+  userPromptSubmit|UserPromptSubmit)
     STATE="working"
     INTENT=$(printf '%s' "$PROMPT_RAW" | awk 'NF { print; exit }')
     CLEAR_DETAIL=true
     ;;
-  preToolUse|postToolUse)
+  preToolUse|postToolUse|PreToolUse|PostToolUse)
     STATE="working"
     DETAIL="$TOOL_NAME"
     ;;
-  stop)
+  stop|Stop)
     TAIL=$(printf '%s' "$ASSISTANT_RAW" | grep -v '^[[:space:]]*$' | tail -3)
     if printf '%s' "$TAIL" | grep -Fq '?'; then
       STATE="question"

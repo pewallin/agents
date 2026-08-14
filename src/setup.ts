@@ -675,11 +675,23 @@ function uninstallOpencode(): SetupResult {
 
 const KIRO_AGENT_NAME = "agents-reporting";
 const KIRO_AGENT_PATH = join(homedir(), ".kiro", "agents", `${KIRO_AGENT_NAME}.json`);
+const KIRO_V3_HOOK_PATH = join(homedir(), ".kiro", "hooks", `${KIRO_AGENT_NAME}.json`);
 const KIRO_SETTINGS_PATH = join(homedir(), ".kiro", "settings", "cli.json");
 const KIRO_REPORT_SCRIPT = join(EXTENSIONS_DIR, "kiro", "report-state.sh");
+const KIRO_V3_HOOK_SPECS = [
+  { event: "agentSpawn", name: "agents-reporting-session-start", trigger: "SessionStart" },
+  { event: "userPromptSubmit", name: "agents-reporting-user-prompt", trigger: "UserPromptSubmit" },
+  { event: "preToolUse", name: "agents-reporting-pre-tool", trigger: "PreToolUse", matcher: "*" },
+  { event: "postToolUse", name: "agents-reporting-post-tool", trigger: "PostToolUse", matcher: "*" },
+  { event: "stop", name: "agents-reporting-stop", trigger: "Stop" },
+] as const;
 
 function kiroHookEntries(): Record<string, any[]> {
-  const base = { command: KIRO_REPORT_SCRIPT, timeout_ms: 10000, max_output_size: 1024 };
+  const base = {
+    command: `AGENTS_KIRO_V2_HOOK=1 ${KIRO_REPORT_SCRIPT}`,
+    timeout_ms: 10000,
+    max_output_size: 1024,
+  };
   return {
     agentSpawn: [base],
     userPromptSubmit: [base],
@@ -699,6 +711,19 @@ function kiroAgentConfig(): Record<string, any> {
   };
 }
 
+function kiroV3HookConfig(): Record<string, any> {
+  return {
+    version: "v1",
+    hooks: KIRO_V3_HOOK_SPECS.map((spec) => ({
+      name: spec.name,
+      trigger: spec.trigger,
+      ...("matcher" in spec ? { matcher: spec.matcher } : {}),
+      action: { type: "command", command: KIRO_REPORT_SCRIPT },
+      timeout: 10,
+    })),
+  };
+}
+
 function isOurKiroAgentConfig(config: any): boolean {
   const text = JSON.stringify(config);
   return config?.name === KIRO_AGENT_NAME && (
@@ -706,6 +731,23 @@ function isOurKiroAgentConfig(config: any): boolean {
     || text.includes("extensions/kiro/")
     || text.includes("--agent kiro")
   );
+}
+
+function isOurKiroV3HookConfig(config: any): boolean {
+  const text = JSON.stringify(config);
+  return config?.version === "v1" && Array.isArray(config?.hooks) && (
+    text.includes(KIRO_REPORT_SCRIPT)
+    || text.includes("extensions/kiro/report-state.sh")
+    || text.includes("--agent kiro")
+  );
+}
+
+function installedKiroV3HookEvents(config: any): string[] {
+  const hooks = Array.isArray(config?.hooks) ? config.hooks : [];
+  const expected = kiroV3HookConfig().hooks;
+  return KIRO_V3_HOOK_SPECS
+    .filter((_spec, index) => hooks.some((candidate: any) => matchesHookDef(candidate, expected[index])))
+    .map((spec) => spec.event);
 }
 
 function readKiroSettings(): { settings: Record<string, any>; error?: string } {
@@ -768,7 +810,57 @@ function setupKiro(): SetupResult {
     return { agent: "kiro", action: "skipped", detail: "extension source not found in repo" };
   }
 
+  let existingAgent: any;
   if (existsSync(KIRO_AGENT_PATH)) {
+    try {
+      existingAgent = JSON.parse(readFileSync(KIRO_AGENT_PATH, "utf-8"));
+    } catch {
+      return { agent: "kiro", action: "skipped", detail: "could not parse ~/.kiro/agents/agents-reporting.json" };
+    }
+    if (!isOurKiroAgentConfig(existingAgent)) {
+      return { agent: "kiro", action: "skipped", detail: "~/.kiro/agents/agents-reporting.json exists and is not managed by agents" };
+    }
+  }
+
+  let existingV3Hooks: any;
+  if (existsSync(KIRO_V3_HOOK_PATH)) {
+    try {
+      existingV3Hooks = JSON.parse(readFileSync(KIRO_V3_HOOK_PATH, "utf-8"));
+    } catch {
+      return { agent: "kiro", action: "skipped", detail: "could not parse ~/.kiro/hooks/agents-reporting.json" };
+    }
+    if (!isOurKiroV3HookConfig(existingV3Hooks)) {
+      return { agent: "kiro", action: "skipped", detail: "~/.kiro/hooks/agents-reporting.json exists and is not managed by agents" };
+    }
+  }
+
+  const nextAgent = kiroAgentConfig();
+  const nextV3Hooks = kiroV3HookConfig();
+  const agentChanged = JSON.stringify(existingAgent) !== JSON.stringify(nextAgent);
+  const v3HooksChanged = JSON.stringify(existingV3Hooks) !== JSON.stringify(nextV3Hooks);
+  if (agentChanged) {
+    mkdirSync(dirname(KIRO_AGENT_PATH), { recursive: true });
+    writeFileSync(KIRO_AGENT_PATH, JSON.stringify(nextAgent, null, 2) + "\n");
+  }
+  if (v3HooksChanged) {
+    mkdirSync(dirname(KIRO_V3_HOOK_PATH), { recursive: true });
+    writeFileSync(KIRO_V3_HOOK_PATH, JSON.stringify(nextV3Hooks, null, 2) + "\n");
+  }
+
+  const configDetail = agentChanged || v3HooksChanged
+    ? "wrote Kiro v2 agent and v3 global hooks"
+    : "Kiro v2 agent and v3 global hooks present";
+  return { agent: "kiro", action: "installed", detail: mergeDetail(configDetail, ensureKiroDefaultAgent()) };
+}
+
+function uninstallKiro(): SetupResult {
+  const hasAgent = existsSync(KIRO_AGENT_PATH);
+  const hasV3Hooks = existsSync(KIRO_V3_HOOK_PATH);
+  if (!hasAgent && !hasV3Hooks) {
+    return { agent: "kiro", action: "not-installed" };
+  }
+
+  if (hasAgent) {
     let existing: any;
     try {
       existing = JSON.parse(readFileSync(KIRO_AGENT_PATH, "utf-8"));
@@ -776,37 +868,33 @@ function setupKiro(): SetupResult {
       return { agent: "kiro", action: "skipped", detail: "could not parse ~/.kiro/agents/agents-reporting.json" };
     }
     if (!isOurKiroAgentConfig(existing)) {
-      return { agent: "kiro", action: "skipped", detail: "~/.kiro/agents/agents-reporting.json exists and is not managed by agents" };
-    }
-    const next = kiroAgentConfig();
-    if (JSON.stringify(existing) === JSON.stringify(next)) {
-      return { agent: "kiro", action: "installed", detail: mergeDetail("agent config present", ensureKiroDefaultAgent()) };
+      return { agent: "kiro", action: "skipped", detail: "agent config doesn't look like ours" };
     }
   }
 
-  mkdirSync(dirname(KIRO_AGENT_PATH), { recursive: true });
-  writeFileSync(KIRO_AGENT_PATH, JSON.stringify(kiroAgentConfig(), null, 2) + "\n");
-  return { agent: "kiro", action: "installed", detail: mergeDetail("wrote ~/.kiro/agents/agents-reporting.json", ensureKiroDefaultAgent()) };
-}
-
-function uninstallKiro(): SetupResult {
-  if (!existsSync(KIRO_AGENT_PATH)) {
-    return { agent: "kiro", action: "not-installed" };
+  if (hasV3Hooks) {
+    let existing: any;
+    try {
+      existing = JSON.parse(readFileSync(KIRO_V3_HOOK_PATH, "utf-8"));
+    } catch {
+      return { agent: "kiro", action: "skipped", detail: "could not parse ~/.kiro/hooks/agents-reporting.json" };
+    }
+    if (!isOurKiroV3HookConfig(existing)) {
+      return { agent: "kiro", action: "skipped", detail: "v3 hook config doesn't look like ours" };
+    }
   }
 
-  let existing: any;
-  try {
-    existing = JSON.parse(readFileSync(KIRO_AGENT_PATH, "utf-8"));
-  } catch {
-    return { agent: "kiro", action: "skipped", detail: "could not parse ~/.kiro/agents/agents-reporting.json" };
+  const removed: string[] = [];
+  if (hasAgent) {
+    unlinkSync(KIRO_AGENT_PATH);
+    removed.push("Kiro v2 agent");
   }
-  if (!isOurKiroAgentConfig(existing)) {
-    return { agent: "kiro", action: "skipped", detail: "agent config doesn't look like ours" };
+  if (hasV3Hooks) {
+    unlinkSync(KIRO_V3_HOOK_PATH);
+    removed.push("Kiro v3 global hooks");
   }
 
-  unlinkSync(KIRO_AGENT_PATH);
-
-  let detail = "removed ~/.kiro/agents/agents-reporting.json";
+  let detail = `removed ${removed.join(" and ")}`;
   const { settings } = readKiroSettings();
   if (settings["chat.defaultAgent"] === KIRO_AGENT_NAME) {
     delete settings["chat.defaultAgent"];
@@ -1384,8 +1472,13 @@ function doctorKiro(spec: AgentIntegrationSpec): DoctorResult {
   if (!existsSync(kiroDir) && !commandExists("kiro-cli")) {
     return doctorResult(spec, "unavailable", "~/.kiro/ not found and kiro-cli is not on PATH", []);
   }
-  if (!existsSync(KIRO_AGENT_PATH)) {
-    return doctorResult(spec, "not-installed", "~/.kiro/agents/agents-reporting.json not found", []);
+  const hasAgent = existsSync(KIRO_AGENT_PATH);
+  const hasV3Hooks = existsSync(KIRO_V3_HOOK_PATH);
+  if (!hasAgent && !hasV3Hooks) {
+    return doctorResult(spec, "not-installed", "Kiro v2 agent and v3 global hooks not found", []);
+  }
+  if (!hasAgent) {
+    return doctorResult(spec, "partial", "~/.kiro/agents/agents-reporting.json not found", []);
   }
 
   let config: any;
@@ -1398,22 +1491,46 @@ function doctorKiro(spec: AgentIntegrationSpec): DoctorResult {
     return doctorResult(spec, "broken", "~/.kiro/agents/agents-reporting.json is not managed by agents", []);
   }
 
-  const installedEvents: string[] = [];
+  const installedV2Events: string[] = [];
   const hooksRoot = config.hooks || {};
   const expected = kiroHookEntries();
   for (const event of Object.keys(expected)) {
     const existing = Array.isArray(hooksRoot[event]) ? hooksRoot[event] : [];
     if (expected[event].every((group) => existing.some((candidate: any) => matchesHookDef(candidate, group)))) {
-      installedEvents.push(event);
+      installedV2Events.push(event);
     }
   }
 
-  const verdict = detailFromMissingEvents(spec.configuredEvents, installedEvents, "Kiro hooks are incomplete");
+  const v2Verdict = detailFromMissingEvents(spec.configuredEvents, installedV2Events, "Kiro v2 hooks are incomplete");
+  if (v2Verdict.status !== "installed") {
+    return doctorResult(spec, v2Verdict.status, v2Verdict.detail, installedV2Events);
+  }
+  if (!hasV3Hooks) {
+    return doctorResult(spec, "partial", "~/.kiro/hooks/agents-reporting.json not found", installedV2Events);
+  }
+
+  let v3Config: any;
+  try {
+    v3Config = JSON.parse(readFileSync(KIRO_V3_HOOK_PATH, "utf-8"));
+  } catch {
+    return doctorResult(spec, "broken", "could not parse ~/.kiro/hooks/agents-reporting.json", installedV2Events);
+  }
+  if (!isOurKiroV3HookConfig(v3Config)) {
+    return doctorResult(spec, "broken", "~/.kiro/hooks/agents-reporting.json is not managed by agents", installedV2Events);
+  }
+
+  const installedV3Events = installedKiroV3HookEvents(v3Config);
+  const v3Verdict = detailFromMissingEvents(spec.configuredEvents, installedV3Events, "Kiro v3 hooks are incomplete");
+  const installedEvents = spec.configuredEvents.filter((event) => installedV2Events.includes(event) && installedV3Events.includes(event));
+  if (v3Verdict.status !== "installed") {
+    return doctorResult(spec, v3Verdict.status, v3Verdict.detail, installedEvents);
+  }
+
   const defaultStatus = kiroDefaultAgentStatus();
-  if (verdict.status === "installed" && !defaultStatus.active) {
+  if (!defaultStatus.active) {
     return doctorResult(spec, "partial", defaultStatus.detail, installedEvents);
   }
-  return doctorResult(spec, verdict.status, verdict.detail, installedEvents);
+  return doctorResult(spec, "installed", "Kiro v2 agent and v3 global hooks configured", installedEvents);
 }
 
 function doctorHermes(spec: AgentIntegrationSpec): DoctorResult {
@@ -1504,6 +1621,7 @@ function computeSetupHash(): string {
   h.update(JSON.stringify(CLAUDE_HOOKS));
   h.update(JSON.stringify(codexHooksConfig()));
   h.update(JSON.stringify(kiroAgentConfig()));
+  h.update(JSON.stringify(kiroV3HookConfig()));
   h.update(JSON.stringify(hermesHooksBlock()));
   h.update("kiro-default-agent-v1");
   for (const ext of ["codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs", "kiro/report-state.sh", "hermes/report-state.sh"]) {
