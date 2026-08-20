@@ -783,6 +783,27 @@ export interface TmuxResurrectMetadataApplyResult {
   content: string;
 }
 
+export interface TmuxResurrectLiveAgentPane {
+  pane: string;
+  paneId: string;
+  paneIndex?: string;
+  tmuxPaneId: string;
+  agent: string;
+  cwd?: string;
+}
+
+export interface TmuxResurrectLegacyMetadataRepair {
+  paneID: string;
+  agent: string;
+  cwd: string;
+  launchCommand: string;
+}
+
+export interface TmuxResurrectLegacyMetadataRepairResult {
+  content: string;
+  repairs: TmuxResurrectLegacyMetadataRepair[];
+}
+
 function metadataKey(entry: Pick<MetadataPaneEntry, "sessionName" | "windowNumber" | "paneIndex">): string {
   return `${entry.sessionName}\0${entry.windowNumber}\0${entry.paneIndex}`;
 }
@@ -801,6 +822,62 @@ function parseMetadataEntries(content: string): MetadataPaneEntry[] {
       commandLaunch: fields[17]?.trim() || undefined,
     }];
   }).filter((entry) => entry.sessionName && entry.windowNumber && entry.paneIndex);
+}
+
+function restoredAgentTitle(agent: string): string {
+  switch (agent) {
+    case "claude": return "Claude";
+    case "codex": return "Codex";
+    case "copilot": return "Copilot";
+    case "kiro": return "Kiro";
+    case "opencode": return "OpenCode";
+    case "pi": return "Pi";
+    default: return agent.slice(0, 1).toUpperCase() + agent.slice(1);
+  }
+}
+
+function livePaneRestoreTarget(pane: TmuxResurrectLiveAgentPane): string | undefined {
+  const paneIndex = pane.paneIndex || pane.pane.match(/\.(\d+)$/)?.[1];
+  return paneIndex ? `${pane.paneId}.${paneIndex}` : undefined;
+}
+
+export function reconcileTmuxResurrectLegacyMetadata(
+  content: string,
+  livePanes: TmuxResurrectLiveAgentPane[],
+): TmuxResurrectLegacyMetadataRepairResult {
+  const liveByTarget = new Map(livePanes.flatMap((pane) => {
+    const target = livePaneRestoreTarget(pane);
+    return target ? [[target, pane] as const] : [];
+  }));
+  const repairs: TmuxResurrectLegacyMetadataRepair[] = [];
+
+  const normalized = content.split("\n").map((line) => {
+    if (!line.trim()) return line;
+    const fields = line.split("|");
+    if (fields.length < 18 || !fields[3]?.trim() || fields[18]?.trim()) return line;
+
+    const launchCommand = fields[17]?.trim();
+    const explicit = launchCommand ? explicitAgentSessionTarget(launchCommand) : undefined;
+    if (!launchCommand || !explicit) return line;
+
+    const target = `${fields[0]}:${fields[1]}.${fields[2]}`;
+    const livePane = liveByTarget.get(target);
+    const agent = normalizeAgentName(explicit.agent);
+    if (!livePane || !livePane.tmuxPaneId.startsWith("%") || normalizeAgentName(livePane.agent) !== agent) return line;
+
+    const cwd = fields[7]?.trim() || livePane.cwd || "";
+    while (fields.length < 20) fields.push("");
+    fields[4] = agent;
+    fields[5] = fields[5]?.trim() || restoredAgentTitle(agent);
+    fields[6] = "agent";
+    fields[7] = cwd;
+    fields[18] = "launcher";
+    fields[19] = "app_owned";
+    repairs.push({ paneID: livePane.tmuxPaneId, agent, cwd, launchCommand });
+    return fields.join("|");
+  }).join("\n");
+
+  return { content: normalized, repairs };
 }
 
 function commandById(commandId: string): CommandConfigEntry | undefined {

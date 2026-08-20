@@ -182,7 +182,7 @@ const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
-const { backfillTmuxPaneCommandMetadata, readTmuxPaneCommandLaunch, readTmuxPaneReportMetadata, setTmuxPaneCommandMetadata, tmuxPaneBackfillLaunchCommand, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
+const { backfillTmuxPaneCommandMetadata, readTmuxPaneCommandLaunch, readTmuxPaneIndex, readTmuxPaneReportMetadata, setTmuxPaneCommandMetadata, setTmuxPaneRestoredAgentMetadata, tmuxPaneBackfillLaunchCommand, updateTmuxPaneCommandLaunch } = tmuxPaneMetadata;
 const { requiresTmuxReportProcessScan, resolveTmuxReportBinding } = reportBinding;
 const {
   normalizeTmuxResurrectFile,
@@ -190,6 +190,7 @@ const {
   renderCommand,
   claimCodexRestoreLaunchDelayMs,
   applyTmuxResurrectMetadataLaunchesFile,
+  reconcileTmuxResurrectLegacyMetadata,
   tmuxResurrectMetadataCaptures,
   tmuxResurrectRestoreProcessesForFiles,
 } = agentRestore;
@@ -329,6 +330,33 @@ function applyResurrectMetadata(file: string, metadataFile: string, opts: { json
   }
 }
 
+function reconcileResurrectMetadata(metadataFile: string, opts: { json?: boolean }): void {
+  const result = reconcileTmuxResurrectLegacyMetadata(
+    readFileSync(metadataFile, "utf8"),
+    scan({ requireProcess: true }).map((pane) => ({
+      ...pane,
+      paneIndex: readTmuxPaneIndex(pane.tmuxPaneId),
+    })),
+  );
+  const failed: string[] = [];
+  for (const repair of result.repairs) {
+    const ok = setTmuxPaneRestoredAgentMetadata(repair.paneID, {
+      agent: repair.agent,
+      command: repair.launchCommand,
+      launchCommand: repair.launchCommand,
+      cwd: repair.cwd,
+    });
+    if (!ok) failed.push(repair.paneID);
+  }
+  if (failed.length === 0 && result.repairs.length > 0) {
+    writeFileSync(metadataFile, result.content);
+  }
+  const summary = { repaired: result.repairs.length - failed.length, failed };
+  if (opts.json) console.log(JSON.stringify(summary, null, 2));
+  else console.log(summary.repaired);
+  if (failed.length > 0) process.exitCode = 1;
+}
+
 function printResurrectProcesses(file: string | undefined, metadataFile: string | undefined, opts: { json?: boolean }): void {
   const processes = tmuxResurrectRestoreProcessesForFiles(file, metadataFile);
   if (opts.json) {
@@ -385,6 +413,33 @@ function handleRuntimeError(error: unknown, opts: { json?: boolean }): never {
     console.error(message);
   }
   process.exit(1);
+}
+
+function runtimePaneProvenanceWarnings(): Map<string, string[]> {
+  const warnings = new Map<string, string[]>();
+  for (const pane of scan({ requireProcess: true })) {
+    const agent = pane.agent.toLowerCase().replace(/[^a-z]/g, "");
+    const metadata = readTmuxPaneReportMetadata(pane.tmuxPaneId);
+    const foregroundAgent = metadata?.foregroundCommand
+      ? detectAgentProcess(metadata.foregroundCommand, metadata.foregroundCommand) || undefined
+      : undefined;
+    const binding = resolveTmuxReportBinding({
+      requestedSession: pane.tmuxPaneId,
+      reportedAgent: agent,
+      paneCwd: metadata?.paneCwd,
+      paneOwner: metadata?.paneOwner,
+      commandId: metadata?.commandId,
+      commandContentKind: metadata?.commandContentKind,
+      commandOwner: metadata?.commandOwner,
+      liveAgent: agent,
+      foregroundAgent,
+    });
+    if (binding.owned) continue;
+    const list = warnings.get(agent) || [];
+    list.push(`pane ${pane.tmuxPaneId} has a live ${agent} process but lacks verified ownership metadata`);
+    warnings.set(agent, list);
+  }
+  return warnings;
 }
 
 function handleDoneError(error: unknown, opts: { json?: boolean }): never {
@@ -946,6 +1001,15 @@ resurrect
   });
 
 resurrect
+  .command("reconcile-metadata")
+  .description("Repair verified legacy pane provenance after tmux-resurrect restore")
+  .argument("<metadataFile>", "Agents pane metadata sidecar path")
+  .option("--json", "Output as JSON")
+  .action((metadataFile: string, opts) => {
+    reconcileResurrectMetadata(metadataFile, opts);
+  });
+
+resurrect
   .command("processes")
   .description("Print tmux-resurrect process entries from Agents config and metadata")
   .argument("[file]", "tmux-resurrect save file path")
@@ -1198,7 +1262,14 @@ program
   .description("Inspect integration coverage and installation status for supported agents")
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const results = doctor();
+    const provenanceWarnings = runtimePaneProvenanceWarnings();
+    const results = doctor().map((result) => {
+      const supplemental = [
+        ...(result.supplemental || []),
+        ...(provenanceWarnings.get(result.agent) || []),
+      ];
+      return supplemental.length ? { ...result, supplemental } : result;
+    });
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
       return;
@@ -1210,6 +1281,7 @@ program
       console.log(`  events: ${result.installedEvents.length ? result.installedEvents.join(", ") : "none"}`);
       console.log(`  missing lifecycle: ${result.missingLifecycle.length ? result.missingLifecycle.join(", ") : "none"}`);
       console.log(`  missing metadata: ${result.missingMetadata.length ? result.missingMetadata.join(", ") : "none"}`);
+      for (const warning of result.supplemental || []) console.log(`  warning: ${warning}`);
     }
   });
 

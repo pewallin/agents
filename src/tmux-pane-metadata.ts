@@ -173,6 +173,19 @@ export function tmuxPaneCommandMetadataSetOptionArguments(paneID: string, metada
   ];
 }
 
+export function tmuxPaneRestoredAgentMetadataSetOptionArguments(
+  paneID: string,
+  input: TmuxPaneCommandMetadataInput,
+): string[][] {
+  return [
+    ...tmuxPaneCommandMetadataSetOptionArguments(paneID, buildTmuxPaneCommandMetadata({
+      ...input,
+      contentKind: "agent",
+    })),
+    ["set-option", "-p", "-q", "-t", paneID, "@agents_owned", "app_owned"],
+  ];
+}
+
 export function tmuxPaneCommandLaunchSetOptionArguments(paneID: string, launchCommand: string, cwd?: string): string[][] {
   return [
     ...(cwd ? [["set-option", "-p", "-q", "-t", paneID, "@agents_command_cwd", cwd]] : []),
@@ -192,6 +205,19 @@ export function setTmuxPaneCommandMetadata(paneID: string | undefined, input: Tm
   const metadata = buildTmuxPaneCommandMetadata(input);
   let ok = true;
   for (const args of tmuxPaneCommandMetadataSetOptionArguments(paneID, metadata)) {
+    const result = execFileCapture("tmux", args);
+    if (result.status !== 0) ok = false;
+  }
+  return ok;
+}
+
+export function setTmuxPaneRestoredAgentMetadata(
+  paneID: string | undefined,
+  input: TmuxPaneCommandMetadataInput,
+): boolean {
+  if (!paneID?.startsWith("%")) return false;
+  let ok = true;
+  for (const args of tmuxPaneRestoredAgentMetadataSetOptionArguments(paneID, input)) {
     const result = execFileCapture("tmux", args);
     if (result.status !== 0) ok = false;
   }
@@ -230,6 +256,13 @@ export function readTmuxPaneReportMetadata(paneID: string | undefined): TmuxPane
 export function readTmuxPaneCommandLaunch(paneID: string | undefined): string | undefined {
   if (!paneID?.startsWith("%")) return undefined;
   const result = execFileCapture("tmux", ["show-option", "-p", "-qv", "-t", paneID, "@agents_command_launch"]);
+  if (result.status !== 0) return undefined;
+  return result.stdout.trim() || undefined;
+}
+
+export function readTmuxPaneIndex(paneID: string | undefined): string | undefined {
+  if (!paneID?.startsWith("%")) return undefined;
+  const result = execFileCapture("tmux", ["display-message", "-p", "-t", paneID, "#{pane_index}"]);
   if (result.status !== 0) return undefined;
   return result.stdout.trim() || undefined;
 }

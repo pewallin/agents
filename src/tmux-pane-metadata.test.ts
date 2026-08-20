@@ -5,6 +5,7 @@ import {
   tmuxPaneBackfillLaunchCommand,
   tmuxPaneCommandLaunchSetOptionArguments,
   tmuxPaneCommandMetadataSetOptionArguments,
+  tmuxPaneRestoredAgentMetadataSetOptionArguments,
 } from "./tmux-pane-metadata.js";
 
 describe("tmux pane command metadata", () => {
@@ -66,6 +67,22 @@ describe("tmux pane command metadata", () => {
     expect(tmuxPaneCommandLaunchSetOptionArguments("%37", "codex resume thread-123", "/repo")).toEqual([
       ["set-option", "-p", "-q", "-t", "%37", "@agents_command_cwd", "/repo"],
       ["set-option", "-p", "-q", "-t", "%37", "@agents_command_launch", "codex resume thread-123"],
+    ]);
+  });
+
+  it("claims app ownership only through the restore-specific metadata path", () => {
+    const args = tmuxPaneRestoredAgentMetadataSetOptionArguments("%25", {
+      agent: "codex",
+      command: "codex resume saved-thread",
+      launchCommand: "codex resume saved-thread",
+      cwd: "/repo",
+    });
+
+    expect(args).toContainEqual([
+      "set-option", "-p", "-q", "-t", "%25", "@agents_command_owner", "launcher",
+    ]);
+    expect(args).toContainEqual([
+      "set-option", "-p", "-q", "-t", "%25", "@agents_owned", "app_owned",
     ]);
   });
 

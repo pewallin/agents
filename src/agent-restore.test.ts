@@ -6,6 +6,7 @@ import {
   applyTmuxResurrectMetadataLaunches,
   claimCodexRestoreLaunchDelayMs,
   normalizeTmuxResurrectContent,
+  reconcileTmuxResurrectLegacyMetadata,
   resolveAgentRestoreCommand,
   tmuxResurrectMetadataCaptures,
   tmuxResurrectRestoreProcesses,
@@ -296,6 +297,49 @@ describe("normalizeTmuxResurrectContent", () => {
 });
 
 describe("tmux-resurrect metadata restore", () => {
+  it("repairs legacy app pane provenance only after a matching agent is live", () => {
+    const legacyFields = [
+      "agents", "4", "0", "stable-uuid", "", "", "", "/repo",
+      "", "", "", "", "", "", "", "", "",
+      "codex --dangerously-bypass-approvals-and-sandbox resume saved-thread", "", "",
+    ];
+
+    const result = reconcileTmuxResurrectLegacyMetadata(`${legacyFields.join("|")}\n`, [{
+      pane: "agents:codex",
+      paneId: "agents:4",
+      paneIndex: "0",
+      tmuxPaneId: "%25",
+      agent: "Codex",
+      cwd: "/repo",
+    }]);
+
+    expect(result.repairs).toEqual([{
+      paneID: "%25",
+      agent: "codex",
+      cwd: "/repo",
+      launchCommand: "codex --dangerously-bypass-approvals-and-sandbox resume saved-thread",
+    }]);
+    const repairedFields = result.content.trimEnd().split("|");
+    expect(repairedFields[4]).toBe("codex");
+    expect(repairedFields[5]).toBe("Codex");
+    expect(repairedFields[6]).toBe("agent");
+    expect(repairedFields[18]).toBe("launcher");
+    expect(repairedFields[19]).toBe("app_owned");
+  });
+
+  it("does not claim a legacy pane without a matching live agent process", () => {
+    const legacyFields = [
+      "agents", "4", "0", "stable-uuid", "", "", "", "/repo",
+      "", "", "", "", "", "", "", "", "", "codex resume saved-thread", "", "",
+    ];
+    const metadata = `${legacyFields.join("|")}\n`;
+
+    const result = reconcileTmuxResurrectLegacyMetadata(metadata, []);
+
+    expect(result.repairs).toEqual([]);
+    expect(result.content).toBe(metadata);
+  });
+
   it("captures stable restore launches from live agent panes before save", () => {
     withIsolatedAgentsHome((root) => {
       writeConfig(root, {
