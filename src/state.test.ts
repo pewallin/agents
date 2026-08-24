@@ -8,7 +8,7 @@ import { readFileSync } from "fs";
 // Since state.ts uses a hardcoded STATE_DIR, we test the exported
 // priority/filtering logic by constructing StateEntry arrays directly.
 
-import { clearContributorState, createStateSnapshot, deriveModelDisplay, getAgentState, getAgentStateEntry, getAgentStateProvenance, reportContext, reportContributorState, reportState, upsertStateSnapshotEntry } from "./state.js";
+import { clearContributorState, createStateSnapshot, deriveModelDisplay, getAgentState, getAgentStateEntry, getAgentStateProvenance, rebindStateSnapshotToExternalSession, reportContext, reportContributorState, reportState, upsertStateSnapshotEntry } from "./state.js";
 import type { StateEntry, ReportedState } from "./state.js";
 import { getRuntimeStateEventsPath } from "./paths.js";
 import type { RuntimeStateEvent } from "./runtime-events.js";
@@ -456,5 +456,41 @@ describe("state snapshots", () => {
     expect(getAgentStateEntry("pi", "%3", snapshot)?.detail).toBe("sandbox approval");
     expect(getAgentStateProvenance("pi", "%3", snapshot)?.source).toBe("contributor");
     expect(getAgentStateProvenance("pi", "%3", snapshot)?.primary?.state).toBe("idle");
+  });
+
+  it("rebinds the newest state for a live external session after pane ids are reused", () => {
+    const snapshot = createStateSnapshot(
+      [
+        { agent: "codex", session: "%4", externalSessionId: "thread-1", state: "working", ts: 100 },
+        { agent: "codex", session: "%6", externalSessionId: "thread-1", state: "idle", ts: 200 },
+      ],
+      [],
+    );
+
+    rebindStateSnapshotToExternalSession(snapshot, "codex", "%4", "thread-1");
+
+    expect(getAgentStateEntry("codex", "%4", snapshot)).toMatchObject({
+      agent: "codex",
+      session: "%4",
+      externalSessionId: "thread-1",
+      state: "idle",
+      ts: 200,
+    });
+  });
+
+  it("rejects pane-keyed state from a different external session", () => {
+    const snapshot = createStateSnapshot(
+      [
+        { agent: "codex", session: "%4", externalSessionId: "thread-old", state: "working", ts: 100 },
+      ],
+      [
+        { agent: "codex", session: "%4", reporter: "dustbot-sandbox", state: "approval", ts: 101 },
+      ],
+    );
+
+    rebindStateSnapshotToExternalSession(snapshot, "codex", "%4", "thread-new");
+
+    expect(getAgentStateEntry("codex", "%4", snapshot)).toBeNull();
+    expect(getAgentStateProvenance("codex", "%4", snapshot)).toBeNull();
   });
 });

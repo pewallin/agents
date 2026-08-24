@@ -301,6 +301,10 @@ export function readStateSnapshot(maxAge: number = 86400): StateSnapshot {
 
 export function upsertStateSnapshotEntry(snapshot: StateSnapshot, entry: StateEntry): void {
   snapshot.primaryByKey.set(stateSnapshotKey(entry.agent, entry.session), entry);
+  rebuildStateSnapshot(snapshot);
+}
+
+function rebuildStateSnapshot(snapshot: StateSnapshot): void {
   const rebuilt = buildStateSnapshot(snapshot.primaryByKey, snapshot.contributorsByKey);
   snapshot.primaryByKey = rebuilt.primaryByKey;
   snapshot.contributorsByKey = rebuilt.contributorsByKey;
@@ -308,6 +312,41 @@ export function upsertStateSnapshotEntry(snapshot: StateSnapshot, entry: StateEn
   snapshot.mergedByKey = rebuilt.mergedByKey;
   snapshot.mergedByAgent = rebuilt.mergedByAgent;
   snapshot.provenanceByKey = rebuilt.provenanceByKey;
+}
+
+/**
+ * Align pane-keyed hook state with the external session observed in the live
+ * agent process. Pane ids are reused after a mux restart, while an agent's
+ * external session id remains stable across resurrection.
+ */
+export function rebindStateSnapshotToExternalSession(
+  snapshot: StateSnapshot,
+  agent: string,
+  session: string,
+  externalSessionId: string,
+): void {
+  const currentKey = stateSnapshotKey(agent, session);
+  const current = snapshot.primaryByKey.get(currentKey);
+  const newestMatch = [...snapshot.primaryByKey.values()]
+    .filter((entry) => entry.agent === agent && entry.externalSessionId === externalSessionId)
+    .sort((left, right) => right.ts - left.ts)[0];
+
+  if (newestMatch) {
+    if (newestMatch.session === session && current === newestMatch) return;
+    snapshot.contributorsByKey.delete(currentKey);
+    snapshot.primaryByKey.set(currentKey, {
+      ...newestMatch,
+      session,
+    });
+    rebuildStateSnapshot(snapshot);
+    return;
+  }
+
+  if (current && current.externalSessionId !== externalSessionId) {
+    snapshot.primaryByKey.delete(currentKey);
+    snapshot.contributorsByKey.delete(currentKey);
+    rebuildStateSnapshot(snapshot);
+  }
 }
 
 export function clearStateExternalSessionId(agent: string, session: string): StateEntry | null {
