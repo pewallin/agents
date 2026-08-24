@@ -50,7 +50,38 @@ describe("resolveTmuxReportBinding", () => {
     });
   });
 
-  it("only requests process scanning for ownerless app-owned panes", () => {
+  it("accepts an ownerless pane with a matching live descendant behind a terminal proxy", () => {
+    const input = {
+      requestedSession: "%12",
+      reportedAgent: "codex",
+      paneCwd: "/repo",
+      foregroundAgent: undefined,
+      liveAgent: "codex",
+    };
+
+    expect(requiresTmuxReportProcessScan(input)).toBe(true);
+    expect(resolveTmuxReportBinding(input)).toEqual({
+      owned: true,
+      requestedSession: "%12",
+      paneCwd: "/repo",
+      reason: "live-descendant-agent",
+    });
+  });
+
+  it("rejects an ownerless pane when the live descendant is a different agent", () => {
+    expect(resolveTmuxReportBinding({
+      requestedSession: "%12",
+      reportedAgent: "codex",
+      paneCwd: "/repo",
+      liveAgent: "kiro",
+    })).toEqual({
+      owned: false,
+      requestedSession: "%12",
+      reason: "unverified-pane",
+    });
+  });
+
+  it("requests process scanning for ownerless panes but not launcher-owned panes", () => {
     expect(requiresTmuxReportProcessScan({
       requestedSession: "%370",
       reportedAgent: "kiro",

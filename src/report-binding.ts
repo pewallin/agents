@@ -15,7 +15,7 @@ export type TmuxReportBinding =
       owned: true;
       requestedSession: string;
       paneCwd?: string;
-      reason: "managed-command" | "app-owned-live-agent" | "foreground-agent";
+      reason: "managed-command" | "app-owned-live-agent" | "live-descendant-agent" | "foreground-agent";
     }
   | {
       owned: false;
@@ -24,7 +24,7 @@ export type TmuxReportBinding =
     };
 
 export function requiresTmuxReportProcessScan(input: TmuxReportBindingInput): boolean {
-  return input.paneOwner === "app_owned" && !input.commandOwner?.trim();
+  return !input.commandOwner?.trim() && !input.foregroundAgent?.trim();
 }
 
 export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxReportBinding {
@@ -52,6 +52,19 @@ export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxRep
       requestedSession: input.requestedSession,
       ...(input.paneCwd ? { paneCwd: input.paneCwd } : {}),
       reason: "app-owned-live-agent",
+    };
+  }
+
+  const ownerlessLiveAgentMatches = !input.paneOwner?.trim()
+    && !input.commandOwner?.trim()
+    && input.liveAgent?.trim().toLowerCase() === reportedAgent;
+
+  if (ownerlessLiveAgentMatches) {
+    return {
+      owned: true,
+      requestedSession: input.requestedSession,
+      ...(input.paneCwd ? { paneCwd: input.paneCwd } : {}),
+      reason: "live-descendant-agent",
     };
   }
 
