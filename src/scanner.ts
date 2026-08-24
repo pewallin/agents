@@ -12,7 +12,7 @@ import { mergedContextTokens, resolveModelInfo, stateContext, stateDetail, state
 import { resolveStatusFromContent } from "./scanner-detection.js";
 import { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
 import type { SiblingPane, WindowSnapshot } from "./pane-ops.js";
-import { buildBranchCache, buildBranchCacheAsync, buildProcessTree, buildProcessTreeAsync, detectAgentProcess, findAgentLeafInTree, findAgentOnTtyProcessInTree, findLeafProcessSync, findOpenCodexSessionIds, findOpenCodexSessionIdsAsync } from "./scanner-discovery.js";
+import { buildBranchCache, buildBranchCacheAsync, buildProcessTree, buildProcessTreeAsync, detectAgentProcess, findAgentLeafInTree, findAgentOnTtyProcessInTree, findLeafProcessSync, findOpenCodexSessionIds, findOpenCodexSessionIdsAsync, findPrimaryAgentForReporterInTree } from "./scanner-discovery.js";
 import type { AgentLeafProcess } from "./scanner-discovery.js";
 import { extractClaudeRenameTitleFromTranscript, extractLatestCodexSessionTitlesFromIndexLines, loadHistoryForAgent, normalizeHistoryCwd, resolveAgentDisplayTitle } from "./scanner-history.js";
 import type { AgentSessionHistoryItem } from "./scanner-history.js";
@@ -82,6 +82,25 @@ export function externalSessionIdFromProcessArgs(agent: string, args?: string): 
     case "opencode": {
       const sessionIndex = agentArgs.indexOf("--session");
       const target = sessionIndex >= 0 ? agentArgs[sessionIndex + 1] : undefined;
+      return target && !target.startsWith("-") ? target : undefined;
+    }
+    case "pi": {
+      const sessionArg = agentArgs.find((arg) => arg.startsWith("--session="));
+      if (sessionArg) return sessionArg.slice("--session=".length) || undefined;
+      const sessionIndex = agentArgs.indexOf("--session");
+      const target = sessionIndex >= 0 ? agentArgs[sessionIndex + 1] : undefined;
+      return target && !target.startsWith("-") ? target : undefined;
+    }
+    case "copilot": {
+      const resumeArg = agentArgs.find((arg) => arg.startsWith("--resume="));
+      if (resumeArg) return resumeArg.slice("--resume=".length) || undefined;
+      const resumeIndex = agentArgs.indexOf("--resume");
+      const target = resumeIndex >= 0 ? agentArgs[resumeIndex + 1] : undefined;
+      return target && !target.startsWith("-") ? target : undefined;
+    }
+    case "claude": {
+      const resumeIndex = agentArgs.indexOf("--resume");
+      const target = resumeIndex >= 0 ? agentArgs[resumeIndex + 1] : undefined;
       return target && !target.startsWith("-") ? target : undefined;
     }
     case "kiro": {
@@ -324,7 +343,7 @@ export function resolveAgentIntentTitle(paneTitle: string, displayTitle?: string
 }
 
 // Sync version for CLI commands that don't need async
-export function scan(options: { requireProcess?: boolean; excludeProcessIDs?: number[] } = {}): AgentPane[] {
+export function scan(options: { requireProcess?: boolean; excludeProcessIDs?: number[]; reporterProcessID?: number } = {}): AgentPane[] {
   if (detectMultiplexer() === "zellij") {
     return processZellijPanes(getMux().listPanes());
   }
@@ -492,7 +511,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
   return results;
 }
 
-function scanSync(options: { requireProcess?: boolean; excludeProcessIDs?: number[] } = {}): AgentPane[] {
+function scanSync(options: { requireProcess?: boolean; excludeProcessIDs?: number[]; reporterProcessID?: number } = {}): AgentPane[] {
   const raw = exec(
     `tmux list-panes -a -F '${TMUX_SCAN_FORMAT}' 2>/dev/null`
   );
@@ -528,8 +547,10 @@ function scanSync(options: { requireProcess?: boolean; excludeProcessIDs?: numbe
     if (session.startsWith("_agents_")) continue;
 
     const pidNum = parseInt(pid, 10) || 0;
-    const leaf = findAgentLeafInTree(pidNum, tree, excludedProcessIDs);
-    const ttyMatch = !leaf && tty
+    const leaf = options.reporterProcessID
+      ? findPrimaryAgentForReporterInTree(pidNum, options.reporterProcessID, tree)
+      : findAgentLeafInTree(pidNum, tree, excludedProcessIDs);
+    const ttyMatch = !options.reporterProcessID && !leaf && tty
       ? findAgentOnTtyProcessInTree(tty, tree, excludedProcessIDs)
       : null;
     const matchedProcess = resolveTmuxAgentProcess(

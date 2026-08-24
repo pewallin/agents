@@ -210,6 +210,51 @@ export function findAgentLeafInTree(
   return best ? { agentName: best.agentName, process: best.process } : null;
 }
 
+function reporterOwnedAgentName(entry: ProcEntry): string | null {
+  if (/\bagents(?:\.js)?\s+resurrect\s+agent\b/.test(entry.args)) return null;
+  if (/\b(?:agents|cli\.js)\s+report\b/.test(entry.args)) return null;
+  return detectAgentProcess(entry.comm, entry.args);
+}
+
+function findPrimaryReporterOwnedAgentInTree(pid: number, tree: ProcessTree): AgentLeafProcess | null {
+  const queue = [pid];
+  const visited = new Set<number>();
+  for (let index = 0; index < queue.length; index += 1) {
+    const currentPid = queue[index];
+    if (visited.has(currentPid)) continue;
+    visited.add(currentPid);
+    const entry = tree.byPid.get(currentPid);
+    if (entry) {
+      const agent = reporterOwnedAgentName(entry);
+      if (agent) return { agentName: agent, process: entry };
+    }
+    queue.push(...(tree.children.get(currentPid) || []));
+  }
+  return null;
+}
+
+function findNearestReporterOwnedAgentAncestor(pid: number, tree: ProcessTree): AgentLeafProcess | null {
+  const visited = new Set<number>();
+  let current = tree.byPid.get(pid);
+  while (current && !visited.has(current.pid)) {
+    visited.add(current.pid);
+    const agent = reporterOwnedAgentName(current);
+    if (agent) return { agentName: agent, process: current };
+    current = tree.byPid.get(current.ppid);
+  }
+  return null;
+}
+
+export function findPrimaryAgentForReporterInTree(
+  paneRootPid: number,
+  reporterPid: number,
+  tree: ProcessTree,
+): AgentLeafProcess | null {
+  const primary = findPrimaryReporterOwnedAgentInTree(paneRootPid, tree);
+  const reporterAgent = findNearestReporterOwnedAgentAncestor(reporterPid, tree);
+  return primary?.process?.pid === reporterAgent?.process?.pid ? primary : null;
+}
+
 export function findLeafInTree(pid: number, tree: ProcessTree): string {
   return findAgentLeafInTree(pid, tree)?.agentName || "";
 }

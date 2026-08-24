@@ -3,7 +3,7 @@ import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, extractOpenCodexSessionIds, getDetector, filterAgents, hasActiveTmuxMetadataRuntimeEvidence, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, parseTmuxScanRecords, reconcileStaleCodexWorkingState, resolveAgentExternalSessionId, resolveAgentIntentTitle, resolveTmuxAgentProcess, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
-import { findAgentLeafInTree } from "./scanner-discovery.js";
+import { findAgentLeafInTree, findPrimaryAgentForReporterInTree } from "./scanner-discovery.js";
 import type { ProcessTree } from "./scanner-discovery.js";
 import { agentResumeInvocation, agentStatusRequiresForce, renderResumeRespawnCommand, resolveResumePane, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
@@ -132,6 +132,48 @@ describe("findAgentLeafInTree", () => {
     expect(findAgentLeafInTree(shell.pid, tree)?.agentName).toBe("codex");
     expect(findAgentLeafInTree(shell.pid, tree, new Set([reporter.pid]))).toBeNull();
   });
+
+  it("distinguishes the pane's primary agent from a nested reporter", () => {
+    const shell = { pid: 200, ppid: 1, comm: "zsh", tty: "ttys001", cpuPercent: 0, memoryMB: 1, args: "zsh" };
+    const primary = { pid: 201, ppid: shell.pid, comm: "codex", tty: "ttys001", cpuPercent: 1, memoryMB: 100, args: "codex" };
+    const toolShell = { pid: 202, ppid: primary.pid, comm: "zsh", tty: "?", cpuPercent: 0, memoryMB: 1, args: "zsh -lc codex exec review" };
+    const nested = { pid: 203, ppid: toolShell.pid, comm: "codex", tty: "?", cpuPercent: 1, memoryMB: 80, args: "codex exec review" };
+    const primaryReporter = { pid: 204, ppid: primary.pid, comm: "node", tty: "?", cpuPercent: 0, memoryMB: 10, args: "node cli.js report --agent codex" };
+    const nestedReporter = { pid: 205, ppid: nested.pid, comm: "node", tty: "?", cpuPercent: 0, memoryMB: 10, args: "node cli.js report --agent codex" };
+    const entries = [shell, primary, toolShell, nested, primaryReporter, nestedReporter];
+    const tree: ProcessTree = {
+      byPid: new Map(entries.map((entry) => [entry.pid, entry])),
+      children: new Map([
+        [shell.pid, [primary.pid]],
+        [primary.pid, [toolShell.pid, primaryReporter.pid]],
+        [toolShell.pid, [nested.pid]],
+        [nested.pid, [nestedReporter.pid]],
+      ]),
+      byTty: new Map(),
+    };
+
+    expect(findPrimaryAgentForReporterInTree(shell.pid, primaryReporter.pid, tree)?.process?.pid).toBe(primary.pid);
+    expect(findPrimaryAgentForReporterInTree(shell.pid, nestedReporter.pid, tree)).toBeNull();
+  });
+
+  it("skips agents launchers when the primary agent itself is a Node process", () => {
+    const shell = { pid: 300, ppid: 1, comm: "zsh", tty: "ttys002", cpuPercent: 0, memoryMB: 1, args: "zsh" };
+    const launcher = { pid: 301, ppid: shell.pid, comm: "node", tty: "ttys002", cpuPercent: 0, memoryMB: 20, args: "node /bin/agents resurrect agent pi" };
+    const primary = { pid: 302, ppid: launcher.pid, comm: "node", tty: "ttys002", cpuPercent: 1, memoryMB: 80, args: "node /bin/pi --session /tmp/main.jsonl" };
+    const reporter = { pid: 303, ppid: primary.pid, comm: "node", tty: "ttys002", cpuPercent: 0, memoryMB: 10, args: "node /repo/dist/cli.js report --agent pi" };
+    const entries = [shell, launcher, primary, reporter];
+    const tree: ProcessTree = {
+      byPid: new Map(entries.map((entry) => [entry.pid, entry])),
+      children: new Map([
+        [shell.pid, [launcher.pid]],
+        [launcher.pid, [primary.pid]],
+        [primary.pid, [reporter.pid]],
+      ]),
+      byTty: new Map(),
+    };
+
+    expect(findPrimaryAgentForReporterInTree(shell.pid, reporter.pid, tree)?.process?.pid).toBe(primary.pid);
+  });
 });
 
 describe("resolveTmuxAgentProcess", () => {
@@ -242,6 +284,12 @@ describe("externalSessionIdFromProcessArgs", () => {
       "opencode",
       "opencode --session opencode-123",
     )).toBe("opencode-123");
+  });
+
+  it("reads Claude, Copilot, and Pi restore targets", () => {
+    expect(externalSessionIdFromProcessArgs("claude", "claude --resume claude-123")).toBe("claude-123");
+    expect(externalSessionIdFromProcessArgs("copilot", "copilot --resume=copilot-123")).toBe("copilot-123");
+    expect(externalSessionIdFromProcessArgs("pi", "pi --session /tmp/pi-session.jsonl --yolo")).toBe("/tmp/pi-session.jsonl");
   });
 
   it("reads kiro resume-id targets", () => {

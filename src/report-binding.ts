@@ -26,16 +26,19 @@ export type TmuxReportBinding =
     };
 
 export function requiresTmuxReportProcessScan(input: TmuxReportBindingInput): boolean {
-  return !input.commandOwner?.trim() && !input.foregroundAgent?.trim();
+  const externalSessionConflicts = !!input.reportedExternalSessionId?.trim()
+    && !!input.expectedExternalSessionId?.trim()
+    && input.reportedExternalSessionId.trim() !== input.expectedExternalSessionId.trim();
+  return externalSessionConflicts || (!input.commandOwner?.trim() && !input.foregroundAgent?.trim());
 }
 
 export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxReportBinding {
   const reportedAgent = input.reportedAgent.trim().toLowerCase();
-  const externalSessionConflicts = input.reportedExternalSessionId?.trim()
-    && input.expectedExternalSessionId?.trim()
-    && input.reportedExternalSessionId !== input.expectedExternalSessionId;
+  const externalSessionConflicts = !!input.reportedExternalSessionId?.trim()
+    && !!input.expectedExternalSessionId?.trim()
+    && input.reportedExternalSessionId.trim() !== input.expectedExternalSessionId.trim();
 
-  if (externalSessionConflicts) {
+  if (externalSessionConflicts && input.liveAgent?.trim().toLowerCase() !== reportedAgent) {
     return {
       owned: false,
       requestedSession: input.requestedSession,

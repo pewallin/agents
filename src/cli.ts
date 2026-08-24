@@ -177,7 +177,7 @@ const [
 const { Command } = commander;
 const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
-const { reportState, reportContext, reportContributorState } = state;
+const { reportState, reportContext, reportContributorState, getAgentStateEntry } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
@@ -1088,11 +1088,12 @@ program
         commandContentKind: paneMetadata?.commandContentKind,
         commandOwner: paneMetadata?.commandOwner,
         reportedExternalSessionId: externalSessionId,
-        expectedExternalSessionId: externalSessionIdFromProcessArgs(opts.agent, paneMetadata?.commandLaunch),
+        expectedExternalSessionId: externalSessionIdFromProcessArgs(opts.agent, paneMetadata?.commandLaunch)
+          ?? getAgentStateEntry(opts.agent, session)?.externalSessionId,
         foregroundAgent,
       };
       const liveAgent = requiresTmuxReportProcessScan(bindingInput)
-        ? scan({ requireProcess: true, excludeProcessIDs: [process.pid] })
+        ? scan({ requireProcess: true, excludeProcessIDs: [process.pid], reporterProcessID: process.pid })
           .find((pane) => pane.tmuxPaneId === session)?.agent
         : undefined;
       const binding = resolveTmuxReportBinding({ ...bindingInput, liveAgent });

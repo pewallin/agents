@@ -66,6 +66,23 @@ describe("resolveTmuxReportBinding", () => {
     });
   });
 
+  it("accepts a primary agent rotating to a new external session", () => {
+    expect(resolveTmuxReportBinding({
+      requestedSession: "%12",
+      reportedAgent: "codex",
+      reportedExternalSessionId: "new-session",
+      expectedExternalSessionId: "old-session",
+      paneCwd: "/repo",
+      commandId: "codex",
+      commandContentKind: "agent",
+      commandOwner: "launcher",
+      liveAgent: "codex",
+    })).toMatchObject({
+      owned: true,
+      reason: "managed-command",
+    });
+  });
+
   it("accepts an ownerless app-owned pane with a matching live descendant agent", () => {
     expect(resolveTmuxReportBinding({
       requestedSession: "%370",
@@ -128,6 +145,15 @@ describe("resolveTmuxReportBinding", () => {
       commandContentKind: "agent",
       commandOwner: "launcher",
     })).toBe(false);
+    expect(requiresTmuxReportProcessScan({
+      requestedSession: "%370",
+      reportedAgent: "codex",
+      commandId: "codex",
+      commandContentKind: "agent",
+      commandOwner: "launcher",
+      reportedExternalSessionId: "new-session",
+      expectedExternalSessionId: "old-session",
+    })).toBe(true);
   });
 
   it("rejects an ownerless app-owned pane without a live descendant agent", () => {
