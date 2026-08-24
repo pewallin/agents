@@ -135,13 +135,23 @@ function preferredAgentProcess(a: AgentProcessMatch | null, b: AgentProcessMatch
   return a;
 }
 
-function findBestAgentProcessInTree(pid: number, tree: ProcessTree, depth = 0): AgentProcessMatch | null {
+function findBestAgentProcessInTree(
+  pid: number,
+  tree: ProcessTree,
+  depth = 0,
+  excludedProcessIDs: ReadonlySet<number> = new Set(),
+): AgentProcessMatch | null {
   const entry = tree.byPid.get(pid);
-  const agentName = entry ? detectAgentProcess(entry.comm, entry.args) : null;
+  const agentName = entry && !excludedProcessIDs.has(pid)
+    ? detectAgentProcess(entry.comm, entry.args)
+    : null;
   let best: AgentProcessMatch | null = agentName ? { agentName, process: entry ?? null, depth } : null;
 
   for (const child of tree.children.get(pid) || []) {
-    best = preferredAgentProcess(best, findBestAgentProcessInTree(child, tree, depth + 1));
+    best = preferredAgentProcess(
+      best,
+      findBestAgentProcessInTree(child, tree, depth + 1, excludedProcessIDs),
+    );
   }
 
   return best;
@@ -191,8 +201,12 @@ export async function buildProcessTreeAsync(): Promise<ProcessTree> {
   return parseProcessTree(await execAsync(PROCESS_TREE_PS_COMMAND));
 }
 
-export function findAgentLeafInTree(pid: number, tree: ProcessTree): AgentLeafProcess | null {
-  const best = findBestAgentProcessInTree(pid, tree);
+export function findAgentLeafInTree(
+  pid: number,
+  tree: ProcessTree,
+  excludedProcessIDs: ReadonlySet<number> = new Set(),
+): AgentLeafProcess | null {
+  const best = findBestAgentProcessInTree(pid, tree, 0, excludedProcessIDs);
   return best ? { agentName: best.agentName, process: best.process } : null;
 }
 
@@ -200,12 +214,17 @@ export function findLeafInTree(pid: number, tree: ProcessTree): string {
   return findAgentLeafInTree(pid, tree)?.agentName || "";
 }
 
-export function findAgentOnTtyProcessInTree(tty: string, tree: ProcessTree): AgentLeafProcess | null {
+export function findAgentOnTtyProcessInTree(
+  tty: string,
+  tree: ProcessTree,
+  excludedProcessIDs: ReadonlySet<number> = new Set(),
+): AgentLeafProcess | null {
   const ttyShort = tty.replace(/^\/dev\//, "");
   const procs = tree.byTty.get(ttyShort);
   if (!procs) return null;
   let best: AgentProcessMatch | null = null;
   for (const p of procs) {
+    if (excludedProcessIDs.has(p.pid)) continue;
     const agent = detectAgentProcess(p.comm, p.args);
     if (!agent) continue;
     let depth = 0;

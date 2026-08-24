@@ -324,7 +324,7 @@ export function resolveAgentIntentTitle(paneTitle: string, displayTitle?: string
 }
 
 // Sync version for CLI commands that don't need async
-export function scan(options: { requireProcess?: boolean } = {}): AgentPane[] {
+export function scan(options: { requireProcess?: boolean; excludeProcessIDs?: number[] } = {}): AgentPane[] {
   if (detectMultiplexer() === "zellij") {
     return processZellijPanes(getMux().listPanes());
   }
@@ -492,7 +492,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
   return results;
 }
 
-function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
+function scanSync(options: { requireProcess?: boolean; excludeProcessIDs?: number[] } = {}): AgentPane[] {
   const raw = exec(
     `tmux list-panes -a -F '${TMUX_SCAN_FORMAT}' 2>/dev/null`
   );
@@ -500,6 +500,7 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
 
   // Build process tree once — replaces per-pane pgrep/ps calls
   const tree = buildProcessTree();
+  const excludedProcessIDs = new Set(options.excludeProcessIDs ?? []);
   const stateSnapshot = readStateSnapshot();
   // Pass 1: identify agent panes and collect unique cwds
   type ParsedPane = {
@@ -527,8 +528,10 @@ function scanSync(options: { requireProcess?: boolean } = {}): AgentPane[] {
     if (session.startsWith("_agents_")) continue;
 
     const pidNum = parseInt(pid, 10) || 0;
-    const leaf = findAgentLeafInTree(pidNum, tree);
-    const ttyMatch = !leaf && tty ? findAgentOnTtyProcessInTree(tty, tree) : null;
+    const leaf = findAgentLeafInTree(pidNum, tree, excludedProcessIDs);
+    const ttyMatch = !leaf && tty
+      ? findAgentOnTtyProcessInTree(tty, tree, excludedProcessIDs)
+      : null;
     const matchedProcess = resolveTmuxAgentProcess(
       leaf ?? ttyMatch,
       commandContentKind,

@@ -175,7 +175,7 @@ const [
 ]);
 
 const { Command } = commander;
-const { scan, runtimeStates, getSessionHistory, detectAgentProcess } = scanner;
+const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
@@ -1073,6 +1073,7 @@ program
     // Existing workspace data is never overwritten — reportState preserves it.
     let wsSnapshot: undefined | { command: string; cwd: string; mux?: "tmux" | "zellij" };
     const muxKind = detectMultiplexer();
+    const externalSessionId = opts.externalSessionId as string | undefined;
     if (muxKind === "tmux" && session?.startsWith("%")) {
       const paneMetadata = readTmuxPaneReportMetadata(session);
       const foregroundAgent = paneMetadata?.foregroundCommand
@@ -1086,10 +1087,13 @@ program
         commandId: paneMetadata?.commandId,
         commandContentKind: paneMetadata?.commandContentKind,
         commandOwner: paneMetadata?.commandOwner,
+        reportedExternalSessionId: externalSessionId,
+        expectedExternalSessionId: externalSessionIdFromProcessArgs(opts.agent, paneMetadata?.commandLaunch),
         foregroundAgent,
       };
       const liveAgent = requiresTmuxReportProcessScan(bindingInput)
-        ? scan({ requireProcess: true }).find((pane) => pane.tmuxPaneId === session)?.agent
+        ? scan({ requireProcess: true, excludeProcessIDs: [process.pid] })
+          .find((pane) => pane.tmuxPaneId === session)?.agent
         : undefined;
       const binding = resolveTmuxReportBinding({ ...bindingInput, liveAgent });
       if (!binding.owned) return;
@@ -1107,7 +1111,6 @@ program
       wsSnapshot = { command: opts.agent, cwd: process.env.PWD, mux: "zellij" };
     }
 
-    const externalSessionId = opts.externalSessionId as string | undefined;
     if (externalSessionId && muxKind === "tmux" && session?.startsWith("%") && wsSnapshot?.cwd) {
       const restoreArgv = resolveAgentRestoreArgv({
         agent: opts.agent,

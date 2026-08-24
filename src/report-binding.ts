@@ -6,6 +6,8 @@ export interface TmuxReportBindingInput {
   commandId?: string;
   commandContentKind?: string;
   commandOwner?: string;
+  reportedExternalSessionId?: string;
+  expectedExternalSessionId?: string;
   liveAgent?: string;
   foregroundAgent?: string;
 }
@@ -29,6 +31,18 @@ export function requiresTmuxReportProcessScan(input: TmuxReportBindingInput): bo
 
 export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxReportBinding {
   const reportedAgent = input.reportedAgent.trim().toLowerCase();
+  const externalSessionConflicts = input.reportedExternalSessionId?.trim()
+    && input.expectedExternalSessionId?.trim()
+    && input.reportedExternalSessionId !== input.expectedExternalSessionId;
+
+  if (externalSessionConflicts) {
+    return {
+      owned: false,
+      requestedSession: input.requestedSession,
+      reason: "unverified-pane",
+    };
+  }
+
   const managedCommandMatches = input.commandOwner === "launcher"
     && input.commandContentKind === "agent"
     && input.commandId?.trim().toLowerCase() === reportedAgent;

@@ -3,6 +3,8 @@ import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, extractOpenCodexSessionIds, getDetector, filterAgents, hasActiveTmuxMetadataRuntimeEvidence, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, parseTmuxScanRecords, reconcileStaleCodexWorkingState, resolveAgentExternalSessionId, resolveAgentIntentTitle, resolveTmuxAgentProcess, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
+import { findAgentLeafInTree } from "./scanner-discovery.js";
+import type { ProcessTree } from "./scanner-discovery.js";
 import { agentResumeInvocation, agentStatusRequiresForce, renderResumeRespawnCommand, resolveResumePane, resolveResumeTarget, resumeStateSeedForTarget } from "./resume.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
 import { clearStateExternalSessionId, createStateSnapshot, getAgentStateEntry, reportState } from "./state.js";
@@ -98,6 +100,37 @@ describe("detectAgentProcess", () => {
       "/Users/clawd/.he",
       "/Users/clawd/.hermes/hermes-agent/venv/bin/python3 /Users/clawd/.local/bin/hermes",
     )).toBe("hermes");
+  });
+});
+
+describe("findAgentLeafInTree", () => {
+  it("can exclude the current report process from live-agent proof", () => {
+    const shell = {
+      pid: 100,
+      ppid: 1,
+      comm: "zsh",
+      tty: "ttys001",
+      cpuPercent: 0,
+      memoryMB: 1,
+      args: "zsh",
+    };
+    const reporter = {
+      pid: 101,
+      ppid: shell.pid,
+      comm: "node",
+      tty: "ttys001",
+      cpuPercent: 0,
+      memoryMB: 1,
+      args: "node /repo/dist/cli.js report --agent codex --state working --session %12",
+    };
+    const tree: ProcessTree = {
+      byPid: new Map([[shell.pid, shell], [reporter.pid, reporter]]),
+      children: new Map([[shell.pid, [reporter.pid]]]),
+      byTty: new Map([[shell.tty, [shell, reporter]]]),
+    };
+
+    expect(findAgentLeafInTree(shell.pid, tree)?.agentName).toBe("codex");
+    expect(findAgentLeafInTree(shell.pid, tree, new Set([reporter.pid]))).toBeNull();
   });
 });
 

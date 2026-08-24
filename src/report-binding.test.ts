@@ -33,6 +33,39 @@ describe("resolveTmuxReportBinding", () => {
     });
   });
 
+  it("rejects a nested agent report that conflicts with the launched session", () => {
+    expect(resolveTmuxReportBinding({
+      requestedSession: "%12",
+      reportedAgent: "codex",
+      reportedExternalSessionId: "nested-review-session",
+      expectedExternalSessionId: "interactive-session",
+      paneCwd: "/repo",
+      commandId: "codex",
+      commandContentKind: "agent",
+      commandOwner: "launcher",
+    })).toEqual({
+      owned: false,
+      requestedSession: "%12",
+      reason: "unverified-pane",
+    });
+  });
+
+  it("accepts a managed report from the launched session", () => {
+    expect(resolveTmuxReportBinding({
+      requestedSession: "%12",
+      reportedAgent: "codex",
+      reportedExternalSessionId: "interactive-session",
+      expectedExternalSessionId: "interactive-session",
+      paneCwd: "/repo",
+      commandId: "codex",
+      commandContentKind: "agent",
+      commandOwner: "launcher",
+    })).toMatchObject({
+      owned: true,
+      reason: "managed-command",
+    });
+  });
+
   it("accepts an ownerless app-owned pane with a matching live descendant agent", () => {
     expect(resolveTmuxReportBinding({
       requestedSession: "%370",
