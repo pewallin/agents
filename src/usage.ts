@@ -284,19 +284,20 @@ export function codexSourceFromRPCSnapshot(snapshot: CodexRPCSnapshot, now: Date
   };
 }
 
-async function fetchClaudeUsage(_: ProviderConfig, env: NodeJS.ProcessEnv): Promise<AgentUsageSource> {
+async function fetchClaudeUsage(_: ProviderConfig, env: NodeJS.ProcessEnv, now: Date): Promise<AgentUsageSource> {
   const output = await runUsageCommand(resolveClaudeBinary(env), ["/usage"], env, 20_000);
-  return claudeSourceFromCLIOutput(output);
+  return claudeSourceFromCLIOutput(output, now);
 }
 
-export function claudeSourceFromCLIOutput(output: string): AgentUsageSource {
+export function claudeSourceFromCLIOutput(output: string, now: Date = new Date()): AgentUsageSource {
   const clean = stripANSI(output);
-  const sessionUsed = usedPercentForLabel(clean, [/current\s+session/i, /5\s*(?:h|hour).*limit/i]);
-  const weeklyUsed = usedPercentForLabel(clean, [/current\s+week\s*\(all\s+models\)/i, /weekly\s+limit/i]);
-  const windows = [
-    percentWindow("session", "Session", sessionUsed, "claude-cli"),
-    percentWindow("week", "Week", weeklyUsed, "claude-cli"),
-  ].filter((window): window is AgentUsageWindow => window !== undefined);
+  const weeklyLabels = [/current\s+week\s*\(all\s+models\)/i, /weekly\s+limit/i];
+  const weeklyUsed = usedPercentForLabel(clean, weeklyLabels);
+  const weeklyReset = resetForLabel(clean, weeklyLabels, now);
+  const weeklyWindow = percentWindow("week", "Week", weeklyUsed, "claude-cli");
+  const windows = weeklyWindow
+    ? [{ ...weeklyWindow, ...(weeklyReset ? { resetsAt: weeklyReset } : {}) }]
+    : [];
 
   if (windows.length === 0) {
     throw new Error("Claude CLI /usage returned no recognizable quota windows.");
@@ -867,6 +868,134 @@ function usedPercentFromLine(line: string): number | undefined {
   if (/\b(?:left|remaining|available)\b/.test(lowered)) return 100 - percent;
   if (/\b(?:used|spent|consumed)\b/.test(lowered)) return percent;
   return undefined;
+}
+
+function resetForLabel(text: string, labels: RegExp[], now: Date): string | undefined {
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!labels.some((label) => label.test(lines[index]))) continue;
+    const candidates = lines.slice(index, index + 14);
+    for (let offset = 0; offset < candidates.length; offset += 1) {
+      const candidate = candidates[offset];
+      if (offset > 0 && /current\s+(?:session|week)|(?:weekly|5\s*(?:h|hour))\s+limit/i.test(candidate)) break;
+      const resetText = candidate.match(/\bresets?\b\s*([^\n]+)/i)?.[1] ?? candidate;
+      const reset = claudeWeeklyResetDate(resetText, now);
+      if (reset) return reset;
+    }
+  }
+  return undefined;
+}
+
+function claudeWeeklyResetDate(text: string | undefined, now: Date): string | undefined {
+  if (!text) return undefined;
+  const isoMatch = text.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})/i)?.[0];
+  if (isoMatch) return isoDate(isoMatch);
+
+  const timeZone = text.match(/\(([A-Za-z_]+\/[A-Za-z0-9_+\-/]+)\)/)?.[1]
+    ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+    ?? "UTC";
+  const clean = text
+    .replace(/\([A-Za-z_]+\/[A-Za-z0-9_+\-/]+\)/g, "")
+    .replace(/[()]/g, " ")
+    .trim();
+  const match = clean.match(
+    /\b([A-Za-z]{3,9})\s+(\d{1,2})(?:,?\s+(\d{4}))?(?:\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?/i,
+  );
+  if (!match) return undefined;
+
+  const month = monthNumber(match[1]);
+  const day = Number(match[2]);
+  const explicitYear = match[3] ? Number(match[3]) : undefined;
+  let hour = match[4] ? Number(match[4]) : 0;
+  const minute = match[5] ? Number(match[5]) : 0;
+  const meridiem = match[6]?.toLowerCase();
+  if (!month || !Number.isInteger(day) || day < 1 || day > 31) return undefined;
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+    return undefined;
+  }
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return undefined;
+    hour = hour % 12 + (meridiem === "pm" ? 12 : 0);
+  }
+
+  if (explicitYear !== undefined) {
+    return zonedTimestamp(explicitYear, month, day, hour, minute, timeZone);
+  }
+
+  const candidates = [now.getUTCFullYear(), now.getUTCFullYear() + 1]
+    .map((year) => zonedTimestamp(year, month, day, hour, minute, timeZone))
+    .filter((value): value is string => value !== undefined)
+    .map((value) => ({ value, time: new Date(value).getTime() }))
+    .filter((candidate) => candidate.time >= now.getTime())
+    .sort((lhs, rhs) => lhs.time - rhs.time);
+  const next = candidates[0];
+  if (!next || next.time - now.getTime() > 8 * 24 * 60 * 60 * 1000) return undefined;
+  return next.value;
+}
+
+function monthNumber(value: string): number | undefined {
+  const months: Record<string, number> = {
+    jan: 1,
+    feb: 2,
+    mar: 3,
+    apr: 4,
+    may: 5,
+    jun: 6,
+    jul: 7,
+    aug: 8,
+    sep: 9,
+    oct: 10,
+    nov: 11,
+    dec: 12,
+  };
+  return months[value.slice(0, 3).toLowerCase()];
+}
+
+function zonedTimestamp(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): string | undefined {
+  const desired = Date.UTC(year, month - 1, day, hour, minute);
+  let instant = desired;
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+  } catch {
+    return undefined;
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(instant))
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, Number(part.value)]),
+    ) as Record<string, number>;
+    const observed = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute);
+    instant += desired - observed;
+  }
+
+  const finalParts = Object.fromEntries(
+    formatter.formatToParts(new Date(instant))
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)]),
+  ) as Record<string, number>;
+  if (finalParts.year !== year || finalParts.month !== month || finalParts.day !== day
+      || finalParts.hour !== hour || finalParts.minute !== minute) {
+    return undefined;
+  }
+  return isoTimestamp(new Date(instant));
 }
 
 function boundedPercent(value: number): number | undefined {

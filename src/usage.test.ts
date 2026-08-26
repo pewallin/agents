@@ -121,13 +121,14 @@ describe("Codex usage mapping", () => {
 });
 
 describe("Claude usage mapping", () => {
-  it("maps current direct CLI session and weekly usage", () => {
+  it("maps only weekly usage and its reset from the current CLI panel", () => {
     const source = claudeSourceFromCLIOutput(`
 You are currently using your subscription to power your Claude Code usage
 
 Current session: 23% used
-Current week (all models): 61% used
-`);
+Current week (all models)
+61% used (Resets Sep 1 at 11:00PM (Europe/Stockholm))
+`, new Date("2026-08-26T12:00:00Z"));
 
     expect(source).toMatchObject({
       provider: "claude",
@@ -137,20 +138,13 @@ Current week (all models): 61% used
     });
     expect(source.windows).toEqual([
       expect.objectContaining({
-        kind: "session",
-        label: "Session",
-        used: 23,
-        limit: 100,
-        remaining: 77,
-        unit: "percent",
-      }),
-      expect.objectContaining({
         kind: "week",
         label: "Week",
         used: 61,
         limit: 100,
         remaining: 39,
         unit: "percent",
+        resetsAt: "2026-09-01T21:00:00Z",
       }),
     ]);
   });
@@ -161,7 +155,21 @@ Current session: 75% left
 Current week (all models): 40% remaining
 `);
 
-    expect(source.windows.map((window) => window.used)).toEqual([25, 60]);
+    expect(source.windows.map((window) => window.used)).toEqual([60]);
+  });
+
+  it("maps a weekly reset rendered on the line after the percentage", () => {
+    const source = claudeSourceFromCLIOutput(`
+Current week (all models)
+79% left
+Sep 1 at 11:00PM (Europe/Stockholm)
+`, new Date("2026-08-26T12:00:00Z"));
+
+    expect(source.windows[0]).toMatchObject({
+      kind: "week",
+      used: 21,
+      resetsAt: "2026-09-01T21:00:00Z",
+    });
   });
 });
 
@@ -383,11 +391,11 @@ describe("usage snapshot", () => {
     const claudePath = join(dir, "claude");
     writeFileSync(claudePath, `#!/bin/sh
 test "$1" = "/usage" || exit 2
-printf 'Current session: 10%% used\\nCurrent week (all models): 20%% used\\n'
+printf 'Current session: 10%% used\\nCurrent week (all models): 20%% used (Resets Sep 1 at 11:00PM (Europe/Stockholm))\\n'
 `);
     chmodSync(claudePath, 0o755);
 
-    const now = new Date("2026-05-27T09:00:00Z");
+    const now = new Date("2026-08-26T12:00:00Z");
     try {
       const snapshot = await fetchAgentUsageSnapshot({
         now,
@@ -396,7 +404,7 @@ printf 'Current session: 10%% used\\nCurrent week (all models): 20%% used\\n'
       });
 
       expect(snapshot.schemaVersion).toBe(1);
-      expect(snapshot.generatedAt).toBe("2026-05-27T09:00:00Z");
+      expect(snapshot.generatedAt).toBe("2026-08-26T12:00:00Z");
       expect(snapshot.sources).toHaveLength(1);
       expect(snapshot.sources[0]).toMatchObject({
         provider: "claude",
@@ -404,7 +412,13 @@ printf 'Current session: 10%% used\\nCurrent week (all models): 20%% used\\n'
         status: "available",
         source: "claude-cli",
       });
-      expect(snapshot.sources[0].windows.map((window) => window.used)).toEqual([10, 20]);
+      expect(snapshot.sources[0].windows).toEqual([
+        expect.objectContaining({
+          kind: "week",
+          used: 20,
+          resetsAt: "2026-09-01T21:00:00Z",
+        }),
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
