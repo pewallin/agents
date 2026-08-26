@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { chmodSync, mkdtempSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import {
+  claudeSourceFromCLIOutput,
+  codexRPCArguments,
   codexSourceFromRPCSnapshot,
   copilotSourceFromAPIResponse,
   discoverUsageProviders,
   fetchAgentUsageSnapshot,
+  kiroSourceFromCLIOutput,
 } from "./usage.js";
 
 describe("usage provider discovery", () => {
@@ -24,7 +27,12 @@ describe("usage provider discovery", () => {
         ],
       }));
 
-      expect(discoverUsageProviders({ CODEXBAR_CONFIG_PATH: configPath })).toEqual([
+      expect(discoverUsageProviders({
+        CODEXBAR_CONFIG_PATH: configPath,
+        AGENTS_CODEX_BIN: "/missing/codex",
+        AGENTS_CLAUDE_BIN: "/missing/claude",
+        AGENTS_KIRO_BIN: "/missing/kiro-cli",
+      })).toEqual([
         { id: "codex", enabled: true },
         { id: "copilot", enabled: true, apiKey: "secret-token" },
       ]);
@@ -37,9 +45,33 @@ describe("usage provider discovery", () => {
     expect(discoverUsageProviders({ AGENTS_USAGE_PROVIDERS: "codex, claude" }).map((provider) => provider.id))
       .toEqual(["codex", "claude"]);
   });
+
+  it("discovers installed CLI quota providers independently of CodexBar toggles", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agents-usage-discovery-"));
+    try {
+      const kiroPath = join(dir, "kiro-cli");
+      const configPath = join(dir, "config.json");
+      writeFileSync(kiroPath, "#!/bin/sh\nexit 0\n");
+      writeFileSync(configPath, JSON.stringify({ providers: [{ id: "kiro", enabled: false }] }));
+      chmodSync(kiroPath, 0o755);
+
+      expect(discoverUsageProviders({
+        CODEXBAR_CONFIG_PATH: configPath,
+        AGENTS_CODEX_BIN: "/missing/codex",
+        AGENTS_CLAUDE_BIN: "/missing/claude",
+        AGENTS_KIRO_BIN: kiroPath,
+      })).toEqual([{ id: "kiro", enabled: true }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Codex usage mapping", () => {
+  it("launches the app server with Codex's current non-interactive approval policy", () => {
+    expect(codexRPCArguments()).toEqual(["-s", "read-only", "-a", "never", "app-server"]);
+  });
+
   it("maps Codex RPC primary and secondary windows to session and week quota rows", () => {
     const source = codexSourceFromRPCSnapshot({
       rateLimits: {
@@ -85,6 +117,94 @@ describe("Codex usage mapping", () => {
 
     expect(source.status).toBe("unavailable");
     expect(source.windows).toEqual([]);
+  });
+});
+
+describe("Claude usage mapping", () => {
+  it("maps current direct CLI session and weekly usage", () => {
+    const source = claudeSourceFromCLIOutput(`
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 23% used
+Current week (all models): 61% used
+`);
+
+    expect(source).toMatchObject({
+      provider: "claude",
+      providerLabel: "Claude",
+      status: "available",
+      source: "claude-cli",
+    });
+    expect(source.windows).toEqual([
+      expect.objectContaining({
+        kind: "session",
+        label: "Session",
+        used: 23,
+        limit: 100,
+        remaining: 77,
+        unit: "percent",
+      }),
+      expect.objectContaining({
+        kind: "week",
+        label: "Week",
+        used: 61,
+        limit: 100,
+        remaining: 39,
+        unit: "percent",
+      }),
+    ]);
+  });
+
+  it("normalizes legacy remaining percentages to used quota", () => {
+    const source = claudeSourceFromCLIOutput(`
+Current session: 75% left
+Current week (all models): 40% remaining
+`);
+
+    expect(source.windows.map((window) => window.used)).toEqual([25, 60]);
+  });
+});
+
+describe("Kiro usage mapping", () => {
+  it("maps current Kiro plan credits and reset date", () => {
+    const source = kiroSourceFromCLIOutput(`
+Estimated Usage | resets on 2026-09-01 | KIRO FREE
+Credits (12.50 of 50 covered in plan)
+████ 25.0%
+`, new Date("2026-08-26T12:00:00Z"));
+
+    expect(source).toMatchObject({
+      provider: "kiro",
+      providerLabel: "Kiro",
+      account: { id: "KIRO FREE", label: "KIRO FREE" },
+      status: "available",
+      source: "kiro-cli",
+    });
+    expect(source.windows).toEqual([
+      expect.objectContaining({
+        kind: "month",
+        label: "Monthly credits",
+        used: 12.5,
+        limit: 50,
+        remaining: 37.5,
+        unit: "credits",
+        resetsAt: "2026-09-01T00:00:00Z",
+      }),
+    ]);
+  });
+
+  it("keeps bonus credits as a separate window", () => {
+    const source = kiroSourceFromCLIOutput(`
+| KIRO PRO
+Monthly credits:
+(40 of 100 covered in plan)
+Bonus credits: 5/20 credits used, expires in 10 days
+`, new Date("2026-08-26T12:00:00Z"));
+
+    expect(source.windows).toEqual([
+      expect.objectContaining({ kind: "month", used: 40, limit: 100, remaining: 60 }),
+      expect.objectContaining({ kind: "bonus-credits", used: 5, limit: 20, remaining: 15 }),
+    ]);
   });
 });
 
@@ -258,24 +378,65 @@ describe("Copilot usage mapping", () => {
 });
 
 describe("usage snapshot", () => {
-  it("builds schemaVersion 1 snapshots and preserves provider-level unavailable states", async () => {
-    const now = new Date("2026-05-27T09:00:00Z");
-    const snapshot = await fetchAgentUsageSnapshot({
-      now,
-      providers: [{ id: "claude", enabled: true }],
-    });
+  it("runs the Claude CLI collector through the normalized snapshot contract", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agents-usage-claude-"));
+    const claudePath = join(dir, "claude");
+    writeFileSync(claudePath, `#!/bin/sh
+test "$1" = "/usage" || exit 2
+printf 'Current session: 10%% used\\nCurrent week (all models): 20%% used\\n'
+`);
+    chmodSync(claudePath, 0o755);
 
-    expect(snapshot.schemaVersion).toBe(1);
-    expect(snapshot.generatedAt).toBe("2026-05-27T09:00:00Z");
-    expect(snapshot.sources).toHaveLength(1);
-    expect(snapshot.sources[0]).toMatchObject({
-      provider: "claude",
-      providerLabel: "Claude",
-      status: "unavailable",
-      source: "agents usage",
-      errorMessage: "Claude quota collection is not implemented in agents yet.",
-    });
-    expect(snapshot.sources[0].windows).toEqual([]);
+    const now = new Date("2026-05-27T09:00:00Z");
+    try {
+      const snapshot = await fetchAgentUsageSnapshot({
+        now,
+        env: { AGENTS_CLAUDE_BIN: claudePath },
+        providers: [{ id: "claude", enabled: true }],
+      });
+
+      expect(snapshot.schemaVersion).toBe(1);
+      expect(snapshot.generatedAt).toBe("2026-05-27T09:00:00Z");
+      expect(snapshot.sources).toHaveLength(1);
+      expect(snapshot.sources[0]).toMatchObject({
+        provider: "claude",
+        providerLabel: "Claude",
+        status: "available",
+        source: "claude-cli",
+      });
+      expect(snapshot.sources[0].windows.map((window) => window.used)).toEqual([10, 20]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the Kiro CLI collector with the non-interactive usage command", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agents-usage-kiro-"));
+    const kiroPath = join(dir, "kiro-cli");
+    writeFileSync(kiroPath, `#!/bin/sh
+test "$1 $2 $3" = "chat --no-interactive /usage" || exit 2
+printf 'Estimated Usage | resets on 2026-09-01 | KIRO FREE\\nCredits (5 of 50 covered in plan)\\n'
+`);
+    chmodSync(kiroPath, 0o755);
+
+    try {
+      const snapshot = await fetchAgentUsageSnapshot({
+        now: new Date("2026-08-26T12:00:00Z"),
+        env: { AGENTS_KIRO_BIN: kiroPath },
+        providers: [{ id: "kiro", enabled: true }],
+      });
+
+      expect(snapshot.sources[0]).toMatchObject({
+        provider: "kiro",
+        status: "available",
+        source: "kiro-cli",
+      });
+      expect(snapshot.sources[0].windows).toEqual([
+        expect.objectContaining({ kind: "month", used: 5, limit: 50, remaining: 45 }),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("sorts providers with real usage data before unavailable providers", async () => {
@@ -284,6 +445,12 @@ describe("usage snapshot", () => {
       now,
       providers: [{ id: "claude", enabled: true }, { id: "codex", enabled: true }],
       fetchers: {
+        claude: async () => ({
+          provider: "claude",
+          providerLabel: "Claude",
+          status: "unavailable",
+          windows: [],
+        }),
         codex: async () => ({
           provider: "codex",
           providerLabel: "Codex",

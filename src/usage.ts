@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
-import { existsSync, readFileSync } from "fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { delimiter, join } from "path";
 import { createInterface } from "readline";
 
 export type AgentUsageAvailability = "available" | "unavailable" | "error";
@@ -136,9 +136,16 @@ const SUPPORTED_PROVIDERS: Record<string, UsageProviderDescriptor> = {
   codex: { id: "codex", label: "Codex" },
   claude: { id: "claude", label: "Claude" },
   copilot: { id: "copilot", label: "Copilot" },
+  kiro: { id: "kiro", label: "Kiro" },
   pi: { id: "pi", label: "Pi" },
   opencode: { id: "opencode", label: "OpenCode" },
 };
+
+const CLI_USAGE_PROVIDERS = [
+  { id: "codex", resolveBinary: resolveCodexBinary },
+  { id: "claude", resolveBinary: resolveClaudeBinary },
+  { id: "kiro", resolveBinary: resolveKiroBinary },
+] as const;
 
 export async function fetchAgentUsageSnapshot(options: UsageBuildOptions = {}): Promise<AgentUsageSnapshot> {
   const env = options.env ?? process.env;
@@ -167,11 +174,16 @@ export function discoverUsageProviders(env: NodeJS.ProcessEnv = process.env): Pr
     .filter((provider) => provider.enabled !== false)
     .filter((provider) => SUPPORTED_PROVIDERS[provider.id]);
 
-  if (codexBarProviders.length > 0) {
-    return codexBarProviders;
+  const providers = [...codexBarProviders];
+  const configuredIDs = new Set(providers.map((provider) => provider.id));
+  for (const candidate of CLI_USAGE_PROVIDERS) {
+    if (!configuredIDs.has(candidate.id) && executableExists(candidate.resolveBinary(env), env)) {
+      providers.push({ id: candidate.id, enabled: true });
+      configuredIDs.add(candidate.id);
+    }
   }
 
-  return [{ id: "codex", enabled: true }];
+  return providers.length > 0 ? providers : [{ id: "codex", enabled: true }];
 }
 
 function normalizeProviders(providers: ProviderConfig[]): ProviderConfig[] {
@@ -222,10 +234,12 @@ function defaultFetcher(provider: string): UsageFetcherFunction | undefined {
   switch (provider) {
     case "codex":
       return fetchCodexUsage;
+    case "claude":
+      return fetchClaudeUsage;
     case "copilot":
       return fetchCopilotUsage;
-    case "claude":
-      return async () => unavailableSource("claude", "Claude quota collection is not implemented in agents yet.");
+    case "kiro":
+      return fetchKiroUsage;
     case "pi":
       return async () => unavailableSource("pi", "Pi quota collection is not implemented in agents yet.");
     case "opencode":
@@ -248,6 +262,10 @@ async function fetchCodexUsage(_: ProviderConfig, env: NodeJS.ProcessEnv, now: D
   }
 }
 
+export function codexRPCArguments(): string[] {
+  return ["-s", "read-only", "-a", "never", "app-server"];
+}
+
 export function codexSourceFromRPCSnapshot(snapshot: CodexRPCSnapshot, now: Date = new Date()): AgentUsageSource {
   const primary = codexWindow("session", "Session", snapshot.rateLimits.primary ?? undefined, "codex-cli");
   const secondary = codexWindow("week", "Week", snapshot.rateLimits.secondary ?? undefined, "codex-cli");
@@ -263,6 +281,126 @@ export function codexSourceFromRPCSnapshot(snapshot: CodexRPCSnapshot, now: Date
     windows,
     source: "codex-cli",
     ...(!hasAvailableWindow ? { errorMessage: "Codex CLI RPC returned account data but no quota windows." } : {}),
+  };
+}
+
+async function fetchClaudeUsage(_: ProviderConfig, env: NodeJS.ProcessEnv): Promise<AgentUsageSource> {
+  const output = await runUsageCommand(resolveClaudeBinary(env), ["/usage"], env, 20_000);
+  return claudeSourceFromCLIOutput(output);
+}
+
+export function claudeSourceFromCLIOutput(output: string): AgentUsageSource {
+  const clean = stripANSI(output);
+  const sessionUsed = usedPercentForLabel(clean, [/current\s+session/i, /5\s*(?:h|hour).*limit/i]);
+  const weeklyUsed = usedPercentForLabel(clean, [/current\s+week\s*\(all\s+models\)/i, /weekly\s+limit/i]);
+  const windows = [
+    percentWindow("session", "Session", sessionUsed, "claude-cli"),
+    percentWindow("week", "Week", weeklyUsed, "claude-cli"),
+  ].filter((window): window is AgentUsageWindow => window !== undefined);
+
+  if (windows.length === 0) {
+    throw new Error("Claude CLI /usage returned no recognizable quota windows.");
+  }
+
+  return {
+    provider: "claude",
+    providerLabel: "Claude",
+    status: "available",
+    windows,
+    source: "claude-cli",
+  };
+}
+
+async function fetchKiroUsage(_: ProviderConfig, env: NodeJS.ProcessEnv, now: Date): Promise<AgentUsageSource> {
+  const output = await runUsageCommand(
+    resolveKiroBinary(env),
+    ["chat", "--no-interactive", "/usage"],
+    env,
+    20_000,
+  );
+  return kiroSourceFromCLIOutput(output, now);
+}
+
+export function kiroSourceFromCLIOutput(output: string, now: Date = new Date()): AgentUsageSource {
+  const clean = stripANSI(output);
+  const lowered = clean.toLowerCase();
+  if (lowered.includes("not logged in") || lowered.includes("login required") || lowered.includes("kiro-cli login")) {
+    throw new Error("Kiro CLI is not logged in. Run kiro-cli login first.");
+  }
+
+  const creditMatch = clean.match(/\((\d+(?:\.\d+)?)\s+of\s+(\d+(?:\.\d+)?)\s+covered(?:\s+in\s+plan)?\)/i);
+  const percentMatch = clean.match(/[█▓▒░]+\s*(\d+(?:\.\d+)?)\s*%/);
+  const resetsAt = kiroResetDate(clean, now);
+  const windows: AgentUsageWindow[] = [];
+
+  if (creditMatch) {
+    const used = Number(creditMatch[1]);
+    const limit = Number(creditMatch[2]);
+    if (Number.isFinite(used) && Number.isFinite(limit) && limit > 0) {
+      windows.push({
+        kind: "month",
+        label: "Monthly credits",
+        status: "available",
+        used,
+        limit,
+        remaining: Math.max(0, limit - used),
+        unit: "credits",
+        ...(resetsAt ? { resetsAt } : {}),
+        source: "kiro-cli",
+      });
+    }
+  } else if (percentMatch) {
+    const used = boundedPercent(Number(percentMatch[1]));
+    if (used !== undefined) {
+      windows.push({
+        kind: "month",
+        label: "Monthly credits",
+        status: "available",
+        used,
+        limit: 100,
+        remaining: 100 - used,
+        unit: "percent",
+        ...(resetsAt ? { resetsAt } : {}),
+        source: "kiro-cli",
+      });
+    }
+  }
+
+  const bonusMatch = clean.match(/bonus\s+credits:\s*(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/i);
+  if (bonusMatch) {
+    const used = Number(bonusMatch[1]);
+    const limit = Number(bonusMatch[2]);
+    const expiryDays = numberCapture(clean, /expires\s+in\s+(\d+)\s+days?/i);
+    const bonusReset = expiryDays === undefined
+      ? undefined
+      : isoTimestamp(new Date(now.getTime() + expiryDays * 24 * 60 * 60 * 1000));
+    if (Number.isFinite(used) && Number.isFinite(limit) && limit > 0) {
+      windows.push({
+        kind: "bonus-credits",
+        label: "Bonus credits",
+        status: "available",
+        used,
+        limit,
+        remaining: Math.max(0, limit - used),
+        unit: "credits",
+        ...(bonusReset ? { resetsAt: bonusReset } : {}),
+        source: "kiro-cli",
+      });
+    }
+  }
+
+  if (windows.length === 0) {
+    throw new Error("Kiro CLI /usage returned no recognizable credit windows.");
+  }
+
+  const plan = kiroPlanName(clean);
+  return {
+    provider: "kiro",
+    providerLabel: "Kiro",
+    ...(plan ? { account: { id: plan, label: plan } } : {}),
+    status: "available",
+    windows,
+    source: "kiro-cli",
   };
 }
 
@@ -494,7 +632,7 @@ class CodexRPCClient {
   private stderr = "";
 
   constructor(private env: NodeJS.ProcessEnv) {
-    this.child = spawn(resolveCodexBinary(this.env), ["-s", "read-only", "-a", "untrusted", "app-server"], {
+    this.child = spawn(resolveCodexBinary(this.env), codexRPCArguments(), {
       env: {
         ...this.env,
         PATH: effectivePath(this.env),
@@ -600,6 +738,93 @@ function resolveCodexBinary(env: NodeJS.ProcessEnv): string {
   return env.AGENTS_CODEX_BIN || env.CODEX_BIN || "codex";
 }
 
+function resolveClaudeBinary(env: NodeJS.ProcessEnv): string {
+  return env.AGENTS_CLAUDE_BIN || env.CLAUDE_BIN || "claude";
+}
+
+function resolveKiroBinary(env: NodeJS.ProcessEnv): string {
+  return env.AGENTS_KIRO_BIN || env.KIRO_BIN || "kiro-cli";
+}
+
+function executableExists(binary: string, env: NodeJS.ProcessEnv): boolean {
+  const candidates = binary.includes("/")
+    ? [binary]
+    : effectivePath(env).split(delimiter).filter(Boolean).map((directory) => join(directory, binary));
+  return candidates.some((candidate) => {
+    try {
+      if (!statSync(candidate).isFile()) return false;
+      accessSync(candidate, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function runUsageCommand(
+  binary: string,
+  arguments_: string[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(binary, arguments_, {
+      cwd: homedir(),
+      env: {
+        ...env,
+        PATH: effectivePath(env),
+        TERM: env.TERM || "xterm-256color",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const outputLimit = 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        reject(error);
+      } else {
+        resolve([stdout, stderr].filter(Boolean).join("\n"));
+      }
+    };
+
+    const append = (target: "stdout" | "stderr", chunk: string) => {
+      if (target === "stdout") stdout += chunk;
+      else stderr += chunk;
+      if (stdout.length + stderr.length > outputLimit) {
+        child.kill();
+        finish(new Error(`${binary} usage output exceeded 1 MiB.`));
+      }
+    };
+
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk: string) => append("stdout", chunk));
+    child.stderr.on("data", (chunk: string) => append("stderr", chunk));
+    child.on("error", (error) => finish(error));
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const detail = stripANSI([stdout, stderr].filter(Boolean).join("\n")).trim().slice(0, 1000);
+      const suffix = detail ? `: ${detail}` : "";
+      finish(new Error(`${binary} usage command exited with ${signal ?? code}${suffix}`));
+    });
+
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish(new Error(`${binary} usage command timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+    }, timeoutMs);
+  });
+}
+
 function effectivePath(env: NodeJS.ProcessEnv): string {
   const existing = env.PATH || "";
   const additions = [
@@ -609,6 +834,98 @@ function effectivePath(env: NodeJS.ProcessEnv): string {
     join(homedir(), ".npm-global", "bin"),
   ];
   return [...additions, existing].filter(Boolean).join(":");
+}
+
+function stripANSI(text: string): string {
+  return text
+    .replace(/\u001B\[[0-9;?]*[A-Za-z]/g, "")
+    .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g, "")
+    .replace(/\r/g, "");
+}
+
+function usedPercentForLabel(text: string, labels: RegExp[]): number | undefined {
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!labels.some((label) => label.test(lines[index]))) continue;
+    const candidates = lines.slice(index, index + 8);
+    for (let offset = 0; offset < candidates.length; offset += 1) {
+      const candidate = candidates[offset];
+      if (offset > 0 && /current\s+(?:session|week)|(?:weekly|5\s*(?:h|hour))\s+limit/i.test(candidate)) break;
+      const used = usedPercentFromLine(candidate);
+      if (used !== undefined) return used;
+    }
+  }
+  return undefined;
+}
+
+function usedPercentFromLine(line: string): number | undefined {
+  const match = line.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
+  if (!match) return undefined;
+  const percent = boundedPercent(Number(match[1]));
+  if (percent === undefined) return undefined;
+  const lowered = line.toLowerCase();
+  if (/\b(?:left|remaining|available)\b/.test(lowered)) return 100 - percent;
+  if (/\b(?:used|spent|consumed)\b/.test(lowered)) return percent;
+  return undefined;
+}
+
+function boundedPercent(value: number): number | undefined {
+  if (!Number.isFinite(value) || value < 0 || value > 100) return undefined;
+  return value;
+}
+
+function percentWindow(
+  kind: "session" | "week" | "month",
+  label: string,
+  used: number | undefined,
+  source: string,
+): AgentUsageWindow | undefined {
+  if (used === undefined) return undefined;
+  return {
+    kind,
+    label,
+    status: "available",
+    used,
+    limit: 100,
+    remaining: Math.max(0, 100 - used),
+    unit: "percent",
+    source,
+  };
+}
+
+function kiroPlanName(text: string): string | undefined {
+  const estimatedLine = text.split("\n").find((line) => /estimated\s+usage/i.test(line) && line.includes("|"));
+  const estimatedPlan = estimatedLine?.split("|").at(-1)?.trim();
+  if (estimatedPlan) return estimatedPlan;
+
+  const explicitPlan = text.match(/^\s*plan:\s*([^\n]+)$/im)?.[1]?.trim();
+  if (explicitPlan) return explicitPlan;
+
+  return text.match(/\|[ \t]*(KIRO[ \t]+[A-Z0-9][A-Z0-9 ]*)/i)?.[1]?.trim();
+}
+
+function kiroResetDate(text: string, now: Date): string | undefined {
+  const raw = text.match(/resets\s+on\s+(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2})/i)?.[1];
+  if (!raw) return undefined;
+  if (raw.includes("-")) return isoDate(`${raw}T00:00:00Z`);
+
+  const [month, day] = raw.split("/").map(Number);
+  if (!Number.isInteger(month) || !Number.isInteger(day)) return undefined;
+  let year = now.getUTCFullYear();
+  let candidate = new Date(Date.UTC(year, month - 1, day));
+  if (candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) return undefined;
+  if (candidate.getTime() < now.getTime()) {
+    year += 1;
+    candidate = new Date(Date.UTC(year, month - 1, day));
+  }
+  return isoTimestamp(candidate);
+}
+
+function numberCapture(text: string, pattern: RegExp): number | undefined {
+  const raw = text.match(pattern)?.[1];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
 }
 
 function recoverCodexRateLimitsFromError(error: unknown): CodexRateLimits | undefined {
