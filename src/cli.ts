@@ -157,6 +157,7 @@ const [
   implementationRuntime,
   usageMod,
   doneMod,
+  codexSessionMod,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -172,6 +173,7 @@ const [
   import("./implementation-runtime.js"),
   import("./usage.js"),
   import("./done.js"),
+  import("./codex-session.js"),
 ]);
 
 const { Command } = commander;
@@ -205,6 +207,7 @@ const {
 } = implementationRuntime;
 const { fetchAgentUsageSnapshot } = usageMod;
 const { AgentDoneError, listDoneProjection, recordDoneEvent, updateDoneProjection } = doneMod;
+const { runPaneLocalCodexSession } = codexSessionMod;
 
 const CODEX_UPDATE_PREFLIGHT_TTL_MS = 15 * 60 * 1000;
 const CODEX_UPDATE_PREFLIGHT_WAIT_MS = 10 * 60 * 1000;
@@ -962,6 +965,37 @@ sessionCommand
 const resurrect = program
   .command("resurrect")
   .description("tmux-resurrect integration helpers");
+
+program
+  .command("codex-session")
+  .description("Run Codex through a pane-local app server")
+  .requiredOption("--command <command>", "Configured Codex command")
+  .action((opts) => {
+    const paneId = process.env.TMUX_PANE?.trim();
+    if (!paneId?.startsWith("%")) {
+      console.error("codex-session requires a tmux pane");
+      process.exit(1);
+    }
+
+    try {
+      const result = runPaneLocalCodexSession({
+        command: opts.command,
+        paneId,
+        runtimeTempDir: agentsRuntimeTempDir(),
+        processId: process.pid,
+        environment: process.env,
+      });
+      if (result.signal) {
+        process.kill(process.pid, result.signal);
+        return;
+      }
+      process.exit(result.status);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Could not start pane-local Codex: ${message}`);
+      process.exit(1);
+    }
+  });
 
 resurrect
   .command("agent")

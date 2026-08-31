@@ -2,7 +2,8 @@
  * Shared shell execution wrapper used across the project.
  * All tmux and process commands go through this.
  */
-import { execSync as nodeExecSync, exec as nodeExecCb, spawnSync } from "child_process";
+import { execSync as nodeExecSync, exec as nodeExecCb, spawn, spawnSync } from "child_process";
+import { closeSync, openSync } from "fs";
 import { promisify } from "util";
 
 const nodeExecAsync = promisify(nodeExecCb);
@@ -21,6 +22,18 @@ export interface ExecFileCaptureResult {
   stderr: string;
   signal: NodeJS.Signals | null;
   error?: Error;
+}
+
+export interface ManagedBackgroundProcess {
+  readonly exitCode: number | null;
+  readonly signalCode: NodeJS.Signals | null;
+  readonly error: Error | undefined;
+  terminate(): void;
+}
+
+export interface SpawnBackgroundOptions {
+  env?: NodeJS.ProcessEnv;
+  logPath: string;
 }
 
 /** Synchronous exec — returns stdout trimmed, or "" on error. */
@@ -42,6 +55,59 @@ export function execInherit(cmd: string, args: string[]): number {
   } catch {
     return 1;
   }
+}
+
+/** Execute an interactive binary until it exits, preserving the caller's TTY. */
+export function execFileInheritUntilExit(
+  cmd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): ExecFileCaptureResult {
+  const result = spawnSync(cmd, args, {
+    env,
+    stdio: "inherit",
+  });
+  return {
+    status: result.status ?? (result.error ? 1 : 0),
+    stdout: "",
+    stderr: "",
+    signal: result.signal,
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
+/** Start a long-running child whose output is appended to a dedicated log file. */
+export function spawnBackgroundLogged(
+  cmd: string,
+  args: string[],
+  options: SpawnBackgroundOptions,
+): ManagedBackgroundProcess {
+  const logFile = openSync(options.logPath, "a");
+  const child = spawn(cmd, args, {
+    env: options.env,
+    stdio: ["ignore", logFile, logFile],
+  });
+  let spawnError: Error | undefined;
+  let logClosed = false;
+  const closeLog = () => {
+    if (logClosed) return;
+    logClosed = true;
+    try { closeSync(logFile); } catch {}
+  };
+  child.once("error", (error) => {
+    spawnError = error;
+    closeLog();
+  });
+  child.once("close", closeLog);
+
+  return {
+    get exitCode() { return child.exitCode; },
+    get signalCode() { return child.signalCode; },
+    get error() { return spawnError; },
+    terminate() {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    },
+  };
 }
 
 /** Execute a binary with captured stdio and without invoking a local shell. */
