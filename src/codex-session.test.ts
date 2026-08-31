@@ -13,20 +13,19 @@ describe("createCodexSessionLaunchPlan", () => {
       processId: 4242,
     });
 
-    expect(plan.socketPath).toBe("/tmp/agents-runtime/codex-app-server/pane-346-4242.sock");
+    expect(plan.endpointMetadataPath).toBe("/tmp/agents-runtime/codex-app-server/pane-346.json");
+    expect(plan.logPath).toBe("/tmp/agents-runtime/codex-app-server/pane-346-4242.log");
     expect(plan.server).toEqual({
       executable: "codex",
       args: [
         "app-server",
         "--listen",
-        "unix:///tmp/agents-runtime/codex-app-server/pane-346-4242.sock",
+        "ws://127.0.0.1:0",
       ],
     });
     expect(plan.tui).toEqual({
       executable: "codex",
       args: [
-        "--remote",
-        "unix:///tmp/agents-runtime/codex-app-server/pane-346-4242.sock",
         "--dangerously-bypass-approvals-and-sandbox",
         "resume",
         "thread-123",
@@ -41,17 +40,16 @@ describe("createCodexSessionLaunchPlan", () => {
     const outputPath = join(directory, "tui.json");
     writeFileSync(executable, `#!/usr/bin/env node
 const fs = require("node:fs");
-const net = require("node:net");
 const args = process.argv.slice(2);
 if (args[0] === "app-server") {
-  const socketPath = args[2].replace("unix://", "");
-  const server = net.createServer();
-  server.listen(socketPath);
-  process.on("SIGTERM", () => server.close(() => process.exit(0)));
+  process.stderr.write("  listening on: ws://127.0.0.1:43123\\n");
+  const timer = setInterval(() => {}, 1000);
+  process.on("SIGTERM", () => { clearInterval(timer); process.exit(0); });
 } else {
   fs.writeFileSync(process.env.CODEX_SESSION_TEST_OUTPUT, JSON.stringify({
     args,
     paneId: process.env.TMUX_PANE,
+    endpoint: JSON.parse(fs.readFileSync(process.env.CODEX_SESSION_TEST_METADATA_PATH, "utf8")),
   }));
 }
 `);
@@ -67,6 +65,7 @@ if (args[0] === "app-server") {
           ...process.env,
           TMUX_PANE: "%55",
           CODEX_SESSION_TEST_OUTPUT: outputPath,
+          CODEX_SESSION_TEST_METADATA_PATH: join(runtimeDirectory, "codex-app-server", "pane-55.json"),
         },
       });
 
@@ -74,13 +73,17 @@ if (args[0] === "app-server") {
       expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
         args: [
           "--remote",
-          `unix://${join(runtimeDirectory, "codex-app-server", "pane-55-101.sock")}`,
+          "ws://127.0.0.1:43123",
           "--model",
           "gpt-test",
         ],
         paneId: "%55",
+        endpoint: {
+          url: "ws://127.0.0.1:43123",
+          processId: 101,
+        },
       });
-      expect(result.socketRemoved).toBe(true);
+      expect(result.endpointMetadataRemoved).toBe(true);
     } catch (error) {
       const logPath = join(runtimeDirectory, "codex-app-server", "pane-55-101.log");
       const log = readFileSync(logPath, "utf8");

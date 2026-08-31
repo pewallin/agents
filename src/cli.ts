@@ -7,6 +7,10 @@ import type { ModelSource } from "./state.js";
 import type { AgentDoneRecordInput } from "./done.js";
 import { switchBack } from "./back.js";
 import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
+import {
+  runCodexAppServerWebSocketProxy,
+  shouldRunCodexAppServerProxy,
+} from "./codex-app-server-proxy.js";
 
 type AgentsPackageJSON = {
   version?: string;
@@ -65,6 +69,14 @@ if (process.argv.includes("--tmux")) {
 
 const args = process.argv.slice(2);
 const firstArg = args[0] || "";
+
+// codex-web launches CODEX_CLI_PATH with config flags followed by `app-server`.
+// In the pane-local configuration, agents bridges that stdio process to the
+// pane's already-running WebSocket app-server.
+if (shouldRunCodexAppServerProxy(args, process.env)) {
+  process.exit(await runCodexAppServerWebSocketProxy());
+}
+
 const muxKind = detectMultiplexer();
 
 // Fast path: `agents back` should feel instant and does not need Commander/Ink.
