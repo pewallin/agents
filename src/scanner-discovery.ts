@@ -252,7 +252,20 @@ export function findPrimaryAgentForReporterInTree(
 ): AgentLeafProcess | null {
   const primary = findPrimaryReporterOwnedAgentInTree(paneRootPid, tree);
   const reporterAgent = findNearestReporterOwnedAgentAncestor(reporterPid, tree);
-  return primary?.process?.pid === reporterAgent?.process?.pid ? primary : null;
+  if (!primary?.process || !reporterAgent?.process) return null;
+  if (primary.process.pid === reporterAgent.process.pid) return primary;
+  // One agent can be a chain of processes (Kiro: `kiro-cli` starts `kiro-cli-chat`, which runs
+  // the hooks). The reporter's agent counts when only processes of the same agent lead up to the
+  // primary one; an agent the primary started through a shell (a nested `codex exec`) does not.
+  if (reporterAgent.agentName !== primary.agentName) return null;
+  const visited = new Set<number>();
+  for (let current = tree.byPid.get(reporterAgent.process.ppid); current && !visited.has(current.pid); current = tree.byPid.get(current.ppid)) {
+    visited.add(current.pid);
+    if (current.pid === primary.process.pid) return reporterAgent;
+    // By executable only: a shell's arguments may name an agent it was asked to run.
+    if (detectAgentProcess(current.comm, "") !== primary.agentName) return null;
+  }
+  return null;
 }
 
 export function findLeafInTree(pid: number, tree: ProcessTree): string {

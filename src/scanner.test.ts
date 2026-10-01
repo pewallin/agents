@@ -156,6 +156,30 @@ describe("findAgentLeafInTree", () => {
     expect(findPrimaryAgentForReporterInTree(shell.pid, nestedReporter.pid, tree)).toBeNull();
   });
 
+  it("accepts a report from an agent's own child process (kiro-cli starts kiro-cli-chat)", () => {
+    // Kiro's shell integration puts the pane's shell on its own pty; the chain is found by pid.
+    const wrapper = { pid: 400, ppid: 1, comm: "zsh (kiro-cli-te", tty: "ttys010", cpuPercent: 0, memoryMB: 1, args: "zsh (kiro-cli-term)" };
+    const shell = { pid: 401, ppid: wrapper.pid, comm: "zsh", tty: "ttys011", cpuPercent: 0, memoryMB: 1, args: "-zsh" };
+    const launcher = { pid: 402, ppid: shell.pid, comm: "kiro-cli", tty: "ttys011", cpuPercent: 0, memoryMB: 20, args: "kiro-cli chat" };
+    const chat = { pid: 403, ppid: launcher.pid, comm: "kiro-cli-chat", tty: "ttys011", cpuPercent: 1, memoryMB: 90, args: "kiro-cli-chat chat" };
+    const hook = { pid: 404, ppid: chat.pid, comm: "bash", tty: "ttys011", cpuPercent: 0, memoryMB: 1, args: "bash report-state.sh" };
+    const reporter = { pid: 405, ppid: hook.pid, comm: "node", tty: "ttys011", cpuPercent: 0, memoryMB: 10, args: "node /repo/dist/cli.js report --agent kiro" };
+    const entries = [wrapper, shell, launcher, chat, hook, reporter];
+    const tree: ProcessTree = {
+      byPid: new Map(entries.map((entry) => [entry.pid, entry])),
+      children: new Map([
+        [wrapper.pid, [shell.pid]],
+        [shell.pid, [launcher.pid]],
+        [launcher.pid, [chat.pid]],
+        [chat.pid, [hook.pid]],
+        [hook.pid, [reporter.pid]],
+      ]),
+      byTty: new Map(),
+    };
+
+    expect(findPrimaryAgentForReporterInTree(wrapper.pid, reporter.pid, tree)?.agentName).toBe("kiro");
+  });
+
   it("skips agents launchers when the primary agent itself is a Node process", () => {
     const shell = { pid: 300, ppid: 1, comm: "zsh", tty: "ttys002", cpuPercent: 0, memoryMB: 1, args: "zsh" };
     const launcher = { pid: 301, ppid: shell.pid, comm: "node", tty: "ttys002", cpuPercent: 0, memoryMB: 20, args: "node /bin/agents resurrect agent pi" };
