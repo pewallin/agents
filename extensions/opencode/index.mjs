@@ -8,8 +8,9 @@
  * or run `agents setup` to have it configured automatically.
  */
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 const AGENTS_SHARED_HOME = process.env.AGENTS_SHARED_HOME || join(homedir(), ".agents");
@@ -22,6 +23,23 @@ const AGENTS_BIN = [
   join(homedir(), ".local", "bin", "agents"),
   "agents",
 ].find((p) => p === "agents" || existsSync(p)) || "agents";
+
+// Reports go through the shared hook library (extensions/lib/agents-hook.sh): it picks a node
+// that actually starts and logs failures to <agents home>/logs/hooks.log.
+const HOOK_LIB = (() => {
+  try {
+    return join(dirname(realpathSync(fileURLToPath(import.meta.url))), "..", "lib", "agents-hook.sh");
+  } catch {
+    return "";
+  }
+})();
+
+function agentsCommand(agent, args) {
+  if (HOOK_LIB && existsSync(HOOK_LIB)) {
+    return ["/bin/bash", ["-c", '. "$1"; shift; agents_hook_run "$@"', "agents-hook", HOOK_LIB, agent, ...args]];
+  }
+  return [AGENTS_BIN, args];
+}
 
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
@@ -174,7 +192,7 @@ function report(state, extraArgs = []) {
     const args = ["report", "--agent", "opencode", "--state", state, "--session", SESSION_ID, ...extraArgs];
     appendModelArgs(args);
     appendSessionArgs(args);
-    execFileSync(AGENTS_BIN, args, { timeout: 3000 });
+    execFileSync(...agentsCommand("opencode", args), { timeout: 3000 });
   } catch (err) {
     log(`report error: ${err.message}`);
   }
@@ -186,7 +204,7 @@ function reportSync(state) {
     const args = ["report", "--agent", "opencode", "--state", state, "--session", SESSION_ID];
     appendModelArgs(args);
     appendSessionArgs(args);
-    execFileSync(AGENTS_BIN, args, { timeout: 3000 });
+    execFileSync(...agentsCommand("opencode", args), { timeout: 3000 });
   } catch {}
 }
 

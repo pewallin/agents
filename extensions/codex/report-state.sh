@@ -100,27 +100,7 @@ if [ -z "$MODEL_ID" ] && [ -n "$MODEL" ] && [ "$MODEL" != "null" ]; then
   esac
 fi
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPO_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
-AGENTS_CMD=()
-NODE_BIN=""
-if command -v node >/dev/null 2>&1; then
-  NODE_BIN="$(command -v node)"
-elif [ -x "/opt/homebrew/bin/node" ]; then
-  NODE_BIN="/opt/homebrew/bin/node"
-elif [ -x "/usr/local/bin/node" ]; then
-  NODE_BIN="/usr/local/bin/node"
-fi
-
-if [ -n "$NODE_BIN" ] && [ -f "$REPO_DIR/dist/cli.js" ]; then
-  AGENTS_CMD=("$NODE_BIN" "$REPO_DIR/dist/cli.js")
-elif command -v agents >/dev/null 2>&1; then
-  AGENTS_CMD=("$(command -v agents)")
-elif [ -x "$HOME/.local/bin/agents" ]; then
-  AGENTS_CMD=("$HOME/.local/bin/agents")
-else
-  exit 0
-fi
+. "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/lib/agents-hook.sh"
 
 ARGS=(report --agent codex --state "$STATE" --session "$SESSION")
 if [ "$STATE" = "working" ]; then
@@ -156,4 +136,4 @@ if [ -n "$CONTEXT_MAX" ] && [ "$CONTEXT_MAX" != "null" ]; then
   ARGS+=(--context-max "$CONTEXT_MAX")
 fi
 
-"${AGENTS_CMD[@]}" "${ARGS[@]}"
+agents_hook_run codex "${ARGS[@]}"

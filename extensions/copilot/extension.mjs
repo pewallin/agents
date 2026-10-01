@@ -11,8 +11,9 @@
  * Also tracks context window usage via session.usage_info events.
  */
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { approveAll } from "@github/copilot-sdk";
 import { joinSession } from "@github/copilot-sdk/extension";
@@ -22,6 +23,23 @@ const AGENTS_BIN = [
   join(homedir(), ".local", "bin", "agents"),
   "agents",
 ].find((p) => p === "agents" || existsSync(p)) || "agents";
+
+// Reports go through the shared hook library (extensions/lib/agents-hook.sh): it picks a node
+// that actually starts and logs failures to <agents home>/logs/hooks.log.
+const HOOK_LIB = (() => {
+  try {
+    return join(dirname(realpathSync(fileURLToPath(import.meta.url))), "..", "lib", "agents-hook.sh");
+  } catch {
+    return "";
+  }
+})();
+
+function agentsCommand(agent, args) {
+  if (HOOK_LIB && existsSync(HOOK_LIB)) {
+    return ["/bin/bash", ["-c", '. "$1"; shift; agents_hook_run "$@"', "agents-hook", HOOK_LIB, agent, ...args]];
+  }
+  return [AGENTS_BIN, args];
+}
 
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
 const SESSION_ID = process.env.TMUX_PANE || "default";
@@ -58,7 +76,7 @@ function report(state, extraArgs = []) {
   if (externalSessionId) args.push("--external-session-id", String(externalSessionId));
   if (contextTokens !== undefined) args.push("--context-tokens", String(contextTokens));
   if (contextMax !== undefined) args.push("--context-max", String(contextMax));
-  execFile(AGENTS_BIN, args, (err) => {
+  execFile(...agentsCommand("copilot", args), (err) => {
     if (err) {
       console.error(`[agents-reporting] agents report failed: ${err.message}`);
     }

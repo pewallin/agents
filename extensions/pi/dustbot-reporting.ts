@@ -11,8 +11,9 @@
  */
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { appendFile, existsSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { appendFile, existsSync, readdirSync, realpathSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 // Resolve agents binary — may not be on PATH in sandboxed/pi processes.
@@ -33,6 +34,23 @@ function findAgentsBin(): string {
 }
 
 const AGENTS_BIN = findAgentsBin();
+
+// Reports go through the shared hook library (extensions/lib/agents-hook.sh): it picks a node
+// that actually starts and logs failures to <agents home>/logs/hooks.log.
+const HOOK_LIB = (() => {
+  try {
+    return join(dirname(realpathSync(fileURLToPath(import.meta.url))), "..", "lib", "agents-hook.sh");
+  } catch {
+    return "";
+  }
+})();
+
+function agentsCommand(agent: string, args: string[]): [string, string[]] {
+  if (HOOK_LIB && existsSync(HOOK_LIB)) {
+    return ["/bin/bash", ["-c", '. "$1"; shift; agents_hook_run "$@"', "agents-hook", HOOK_LIB, agent, ...args]];
+  }
+  return [AGENTS_BIN, args];
+}
 const DEBUG_LOG = process.env.AGENTS_PI_REPORT_DEBUG;
 
 // Use TMUX_PANE (%N) as session ID so each pane gets independent status
@@ -99,7 +117,7 @@ function report(state: PiState, ctx: any, detail?: string | null, metadata: Repo
   appendModel(args, ctx);
   appendSessionMetadata(args, ctx);
   debug("report", { state, detail, intent: metadata.intent, clearIntent: metadata.clearIntent, agentsBin: AGENTS_BIN, args });
-  execFile(AGENTS_BIN, args, (error) => {
+  execFile(...agentsCommand("pi", args), (error) => {
     if (error) debug("report_error", { state, detail, message: error.message });
   });
 }

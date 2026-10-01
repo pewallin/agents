@@ -3,6 +3,7 @@
 # Reads JSON from stdin with last_assistant_message field.
 # Reports "question" if the last text block contains ?, otherwise "idle".
 # Also reads context window data from statusline bridge file.
+. "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/lib/agents-hook.sh"
 
 if [ -n "$TMUX_PANE" ]; then
   SESSION="$TMUX_PANE"
@@ -85,7 +86,7 @@ if [ -n "$PROVIDER" ] || [ -n "$MODEL_ID" ] || [ -n "$MODEL_LABEL" ]; then
 fi
 
 if printf '%s' "$TAIL" | grep -Fq '?'; then
-  agents report --agent claude --state question --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"
+  agents_hook_run claude report --agent claude --state question --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"
 else
-  agents report --agent claude --state idle --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"
+  agents_hook_run claude report --agent claude --state idle --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"
 fi

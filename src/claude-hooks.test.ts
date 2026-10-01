@@ -1,5 +1,5 @@
 import { execFileSync } from "child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { fileURLToPath } from "url";
@@ -51,17 +51,20 @@ function runClaudeHook(scriptName: "state-hook.sh" | "stop-hook.sh", args: strin
   temporaryDirectories.push(directory);
 
   const argvLog = join(directory, "argv.jsonl");
-  const shimPath = join(directory, "agents");
+  // The hooks run the CLI that `agents setup` recorded (extensions/lib/agents-hook.sh).
+  const shimPath = join(directory, "cli.mjs");
   writeFileSync(
     shimPath,
     [
-      "#!/usr/bin/env node",
       "import { appendFileSync } from 'fs';",
       "appendFileSync(process.env.AGENTS_HOOK_ARGV_LOG, `${JSON.stringify(process.argv.slice(2))}\\n`);",
       "",
     ].join("\n"),
   );
-  chmodSync(shimPath, 0o755);
+  writeFileSync(
+    join(directory, "hook-runtime.env"),
+    `AGENTS_HOOK_NODE='${process.execPath}'\nAGENTS_HOOK_CLI='${shimPath}'\n`,
+  );
 
   const scriptPath = fileURLToPath(new URL(`../extensions/claude/${scriptName}`, import.meta.url));
   execFileSync("bash", [scriptPath, ...args], {
@@ -70,6 +73,7 @@ function runClaudeHook(scriptName: "state-hook.sh" | "stop-hook.sh", args: strin
       ...process.env,
       PATH: `${directory}:${process.env.PATH ?? ""}`,
       TMUX_PANE: "%fixture",
+      AGENTS_HOME: directory,
       AGENTS_HOOK_ARGV_LOG: argvLog,
     },
     stdio: ["pipe", "pipe", "pipe"],

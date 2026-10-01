@@ -192,7 +192,8 @@ const { Command } = commander;
 const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState, getAgentStateEntry } = state;
-const { setup, uninstall, autoSetupIfNeeded, doctor } = setupMod;
+const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks } = setupMod;
+const hookLogHint = () => "logs/hooks.log in the agents home";
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
 const { resumeAgentSession } = resumeMod;
@@ -1332,6 +1333,26 @@ program
       console.log(`  missing lifecycle: ${result.missingLifecycle.length ? result.missingLifecycle.join(", ") : "none"}`);
       console.log(`  missing metadata: ${result.missingMetadata.length ? result.missingMetadata.join(", ") : "none"}`);
       for (const warning of result.supplemental || []) console.log(`  warning: ${warning}`);
+    }
+
+    // The hooks above only help if a report can actually run where the agents run them.
+    const probe = probeHooks();
+    const describe = (lines: string[]) => lines.map((line) => {
+      const [status, node, ...rest] = line.split(" ");
+      return status === "ok" ? `ok (${node})` : `failed ${node}: ${rest.join(" ")}`;
+    });
+    console.log("hooks runtime");
+    console.log(`  this shell: ${describe(probe.shellEnvironment).join("; ")}`);
+    console.log(`  bare PATH: ${describe(probe.minimalEnvironment).join("; ")}`);
+    const usable = (lines: string[]) => lines.some((line) => line.startsWith("ok "));
+    if (!usable(probe.minimalEnvironment)) {
+      console.log("  warning: agents started without your shell's PATH cannot report; run `agents setup` from a working node");
+    }
+    if (probe.recentErrors.length) {
+      console.log(`  recent hook failures (${hookLogHint()}):`);
+      for (const line of probe.recentErrors) console.log(`    ${line}`);
+    } else {
+      console.log("  recent hook failures: none");
     }
   });
 

@@ -3,6 +3,7 @@
 # Reads bridge file from statusline for context window data.
 # Usage: state-hook.sh <state>
 #   state: working, idle, approval, question
+. "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/lib/agents-hook.sh"
 
 STATE="$1"
 [ -z "$STATE" ] && exit 0
@@ -75,4 +76,4 @@ if [ -n "$PROVIDER" ] || [ -n "$MODEL_ID" ] || [ -n "$MODEL_LABEL" ]; then
   MODEL_ARGS+=(--model-source hook)
 fi
 
-agents report --agent claude --state "$STATE" --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"
+agents_hook_run claude report --agent claude --state "$STATE" --session "$SESSION" "${SESSION_ARGS[@]}" "${CTX_ARGS[@]}" "${MODEL_ARGS[@]}"

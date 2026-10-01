@@ -15,8 +15,8 @@ import { createHash } from "crypto";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { execSync, spawn } from "child_process";
-import { getAgentsHome, getSetupHashPath } from "./paths.js";
+import { execFileSync, execSync, spawn } from "child_process";
+import { getAgentsHome, getLogsDir, getSetupHashPath } from "./paths.js";
 import {
   INTEGRATION_SPECS,
   LIFECYCLE_CAPABILITIES,
@@ -1250,9 +1250,76 @@ export function setup(quiet: boolean = false): SetupResult[] {
     if (!quiet) console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
   }
 
+  writeHookRuntime();
   const results = [setupClaude(), setupCodex(), setupCopilot(), setupPi(), setupOpencode(), setupKiro(), setupHermes()];
   saveSetupHash();
   return results;
+}
+
+// ── Hook runtime ────────────────────────────────────────────────────
+
+const HOOK_LIB = join(EXTENSIONS_DIR, "lib", "agents-hook.sh");
+
+export function hookRuntimePath(): string {
+  return join(getAgentsHome(), "hook-runtime.env");
+}
+
+/** Records the node this CLI runs with and its cli.js for the hook scripts. The node is only
+ *  their first choice (extensions/lib/agents-hook.sh): a removed or broken one falls back. */
+export function writeHookRuntime(): void {
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  const text = [
+    "# Written by `agents setup`; read by extensions/lib/agents-hook.sh.",
+    `AGENTS_HOOK_NODE=${quote(process.execPath)}`,
+    `AGENTS_HOOK_CLI=${quote(join(__dirname, "cli.js"))}`,
+    "",
+  ].join("\n");
+  try {
+    mkdirSync(getAgentsHome(), { recursive: true });
+    writeFileSync(hookRuntimePath(), text);
+  } catch {}
+}
+
+export interface HookRuntimeProbe {
+  /** Lines from agents_hook_probe: "ok <node> <cli>" or "fail <node> <error>". */
+  shellEnvironment: string[];
+  /** The same with a bare PATH, as agents launched from a login shell or the app may have. */
+  minimalEnvironment: string[];
+  recentErrors: string[];
+}
+
+function probeHookRuntime(env: NodeJS.ProcessEnv): string[] {
+  try {
+    const result = execFileSync("/bin/bash", ["-c", '. "$1"; agents_hook_probe', "agents-hook", HOOK_LIB], {
+      encoding: "utf-8",
+      timeout: 15000,
+      env,
+    });
+    return result.split("\n").filter(Boolean);
+  } catch (error: any) {
+    const output = String(error?.stdout ?? "").split("\n").filter(Boolean);
+    return output.length ? output : [`fail - ${error?.message ?? error}`];
+  }
+}
+
+/** Runs the hook scripts' own lookup, as hooks would, and reads their recent failures. */
+export function probeHooks(): HookRuntimeProbe {
+  const minimal: NodeJS.ProcessEnv = { HOME: homedir(), PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+  for (const key of ["AGENTS_HOME", "AGENTS_SHARED_HOME", "AGENTS_PRODUCT_DIRNAME", "AGENTS_LOG_DIR"]) {
+    if (process.env[key]) minimal[key] = process.env[key];
+  }
+  let recentErrors: string[] = [];
+  try {
+    const dayAgo = Date.now() - 86_400_000;
+    recentErrors = readFileSync(join(getLogsDir(), "hooks.log"), "utf-8").split("\n").filter(Boolean)
+      .filter((line) => Date.parse(line.split(" ")[0] ?? "") >= dayAgo)
+      .slice(-5);
+  } catch {}
+  return {
+    shellEnvironment: probeHookRuntime(process.env),
+    minimalEnvironment: probeHookRuntime(minimal),
+    recentErrors,
+  };
 }
 
 export function uninstall(): SetupResult[] {
@@ -1624,7 +1691,7 @@ function computeSetupHash(): string {
   h.update(JSON.stringify(kiroV3HookConfig()));
   h.update(JSON.stringify(hermesHooksBlock()));
   h.update("kiro-default-agent-v1");
-  for (const ext of ["codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs", "kiro/report-state.sh", "hermes/report-state.sh"]) {
+  for (const ext of ["lib/agents-hook.sh", "claude/state-hook.sh", "claude/stop-hook.sh", "claude/prompt-hook.sh", "codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs", "kiro/report-state.sh", "hermes/report-state.sh"]) {
     const p = join(EXTENSIONS_DIR, ext);
     try { h.update(readFileSync(p)); } catch {}
   }
@@ -1634,6 +1701,8 @@ function computeSetupHash(): string {
 /** Check if setup needs to run and spawn it in the background if so.
  *  Returns immediately — zero impact on CLI startup time. */
 export function autoSetupIfNeeded(): void {
+  // Tests and private homes must not rewrite the user's agent configuration.
+  if (process.env.AGENTS_NO_AUTO_SETUP === "1") return;
   try {
     const current = computeSetupHash();
     let stored = "";
