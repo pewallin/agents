@@ -576,6 +576,19 @@ export function reportContributorState(
   });
 }
 
+/** The agent left its pane (its session ended): its state goes away at once instead of
+ *  staying "idle" until the pane is scanned again. */
+export function clearPrimaryState(agent: string, session: string): void {
+  const existing = readStateFile(agent, session);
+  try {
+    unlinkSync(stateFilePath(agent, session));
+  } catch {}
+  appendRuntimeStateEvent("primary_state", "remove", agent, session, {
+    ...(existing?.externalSessionId ? { externalSessionId: existing.externalSessionId } : {}),
+    activity: true,
+  });
+}
+
 export function clearContributorState(agent: string, session: string, reporter: string): void {
   const existing = readContributorStateFile(agent, session, reporter);
   try {

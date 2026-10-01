@@ -191,7 +191,7 @@ const [
 const { Command } = commander;
 const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
-const { reportState, reportContext, reportContributorState, getAgentStateEntry } = state;
+const { reportState, reportContext, reportContributorState, clearPrimaryState, getAgentStateEntry } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks } = setupMod;
 const hookLogHint = () => "logs/hooks.log in the agents home";
 const { createWorkspace } = workspace;
@@ -1079,7 +1079,7 @@ program
   .command("report")
   .description("Report agent state (called by agent hooks)")
   .requiredOption("--agent <name>", "Agent name (claude, copilot, pi, opencode, codex, kiro, hermes)")
-  .option("--state <state>", "State: working, idle, approval, question")
+  .option("--state <state>", "State: working, idle, approval, question, exited (the agent left the pane)")
   .option("--detail <text>", "Current activity detail (tool name, filename, etc.)")
   .option("--clear-detail", "Clear any previously reported activity detail")
   .option("--intent <text>", "Current user intent/prompt summary")
@@ -1199,6 +1199,8 @@ program
         intent: opts.intent,
         clearIntent: !!opts.clearIntent,
       });
+    } else if (opts.state === "exited") {
+      clearPrimaryState(opts.agent, session);
     } else if (opts.state && opts.auxiliary) {
       reportContributorState(opts.agent, session, opts.reporter, opts.state, {
         ...(opts.detail ? { detail: opts.detail } : {}),

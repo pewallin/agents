@@ -59,7 +59,7 @@ const MAX_DETAIL_LENGTH = 60;
 const MAX_INTENT_LENGTH = 160;
 const TERMINAL_ASSISTANT_STOP_REASONS = new Set(["stop", "length"] as const);
 
-type PiState = "working" | "idle" | "question";
+type PiState = "working" | "idle" | "question" | "exited";
 type AssistantStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 interface ReportMetadata {
@@ -495,7 +495,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     lastAssistantStopReason = undefined;
     lastAssistantMessageSeen = undefined;
     clearActivity();
-    setState("idle", ctx, null, true, { clearIntent: true });
+    // The agent leaves the pane: its state goes away instead of staying idle.
+    setState("exited", ctx, null, true, { clearIntent: true });
   });
 };
 

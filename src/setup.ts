@@ -65,6 +65,10 @@ const CLAUDE_HOOKS = {
     { matcher: "permission_prompt", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} approval` }] },
     { matcher: "elicitation_dialog", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} question` }] },
   ],
+  // The agent is there from its start (not first prompt) until its process ends. Compaction
+  // restarts a session mid-work and /clear and /resume end one while Claude keeps running.
+  SessionStart: [{ matcher: "startup|resume|clear", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} idle` }] }],
+  SessionEnd: [{ matcher: "prompt_input_exit|logout|other", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} exited` }] }],
 };
 
 // Hook events from older versions that should be cleaned up on setup/uninstall
@@ -270,6 +274,20 @@ function codexHookEntries(): Record<string, any[]> {
       {
         suppressOutput: true,
         hooks: [{ type: "command", command: CODEX_STOP_SCRIPT }],
+      },
+    ],
+    // Present from start (not first prompt) until Codex closes; the script skips the
+    // SessionStart that follows a compaction mid-work.
+    SessionStart: [
+      {
+        suppressOutput: true,
+        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} started` }],
+      },
+    ],
+    SessionEnd: [
+      {
+        suppressOutput: true,
+        hooks: [{ type: "command", command: `${CODEX_REPORT_SCRIPT} exited` }],
       },
     ],
   };

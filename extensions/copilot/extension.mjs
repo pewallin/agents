@@ -125,7 +125,8 @@ const session = await joinSession({
       report("working");
     },
     onSessionEnd: async () => {
-      report("idle");
+      // The agent leaves the pane: its state goes away instead of staying idle.
+      report("exited");
     },
   },
 });

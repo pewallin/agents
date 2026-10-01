@@ -2,7 +2,7 @@
 # Claude state hook: reports agent state to agents dashboard.
 # Reads bridge file from statusline for context window data.
 # Usage: state-hook.sh <state>
-#   state: working, idle, approval, question
+#   state: working, idle, approval, question, exited (the agent left the pane)
 . "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/lib/agents-hook.sh"
 
 STATE="$1"

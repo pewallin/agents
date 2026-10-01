@@ -208,10 +208,10 @@ function reportSync(state) {
   } catch {}
 }
 
-// Ensure we report idle on shutdown regardless of how opencode exits
-process.on("exit", () => reportSync("idle"));
-process.on("SIGINT", () => { reportSync("idle"); process.exit(0); });
-process.on("SIGTERM", () => { reportSync("idle"); process.exit(0); });
+// The agent leaves the pane however opencode exits: its state goes away instead of staying idle.
+process.on("exit", () => reportSync("exited"));
+process.on("SIGINT", () => { reportSync("exited"); process.exit(0); });
+process.on("SIGTERM", () => { reportSync("exited"); process.exit(0); });
 
 /** @type {import("@opencode-ai/plugin").Plugin} */
 const plugin = async () => {

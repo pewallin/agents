@@ -1,7 +1,7 @@
 #!/bin/bash
 # Codex hook: report pane state to the agents dashboard.
 # Usage: report-state.sh <state>
-#   state: working, idle, approval, question
+#   state: working, idle, approval, question, exited (the agent left the pane), started (SessionStart)
 
 STATE="$1"
 [ -z "$STATE" ] && exit 0
@@ -15,6 +15,12 @@ else
 fi
 
 INPUT=$(cat)
+# SessionStart: present and idle from the start, except the restart after a compaction mid-work.
+if [ "$STATE" = "started" ]; then
+  SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null)
+  [ "$SOURCE" = "compact" ] && exit 0
+  STATE="idle"
+fi
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // .sessionId // .thread_id // .threadId // .agent_id // .agentId // empty' 2>/dev/null)
 MODEL=$(printf '%s' "$INPUT" | jq -r '.model // empty' 2>/dev/null)
 MODEL_ID=$(printf '%s' "$INPUT" | jq -r '.model_id // .modelId // empty' 2>/dev/null)
