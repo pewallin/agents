@@ -1144,7 +1144,10 @@ program
           .find((pane) => pane.tmuxPaneId === session)?.agent
         : undefined;
       const binding = resolveTmuxReportBinding({ ...bindingInput, liveAgent });
-      if (!binding.owned) return;
+      if (!binding.owned) {
+        reportBinding.logRejectedReport({ ...bindingInput, liveAgent });
+        return;
+      }
 
       if (binding.paneCwd) {
         wsSnapshot = { command: opts.agent, cwd: binding.paneCwd, mux: "tmux" };

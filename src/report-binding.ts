@@ -1,3 +1,7 @@
+import { appendFileSync, mkdirSync, renameSync, statSync } from "fs";
+import { join } from "path";
+import { getLogsDir } from "./paths.js";
+
 export interface TmuxReportBindingInput {
   requestedSession: string;
   reportedAgent: string;
@@ -99,4 +103,26 @@ export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxRep
     requestedSession: input.requestedSession,
     reason: "unverified-pane",
   };
+}
+
+/** A rejected report leaves no state, so it is written to the hook log with what the pane
+ *  showed; otherwise an agent that is never verified looks the same as one never reporting. */
+export function logRejectedReport(input: TmuxReportBindingInput): void {
+  try {
+    const dir = getLogsDir();
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "hooks.log");
+    try {
+      if (statSync(file).size > 262_144) renameSync(file, `${file}.1`);
+    } catch {}
+    const fields = [
+      `pane=${input.requestedSession}`,
+      `foreground=${input.foregroundAgent ?? "-"}`,
+      `live=${input.liveAgent ?? "-"}`,
+      `owner=${input.paneOwner ?? "-"}`,
+      `command=${input.commandId ?? "-"}/${input.commandContentKind ?? "-"}/${input.commandOwner ?? "-"}`,
+      `session=${input.reportedExternalSessionId ?? "-"}/${input.expectedExternalSessionId ?? "-"}`,
+    ];
+    appendFileSync(file, `${new Date().toISOString().replace(/\.\d+Z$/, "Z")} ${input.reportedAgent} rejected unverified-pane ${fields.join(" ")}\n`);
+  } catch {}
 }
