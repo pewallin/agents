@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, renameSync, statSync } from "fs";
 import { join } from "path";
 import { getLogsDir } from "./paths.js";
+import { execFileCapture } from "./shell.js";
 
 export interface TmuxReportBindingInput {
   requestedSession: string;
@@ -122,7 +123,22 @@ export function logRejectedReport(input: TmuxReportBindingInput): void {
       `owner=${input.paneOwner ?? "-"}`,
       `command=${input.commandId ?? "-"}/${input.commandContentKind ?? "-"}/${input.commandOwner ?? "-"}`,
       `session=${input.reportedExternalSessionId ?? "-"}/${input.expectedExternalSessionId ?? "-"}`,
+      ...tmuxReachability(input.requestedSession),
     ];
     appendFileSync(file, `${new Date().toISOString().replace(/\.\d+Z$/, "Z")} ${input.reportedAgent} rejected unverified-pane ${fields.join(" ")}\n`);
   } catch {}
+}
+
+/** Why the pane could not be read: whether this process reaches the pane's tmux server. */
+function tmuxReachability(pane: string): string[] {
+  if (!pane.startsWith("%")) return [];
+  const probe = execFileCapture("tmux", ["display-message", "-p", "-t", pane, "#{pane_id}"]);
+  const error = probe.error ? (probe.error as NodeJS.ErrnoException).code ?? String(probe.error) : probe.stderr;
+  const socket = (process.env.TMUX ?? "").split(",")[0];
+  return [
+    `tmux=${probe.status === 0 ? "ok" : `exit:${probe.status}:${(error || "-").replace(/\s+/g, "_").slice(0, 120)}`}`,
+    `TMUX=${socket || "unset"}`,
+    `TMUX_TMPDIR=${process.env.TMUX_TMPDIR || "unset"}`,
+    `PATH=${(process.env.PATH ?? "").slice(0, 160)}`,
+  ];
 }
