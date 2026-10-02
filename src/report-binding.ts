@@ -34,7 +34,10 @@ export function requiresTmuxReportProcessScan(input: TmuxReportBindingInput): bo
   const externalSessionConflicts = !!input.reportedExternalSessionId?.trim()
     && !!input.expectedExternalSessionId?.trim()
     && input.reportedExternalSessionId.trim() !== input.expectedExternalSessionId.trim();
-  return externalSessionConflicts || (!input.commandOwner?.trim() && !input.foregroundAgent?.trim());
+  const commandMatches = input.commandOwner === "launcher"
+    && input.commandContentKind === "agent"
+    && input.commandId?.trim().toLowerCase() === input.reportedAgent.trim().toLowerCase();
+  return externalSessionConflicts || (!commandMatches && input.foregroundAgent?.trim().toLowerCase() !== input.reportedAgent.trim().toLowerCase());
 }
 
 export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxReportBinding {
@@ -65,7 +68,6 @@ export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxRep
   }
 
   const appOwnedLiveAgentMatches = input.paneOwner === "app_owned"
-    && !input.commandOwner?.trim()
     && input.liveAgent?.trim().toLowerCase() === reportedAgent;
 
   if (appOwnedLiveAgentMatches) {
@@ -77,11 +79,10 @@ export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxRep
     };
   }
 
-  const ownerlessLiveAgentMatches = !input.paneOwner?.trim()
-    && !input.commandOwner?.trim()
-    && input.liveAgent?.trim().toLowerCase() === reportedAgent;
+  // A verified primary reporter may replace metadata left by an earlier agent.
+  const liveAgentMatches = input.liveAgent?.trim().toLowerCase() === reportedAgent;
 
-  if (ownerlessLiveAgentMatches) {
+  if (liveAgentMatches) {
     return {
       owned: true,
       requestedSession: input.requestedSession,

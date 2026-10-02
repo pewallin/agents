@@ -3,7 +3,9 @@ import { basename, join } from "path";
 import { getRuntimeTempDir } from "./paths.js";
 import { exec, execAsync, execFileCapture } from "./shell.js";
 
-const PROCESS_TREE_PS_COMMAND = "ps -eo pid=,ppid=,comm=,tty=,%cpu=,rss=,args= 2>/dev/null";
+// macOS `comm` is a truncated path (and can contain spaces). `ucomm` is the
+// executable name; keep full args separately for Node wrappers and session IDs.
+const PROCESS_TREE_PS_COMMAND = "ps -eo pid=,ppid=,ucomm=,tty=,%cpu=,rss=,args= 2>/dev/null";
 
 export interface ProcEntry {
   pid: number;
@@ -263,7 +265,10 @@ export function findPrimaryAgentForReporterInTree(
     visited.add(current.pid);
     if (current.pid === primary.process.pid) return reporterAgent;
     // By executable only: a shell's arguments may name an agent it was asked to run.
-    if (detectAgentProcess(current.comm, "") !== primary.agentName) return null;
+    const kiroTui = primary.agentName === "kiro"
+      && current.comm === "bun"
+      && /\/kiro-cli\/bun\s+.*\/kiro-cli\/tui\.js(?:\s|$)/.test(current.args);
+    if (!kiroTui && detectAgentProcess(current.comm, "") !== primary.agentName) return null;
   }
   return null;
 }

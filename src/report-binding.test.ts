@@ -2,6 +2,33 @@ import { describe, expect, it } from "vitest";
 import { requiresTmuxReportProcessScan, resolveTmuxReportBinding } from "./report-binding.js";
 
 describe("resolveTmuxReportBinding", () => {
+  it("verifies a new agent after a different agent left launcher metadata in the pane", () => {
+    const input = { requestedSession: "%63", reportedAgent: "pi", commandId: "kiro", commandContentKind: "agent", commandOwner: "launcher" };
+    expect(requiresTmuxReportProcessScan(input)).toBe(true);
+    expect(resolveTmuxReportBinding(input).owned).toBe(false);
+    expect(resolveTmuxReportBinding({ ...input, liveAgent: "pi" }).owned).toBe(true);
+  });
+
+  it("requires matching primary process evidence when replacing app-owned metadata", () => {
+    const input = {
+      requestedSession: "%63", reportedAgent: "pi", paneOwner: "app_owned",
+      commandId: "kiro", commandContentKind: "agent", commandOwner: "launcher",
+    };
+    expect(requiresTmuxReportProcessScan(input)).toBe(true);
+    expect(resolveTmuxReportBinding({ ...input, liveAgent: "kiro" }).owned).toBe(false);
+    expect(resolveTmuxReportBinding({ ...input, liveAgent: "pi" })).toMatchObject({
+      owned: true, reason: "app-owned-live-agent",
+    });
+  });
+
+  it("keeps the no-scan path for normalized matching launcher metadata", () => {
+    const input = {
+      requestedSession: "%63", reportedAgent: " Pi ", commandId: "pi ",
+      commandContentKind: "agent", commandOwner: "launcher",
+    };
+    expect(requiresTmuxReportProcessScan(input)).toBe(false);
+    expect(resolveTmuxReportBinding(input).owned).toBe(true);
+  });
   it("rejects inherited pane identity backed only by legacy agent metadata", () => {
     expect(resolveTmuxReportBinding({
       requestedSession: "%94",
