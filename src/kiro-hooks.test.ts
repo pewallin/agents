@@ -5,6 +5,7 @@ import {
   readdirSync,
   rmSync,
   unlinkSync,
+  mkdirSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -80,6 +81,8 @@ describe("Kiro hooks", () => {
     const previousSetupHashPath = process.env.AGENTS_SETUP_HASH_PATH;
     process.env.HOME = directory;
     process.env.AGENTS_SETUP_HASH_PATH = join(directory, "setup-hash");
+    // Kiro counts as installed when ~/.kiro exists; do not depend on kiro-cli on this machine.
+    mkdirSync(join(directory, ".kiro"), { recursive: true });
     vi.resetModules();
 
     try {
