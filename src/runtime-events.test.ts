@@ -2,9 +2,28 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "fs
 import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
-import { appendRuntimeStateEvent } from "./runtime-events.js";
+import { appendRuntimeFocusRequest, appendRuntimeStateEvent } from "./runtime-events.js";
 
 describe("runtime state events", () => {
+  it("records a focus request the app reads as one", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agents-runtime-events-"));
+    const eventPath = join(directory, "state-events.jsonl");
+    const previousAgentsHome = process.env.AGENTS_HOME;
+    const previousEventPath = process.env.AGENTS_RUNTIME_STATE_EVENTS_PATH;
+    process.env.AGENTS_HOME = directory;
+    process.env.AGENTS_RUNTIME_STATE_EVENTS_PATH = eventPath;
+    try {
+      appendRuntimeFocusRequest("%7");
+      const event = JSON.parse(readFileSync(eventPath, "utf8").trim());
+      expect(event).toMatchObject({ v: 1, entity: "focus", op: "request", agent: "agents", surfaceId: "%7", mux: "tmux" });
+      expect(Math.abs(event.ts - Date.now() / 1000)).toBeLessThan(5);
+    } finally {
+      restoreEnv("AGENTS_HOME", previousAgentsHome);
+      restoreEnv("AGENTS_RUNTIME_STATE_EVENTS_PATH", previousEventPath);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("rotates the append-only event log before it can grow unbounded", () => {
     const directory = mkdtempSync(join(tmpdir(), "agents-runtime-events-"));
     const eventPath = join(directory, "state-events.jsonl");

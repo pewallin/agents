@@ -100,6 +100,23 @@ export function appendRuntimeStateEvent(
   return event;
 }
 
+/** Asks Agents Next to show a pane (it watches this log). Used instead of `switch-client`
+ *  when the jump runs inside the app, whose tmux client must stay where it is. */
+export function appendRuntimeFocusRequest(surfaceId: string): void {
+  ensureAgentsDirs();
+  const event = {
+    v: 1,
+    ts: Math.floor(Date.now() / 1000),
+    entity: "focus",
+    op: "request",
+    agent: "agents",
+    ...runtimeLocatorForSurface(surfaceId),
+  };
+  const eventPath = getRuntimeStateEventsPath();
+  rotateRuntimeStateEventsIfNeeded(eventPath);
+  appendFileSync(eventPath, `${JSON.stringify(event)}\n`);
+}
+
 function rotateRuntimeStateEventsIfNeeded(eventPath: string): void {
   const maxBytes = runtimeStateEventsMaxBytes();
   if (!existsSync(eventPath)) return;

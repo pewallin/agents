@@ -4,6 +4,7 @@ import { writeFileSync } from "fs";
 import { exec } from "./shell.js";
 import { BACK_ENV } from "./back.js";
 import { detectMultiplexer, getMux } from "./multiplexer.js";
+import { appendRuntimeFocusRequest } from "./runtime-events.js";
 
 export interface SiblingPane {
   tmuxPaneId: string;
@@ -29,6 +30,12 @@ export function switchToPane(paneId: string, tmuxPaneId?: string): void {
       }
       mux.focusPane(tmuxPaneId);
     }
+    return;
+  }
+  // Inside Agents Next the current client is the app's control-mode client: switching it
+  // would take it away from the panes it shows. Ask the app to show the pane instead.
+  if (tmuxPaneId && exec(`tmux display-message -p '#{client_control_mode}'`) === "1") {
+    appendRuntimeFocusRequest(tmuxPaneId);
     return;
   }
   const current = exec(`tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`);
