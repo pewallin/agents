@@ -515,7 +515,7 @@ async function loadUiModules() {
 await initMux();
 
 // Auto-setup in background if hook config changed since last run
-autoSetupIfNeeded();
+if (!["setup", "uninstall"].includes(firstArg)) autoSetupIfNeeded();
 
 const program = new Command();
 

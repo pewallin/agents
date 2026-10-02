@@ -1731,6 +1731,7 @@ export function autoSetupIfNeeded(): void {
     const child = spawn(process.execPath, [process.argv[1], "setup", "--quiet"], {
       detached: true,
       stdio: "ignore",
+      env: { ...process.env, AGENTS_NO_AUTO_SETUP: "1" },
     });
     child.unref();
   } catch {}
