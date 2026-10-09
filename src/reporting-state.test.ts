@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   getAssistantStopReason,
   normalizeIntent,
+  responsePreview,
   shouldSettleIdleAfterAgentEnd,
 } from "../extensions/pi/dustbot-reporting";
 
@@ -16,6 +17,26 @@ describe("normalizeIntent", () => {
   it("ignores empty or non-string prompts", () => {
     expect(normalizeIntent(" \n\t ")).toBeUndefined();
     expect(normalizeIntent(undefined)).toBeUndefined();
+  });
+});
+
+describe("responsePreview", () => {
+  it("joins the text parts of an assistant message on one bounded line", () => {
+    const message = {
+      content: [
+        { type: "thinking", thinking: "hidden" },
+        { type: "text", text: "Updated the docs.\n\n  Three files changed." },
+        { type: "toolCall", name: "bash" },
+        { type: "text", text: "Anything else?" },
+      ],
+    };
+    expect(responsePreview(message)).toBe("Updated the docs. Three files changed. Anything else?");
+    expect(responsePreview({ content: [{ type: "text", text: "x".repeat(400) }] })).toHaveLength(320);
+  });
+
+  it("returns nothing for a message without text", () => {
+    expect(responsePreview({ content: [{ type: "toolCall", name: "bash" }] })).toBeUndefined();
+    expect(responsePreview(undefined)).toBeUndefined();
   });
 });
 

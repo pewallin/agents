@@ -57,6 +57,7 @@ const DEBUG_LOG = process.env.AGENTS_PI_REPORT_DEBUG;
 const SESSION_ID = process.env.TMUX_PANE || "default";
 const MAX_DETAIL_LENGTH = 60;
 const MAX_INTENT_LENGTH = 160;
+const MAX_RESPONSE_PREVIEW_LENGTH = 320;
 const TERMINAL_ASSISTANT_STOP_REASONS = new Set(["stop", "length"] as const);
 
 type PiState = "working" | "idle" | "question" | "exited";
@@ -65,6 +66,8 @@ type AssistantStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 interface ReportMetadata {
   intent?: string;
   clearIntent?: boolean;
+  responsePreview?: string;
+  clearResponsePreview?: boolean;
 }
 
 function debug(event: string, data: Record<string, unknown> = {}): void {
@@ -114,6 +117,11 @@ function report(state: PiState, ctx: any, detail?: string | null, metadata: Repo
   } else if (metadata.intent) {
     args.push("--intent", metadata.intent.slice(0, MAX_INTENT_LENGTH));
   }
+  if (metadata.clearResponsePreview) {
+    args.push("--clear-response-preview");
+  } else if (metadata.responsePreview) {
+    args.push("--response-preview", metadata.responsePreview);
+  }
   appendModel(args, ctx);
   appendSessionMetadata(args, ctx);
   debug("report", { state, detail, intent: metadata.intent, clearIntent: metadata.clearIntent, agentsBin: AGENTS_BIN, args });
@@ -122,15 +130,29 @@ function report(state: PiState, ctx: any, detail?: string | null, metadata: Repo
   });
 }
 
+function assistantText(message: any): string {
+  const content = message?.content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((c: any) => c?.type === "text" && typeof c?.text === "string" && c.text)
+    .map((c: any) => c.text)
+    .join("\n");
+}
+
+/** The beginning of an assistant message on one line, for the app's finished notification. */
+export function responsePreview(message: any): string | undefined {
+  try {
+    const text = assistantText(message).replace(/\s+/g, " ").trim();
+    return text ? text.slice(0, MAX_RESPONSE_PREVIEW_LENGTH) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Check if the last 3 non-empty lines of a message contain a question mark. */
 function endsWithQuestion(message: any): boolean {
   try {
-    const content = message?.content;
-    if (!Array.isArray(content)) return false;
-    const text = content
-      .filter((c: any) => c?.type === "text" && c?.text)
-      .map((c: any) => c.text)
-      .join("\n");
+    const text = assistantText(message);
     if (!text) return false;
     const lines = text.split("\n").filter((l: string) => l.trim());
     const tail = lines.slice(-3).join("\n");
@@ -331,10 +353,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     if (!shouldSettle) return;
     activePrompt = false;
     clearActivity();
+    const preview = responsePreview(lastAssistantMessageSeen);
+    const metadata = preview ? { responsePreview: preview } : {};
     if (lastAssistantMessageSeen && endsWithQuestion(lastAssistantMessageSeen)) {
-      setState("question", ctx, null, true);
+      setState("question", ctx, null, true, metadata);
     } else {
-      setState("idle", ctx, null, true);
+      setState("idle", ctx, null, true, metadata);
     }
   }
 
@@ -345,7 +369,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     setWorking(
       ctx,
       "starting",
-      pendingIntent ? { intent: pendingIntent } : { clearIntent: true },
+      pendingIntent
+        ? { intent: pendingIntent, clearResponsePreview: true }
+        : { clearIntent: true, clearResponsePreview: true },
       true,
     );
   });
@@ -377,10 +403,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     }
     activePrompt = false;
     clearActivity();
+    const preview = responsePreview(lastAssistantMessageSeen);
+    const metadata = preview ? { responsePreview: preview } : {};
     if (lastAssistantMessageSeen && endsWithQuestion(lastAssistantMessageSeen)) {
-      setState("question", ctx, null, true);
+      setState("question", ctx, null, true, metadata);
     } else {
-      setState("idle", ctx, null, true);
+      setState("idle", ctx, null, true, metadata);
     }
   });
 

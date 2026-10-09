@@ -58,6 +58,8 @@ STATE="idle"
 DETAIL=""
 INTENT=""
 CLEAR_DETAIL=false
+RESPONSE_PREVIEW=""
+CLEAR_RESPONSE_PREVIEW=false
 case "$EVENT" in
   agentSpawn|SessionStart)
     STATE="idle"
@@ -67,12 +69,15 @@ case "$EVENT" in
     STATE="working"
     INTENT=$(printf '%s' "$PROMPT_RAW" | awk 'NF { print; exit }')
     CLEAR_DETAIL=true
+    CLEAR_RESPONSE_PREVIEW=true
     ;;
   preToolUse|postToolUse|PreToolUse|PostToolUse)
     STATE="working"
     DETAIL="$TOOL_NAME"
     ;;
   stop|Stop)
+    RESPONSE_PREVIEW=$(printf '%s' "$ASSISTANT_RAW" | awk 'NF { gsub(/[[:space:]]+/, " "); sub(/^ /, ""); sub(/ $/, ""); printf "%s%s", separator, $0; separator=" " } END { print "" }' | cut -c1-320)
+    [ -z "$RESPONSE_PREVIEW" ] && CLEAR_RESPONSE_PREVIEW=true
     TAIL=$(printf '%s' "$ASSISTANT_RAW" | grep -v '^[[:space:]]*$' | tail -3)
     if printf '%s' "$TAIL" | grep -Fq '?'; then
       STATE="question"
@@ -99,6 +104,11 @@ elif [ -n "$DETAIL" ] && [ "$DETAIL" != "null" ]; then
   ARGS+=(--detail "$DETAIL")
 elif [ "$CLEAR_DETAIL" = true ]; then
   ARGS+=(--clear-detail)
+fi
+if [ -n "$RESPONSE_PREVIEW" ] && [ "$RESPONSE_PREVIEW" != "null" ]; then
+  ARGS+=(--response-preview "$RESPONSE_PREVIEW")
+elif [ "$CLEAR_RESPONSE_PREVIEW" = true ]; then
+  ARGS+=(--clear-response-preview)
 fi
 
 agents_hook_run kiro "${ARGS[@]}"

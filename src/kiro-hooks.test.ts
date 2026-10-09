@@ -50,6 +50,37 @@ describe("Kiro hooks", () => {
     expect(state.detail).toBeUndefined();
   });
 
+  it("reports the beginning of the final reply on Stop", () => {
+    const state = runKiroHook({
+      hook_event_name: "Stop",
+      session_id: "kiro-v3-session",
+      assistant_response: "Updated the product docs.\n\n  Three files changed.\n",
+    });
+
+    expect(state.state).toBe("idle");
+    expect(state.responsePreview).toBe("Updated the product docs. Three files changed.");
+  });
+
+  it("reports a question with its reply preview on Stop", () => {
+    const state = runKiroHook({
+      hook_event_name: "stop",
+      assistant_response: [{ type: "text", data: "Two options remain.\nShould I merge them?" }],
+    });
+
+    expect(state.state).toBe("question");
+    expect(state.detail).toBe("Two options remain.");
+    expect(state.responsePreview).toBe("Two options remain. Should I merge them?");
+  });
+
+  it("clears the previous reply preview when a new prompt starts", () => {
+    const directory = temporaryDirectory("agents-kiro-preview-clear-test-");
+    runKiroHook({ hook_event_name: "Stop", assistant_response: "Done." }, directory);
+    const state = runKiroHook({ hook_event_name: "UserPromptSubmit", prompt: "Next task" }, directory);
+
+    expect(state.state).toBe("working");
+    expect(state.responsePreview).toBeUndefined();
+  });
+
   it("ignores v3 compatibility events emitted through the v2 agent hook", () => {
     const directory = temporaryDirectory("agents-kiro-v2-compat-test-");
     const stateDirectory = join(directory, "state");
@@ -132,6 +163,25 @@ describe("Kiro hooks", () => {
     }
   });
 });
+
+function runKiroHook(payload: unknown, directory = temporaryDirectory("agents-kiro-hook-test-")): Record<string, unknown> {
+  const stateDirectory = join(directory, "state");
+  const scriptPath = fileURLToPath(new URL("../extensions/kiro/report-state.sh", import.meta.url));
+
+  execFileSync("bash", [scriptPath], {
+    input: JSON.stringify(payload),
+    env: {
+      ...process.env,
+      AGENTS_STATE_DIR: stateDirectory,
+      AGENTS_RUNTIME_STATE_EVENTS_PATH: join(directory, "runtime-events.jsonl"),
+      TMUX: "",
+      TMUX_PANE: "%98",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  return JSON.parse(readFileSync(join(stateDirectory, readdirSync(stateDirectory)[0]), "utf-8"));
+}
 
 function temporaryDirectory(prefix: string): string {
   const directory = mkdtempSync(join(tmpdir(), prefix));
