@@ -1,4 +1,4 @@
-import { mkdirSync } from "fs";
+import { mkdirSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -43,7 +43,9 @@ export function getManagedCliRoot(): string {
  *  tried out. It must not point the user's hooks at itself on its own. */
 export function isUninstalledBinary(): boolean {
   if (!isCompiledBinary()) return false;
-  return !process.execPath.startsWith(getManagedCliRoot() + "/");
+  // execPath is a real path; the root may be reached through a symlink (/tmp on macOS).
+  const real = (path: string) => { try { return realpathSync(path); } catch { return path; } };
+  return !real(process.execPath).startsWith(real(getManagedCliRoot()) + "/");
 }
 
 /** How to start this CLI again: [binary] when compiled, [node, cli.js] otherwise; empty when
