@@ -16,7 +16,7 @@ import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execFileSync, execSync, spawn } from "child_process";
-import { getAgentsHome, getLogsDir, getResourceRoot, getSelfArgv, getSetupHashPath, isCompiledBinary } from "./paths.js";
+import { getAgentsHome, getLogsDir, getResourceRoot, getSelfArgv, getSetupHashPath, isCompiledBinary, isUninstalledBinary } from "./paths.js";
 import {
   INTEGRATION_SPECS,
   LIFECYCLE_CAPABILITIES,
@@ -1736,6 +1736,8 @@ function computeSetupHash(): string {
 export function autoSetupIfNeeded(): void {
   // Tests and private homes must not rewrite the user's agent configuration.
   if (process.env.AGENTS_NO_AUTO_SETUP === "1") return;
+  // Nor may a binary that is only being tried out; `agents setup` from it still works.
+  if (isUninstalledBinary()) return;
   try {
     const current = computeSetupHash();
     let stored = "";

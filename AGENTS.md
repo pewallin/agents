@@ -113,7 +113,8 @@ through `getResourceRoot()` in `paths.ts` (extensions/, the zellij bridge plugin
 that starts this CLI again goes through `getSelfArgv()` (never `process.argv[1]`, which is a
 virtual path in the binary). Ship the whole `dist-bin/<platform>/` directory, not just the
 executable: `agents setup` points hooks at its `extensions/`, and `hook-runtime.env` records
-the binary as `AGENTS_HOOK_BIN`.
+the binary as `AGENTS_HOOK_BIN`. A binary outside `~/.agents/agents-cli/` (the app's install
+location) never runs auto-setup, so trying out a fresh build leaves the user's hooks alone.
 
 Test files: `src/*.test.ts` (excluded from tsc output via tsconfig.json).
 - `grid.test.ts` — layout computation, geometry, tiling, contiguity (22 tests)

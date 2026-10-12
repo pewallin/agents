@@ -34,6 +34,18 @@ export function getResourceRoot(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..");
 }
 
+/** Where the app installs compiled binaries (<shared home>/agents-cli/versions/<commit>/agents). */
+export function getManagedCliRoot(): string {
+  return process.env.AGENTS_MANAGED_CLI_ROOT || join(resolveSharedAgentsHome(), "agents-cli");
+}
+
+/** A compiled binary outside the app's install location, e.g. a fresh dist-bin/ build being
+ *  tried out. It must not point the user's hooks at itself on its own. */
+export function isUninstalledBinary(): boolean {
+  if (!isCompiledBinary()) return false;
+  return !process.execPath.startsWith(getManagedCliRoot() + "/");
+}
+
 /** How to start this CLI again: [binary] when compiled, [node, cli.js] otherwise; empty when
  *  the script is unknown. */
 export function getSelfArgv(): string[] {
