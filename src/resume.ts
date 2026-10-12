@@ -208,8 +208,24 @@ function promptArgsForAgent(agent: string, prompt?: string): string[] {
   }
 }
 
-export function renderResumeRespawnCommand(argv: string[]): string {
-  const command = renderShellCommand(argv);
+export interface ResumeRespawnOptions {
+  /** How to run this CLI again, e.g. [node, cli.js]. With it Codex is started through `codex-session`. */
+  agentsArgv?: string[];
+}
+
+function isCodexExecutable(executable?: string): boolean {
+  return (executable || "").split("/").pop()?.toLowerCase() === "codex";
+}
+
+/**
+ * Codex is started through `codex-session`, which gives the pane its own app-server: without
+ * one Codex Web has nothing to connect to in a pane whose session was resumed.
+ */
+export function renderResumeRespawnCommand(argv: string[], options: ResumeRespawnOptions = {}): string {
+  const agentCommand = renderShellCommand(argv);
+  const command = options.agentsArgv?.length && isCodexExecutable(argv[0])
+    ? renderShellCommand([...options.agentsArgv, "codex-session", "--command", agentCommand])
+    : agentCommand;
   return [
     `agents_prepend_path_dir() { [ -d "$1" ] || return 0; case ":$PATH:" in *":$1:"*) ;; *) PATH="$1\${PATH:+:$PATH}" ;; esac; }`,
     `agents_prepend_path_dir /opt/homebrew/bin`,
@@ -272,6 +288,12 @@ export function resolveResumePane(
 
   if (!fallbackAgent?.trim()) return undefined;
   return fallbackAgentPaneFromTmuxDisplay(paneFilter, fallbackAgent, tmuxPaneLookup);
+}
+
+/** This CLI as it was started, so the respawned pane runs the same one. */
+function currentAgentsArgv(): string[] | undefined {
+  const script = process.argv[1];
+  return script ? [process.execPath, script] : undefined;
 }
 
 export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSessionResumeResult {
@@ -341,7 +363,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     || stateWorkspaceCwd(pane.agent, pane.tmuxPaneId, snapshot)
     || (pane.cwd ? normalizeHistoryCwd(pane.cwd) : process.cwd());
   const command = renderShellCommand(invocation.argv);
-  const respawnCommand = renderResumeRespawnCommand(invocation.argv);
+  const respawnCommand = renderResumeRespawnCommand(invocation.argv, { agentsArgv: currentAgentsArgv() });
 
   try {
     if (target.targetKind === "new-session") {

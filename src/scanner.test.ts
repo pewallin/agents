@@ -1179,6 +1179,23 @@ describe("resume helpers", () => {
     expect(command).toContain("exec codex resume thread-123");
   });
 
+  it("resumes Codex through codex-session so the pane gets its own app-server", () => {
+    const agentsArgv = ["/opt/node/bin/node", "/agents/dist/cli.js"];
+    const command = renderResumeRespawnCommand(
+      ["codex", "--dangerously-bypass-approvals-and-sandbox", "resume", "thread-123"],
+      { agentsArgv },
+    );
+
+    expect(command).toContain(
+      "exec /opt/node/bin/node /agents/dist/cli.js codex-session --command 'codex --dangerously-bypass-approvals-and-sandbox resume thread-123'",
+    );
+    // Other agents, and a caller that cannot name this CLI, start as before.
+    expect(renderResumeRespawnCommand(["claude", "--resume", "session-1"], { agentsArgv }))
+      .toContain("exec claude --resume session-1");
+    expect(renderResumeRespawnCommand(["codex", "resume", "thread-123"], {}))
+      .toContain("exec codex resume thread-123");
+  });
+
   it("seeds resumed sessions as idle so stale working state cannot cross respawn boundaries", () => {
     expect(resumeStateSeedForTarget(
       { target: "thread-123", targetKind: "session-id" },
