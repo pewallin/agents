@@ -23,6 +23,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:binary": "npx --yes bun@1.4.2 scripts/build-binary.ts",
     "dev": "tsc --watch",
     "dev:watch": "vite-node -w ./src/cli.ts watch",
     "test": "vitest run",

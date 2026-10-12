@@ -10,14 +10,12 @@ import { exec, execAsync, execInherit } from "./shell.js";
 import type { Multiplexer, MuxPaneInfo } from "./multiplexer.js";
 import { writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { join } from "path";
+import { getResourceRoot } from "./paths.js";
 
 // Path to the bridge plugin WASM — shipped alongside the npm package.
 // After rebuilding the plugin, restart the zellij session to reload.
-const PLUGIN_WASM = join(__dirname, "..", "bridge-plugin", "target", "wasm32-wasip1", "release", "agents-bridge.wasm");
+const PLUGIN_WASM = join(getResourceRoot(), "bridge-plugin", "target", "wasm32-wasip1", "release", "agents-bridge.wasm");
 
 /** Send a command to the bridge plugin via pipe and get JSON response. */
 function pluginCmd(name: string, payload: string = "", args?: Record<string, string>): string {

@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import type { ModelSource } from "./state.js";
 import type { AgentDoneRecordInput } from "./done.js";
 import { switchBack } from "./back.js";
+import { getBuildInfo, getSelfArgv } from "./paths.js";
 import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
 import {
   runCodexAppServerWebSocketProxy,
@@ -55,6 +56,11 @@ function readGitRevision(packageRoot: string | undefined): string | undefined {
 }
 
 function agentsVersion(): string {
+  const build = getBuildInfo();
+  if (build) {
+    if (!build.gitCommit) return build.version;
+    return `${build.version}+${build.gitCommit.slice(0, 12)}${build.dirty ? "-dirty" : ""}`;
+  }
   const packageRoot = findPackageRoot();
   const version = readPackageVersion(packageRoot);
   const revision = readGitRevision(packageRoot);
@@ -100,7 +106,7 @@ if (!insideMux) {
       process.exit(1);
     }
     // Attach to existing 'agents' session or create a new one
-    const fullCmd = [process.argv[0], process.argv[1], ...args].map(a => JSON.stringify(a)).join(" ");
+    const fullCmd = [...getSelfArgv(), ...args].map(a => JSON.stringify(a)).join(" ");
     // Inline script that applies agents styling — used as a session-level
     // hook so it runs AFTER any global hooks (like user theme scripts).
     const styleScript = [
@@ -192,7 +198,7 @@ const { Command } = commander;
 const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState, clearPrimaryState, getAgentStateEntry } = state;
-const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks } = setupMod;
+const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks, shadowingAgentsOnPath } = setupMod;
 const hookLogHint = () => "logs/hooks.log in the agents home";
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
@@ -1352,6 +1358,10 @@ program
     const usable = (lines: string[]) => lines.some((line) => line.startsWith("ok "));
     if (!usable(probe.minimalEnvironment)) {
       console.log("  warning: agents started without your shell's PATH cannot report; run `agents setup` from a working node");
+    }
+    const shadowing = shadowingAgentsOnPath(agentsVersion());
+    if (shadowing) {
+      console.log(`  warning: \`agents\` on PATH is ${shadowing.path} (${shadowing.version}), not this CLI (${agentsVersion()})`);
     }
     if (probe.recentErrors.length) {
       console.log(`  recent hook failures (${hookLogHint()}):`);

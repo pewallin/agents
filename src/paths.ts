@@ -1,6 +1,45 @@
 import { mkdirSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+
+/** Set by scripts/build-binary.ts when the CLI is compiled to a single executable. */
+declare const AGENTS_BUILD_INFO: string | undefined;
+
+export interface AgentsBuildInfo {
+  version: string;
+  gitCommit: string;
+  /** src/, extensions/ or package files had uncommitted changes when it was built. */
+  dirty: boolean;
+  target: string;
+  builtAt: string;
+}
+
+/** Build metadata of a compiled binary; undefined when running from dist/ or src/. */
+export function getBuildInfo(): AgentsBuildInfo | undefined {
+  if (typeof AGENTS_BUILD_INFO === "undefined" || !AGENTS_BUILD_INFO) return undefined;
+  return JSON.parse(AGENTS_BUILD_INFO) as AgentsBuildInfo;
+}
+
+export function isCompiledBinary(): boolean {
+  return getBuildInfo() !== undefined;
+}
+
+/** The directory that holds extensions/ and the other files shipped beside the code: the repo
+ *  root when running from dist/ or src/, the executable's directory for a compiled binary (its
+ *  code lives in Bun's virtual file system, so import.meta.url does not point at real files). */
+export function getResourceRoot(): string {
+  if (process.env.AGENTS_RESOURCE_ROOT) return process.env.AGENTS_RESOURCE_ROOT;
+  if (isCompiledBinary()) return dirname(process.execPath);
+  return join(dirname(fileURLToPath(import.meta.url)), "..");
+}
+
+/** How to start this CLI again: [binary] when compiled, [node, cli.js] otherwise; empty when
+ *  the script is unknown. */
+export function getSelfArgv(): string[] {
+  if (isCompiledBinary()) return [process.execPath];
+  return process.argv[1] ? [process.execPath, process.argv[1]] : [];
+}
 
 const DEFAULT_SHARED_FOLDER = ".agents";
 const DEFAULT_PRODUCT_DIRNAME = "agents-app";

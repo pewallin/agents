@@ -43,7 +43,7 @@ function fixture(recordedNode: "broken" | "missing" | "working", cliExit = 0) {
   });
   const reports = () => existsSync(argvLog) ? readFileSync(argvLog, "utf-8").trim().split("\n").filter(Boolean) : [];
   const log = () => { try { return readFileSync(join(directory, "logs", "hooks.log"), "utf-8"); } catch { return ""; } };
-  return { run, reports, log };
+  return { run, reports, log, directory };
 }
 
 describe("hook runtime", () => {
@@ -67,4 +67,31 @@ describe("hook runtime", () => {
     expect(reports()).toHaveLength(1);
     expect(log()).toMatch(/kiro exit=1 /);
   });
+
+  it("runs a recorded compiled binary without node", () => {
+    const { run, reports, log, directory, bin } = binaryFixture(0);
+    writeFileSync(join(directory, "hook-runtime.env"), `AGENTS_HOOK_BIN='${bin}'\n`);
+    run("report", "--state", "working");
+    expect(reports()).toEqual([JSON.stringify(["binary", "report", "--state", "working"])]);
+    expect(log()).toBe("");
+  });
+
+  it("falls back to node when the recorded binary cannot start", () => {
+    const { run, reports, log, directory, bin } = binaryFixture(134);
+    writeFileSync(join(directory, "hook-runtime.env"), `AGENTS_HOOK_BIN='${bin}'\nAGENTS_HOOK_CLI='${join(directory, "cli.mjs")}'\n`);
+    run("report", "--state", "idle");
+    expect(reports()).toEqual([JSON.stringify(["report", "--state", "idle"])]);
+    expect(log()).toMatch(/kiro exit=134 /);
+  });
 });
+
+/** The fixture above plus a stand-in compiled binary that logs its argv and exits `binaryExit`. */
+function binaryFixture(binaryExit: number) {
+  const base = fixture("working");
+  const directory = base.directory;
+  const bin = join(directory, "agents-binary");
+  writeFileSync(bin, `#!/bin/sh\n[ ${binaryExit} -eq 0 ] && printf '%s\\n' "$(${JSON.stringify(process.execPath)} -e 'console.log(JSON.stringify(["binary", ...process.argv.slice(1)]))' "$@")" >> "$AGENTS_HOOK_ARGV_LOG"\nexit ${binaryExit}\n`);
+  chmodSync(bin, 0o755);
+  return { ...base, bin };
+}
+

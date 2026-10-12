@@ -16,7 +16,7 @@ import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execFileSync, execSync, spawn } from "child_process";
-import { getAgentsHome, getLogsDir, getSetupHashPath } from "./paths.js";
+import { getAgentsHome, getLogsDir, getResourceRoot, getSelfArgv, getSetupHashPath, isCompiledBinary } from "./paths.js";
 import {
   INTEGRATION_SPECS,
   LIFECYCLE_CAPABILITIES,
@@ -28,9 +28,8 @@ import {
 } from "./integrations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// extensions/ lives next to src/ in the repo root
-const REPO_ROOT = join(__dirname, "..");
-const EXTENSIONS_DIR = join(REPO_ROOT, "extensions");
+// extensions/ lives in the repo root, or beside a compiled binary
+const EXTENSIONS_DIR = join(getResourceRoot(), "extensions");
 
 export interface SetupResult {
   agent: string;
@@ -1261,9 +1260,9 @@ function uninstallHermes(): SetupResult {
 // ── Public API ──────────────────────────────────────────────────────
 
 export function setup(quiet: boolean = false): SetupResult[] {
-  // Verify agents CLI is available
+  // Verify agents CLI is available (a compiled binary is run by path, see writeHookRuntime)
   try {
-    execSync("which agents", { encoding: "utf-8", timeout: 3000 });
+    if (!isCompiledBinary()) execSync("which agents", { encoding: "utf-8", timeout: 3000 });
   } catch {
     if (!quiet) console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
   }
@@ -1282,24 +1281,40 @@ export function hookRuntimePath(): string {
   return join(getAgentsHome(), "hook-runtime.env");
 }
 
-/** Records the node this CLI runs with and its cli.js for the hook scripts. The node is only
- *  their first choice (extensions/lib/agents-hook.sh): a removed or broken one falls back. */
-export function writeHookRuntime(): void {
+/** Records how the hook scripts run this CLI (extensions/lib/agents-hook.sh): a compiled binary
+ *  directly, otherwise the node this CLI runs with and its cli.js. The node is only their first
+ *  choice: a removed or broken one falls back. */
+export function hookRuntimeText(): string {
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-  const text = [
-    "# Written by `agents setup`; read by extensions/lib/agents-hook.sh.",
-    `AGENTS_HOOK_NODE=${quote(process.execPath)}`,
-    `AGENTS_HOOK_CLI=${quote(join(__dirname, "cli.js"))}`,
-    "",
-  ].join("\n");
+  const lines = isCompiledBinary()
+    ? [`AGENTS_HOOK_BIN=${quote(process.execPath)}`]
+    : [`AGENTS_HOOK_NODE=${quote(process.execPath)}`, `AGENTS_HOOK_CLI=${quote(join(__dirname, "cli.js"))}`];
+  return ["# Written by `agents setup`; read by extensions/lib/agents-hook.sh.", ...lines, ""].join("\n");
+}
+
+export function writeHookRuntime(): void {
+  const text = hookRuntimeText();
   try {
     mkdirSync(getAgentsHome(), { recursive: true });
     writeFileSync(hookRuntimePath(), text);
   } catch {}
 }
 
+/** The `agents` a shell would run when it is another version than this CLI, e.g. an old
+ *  `npm link` ahead of the app's install on PATH; undefined when it matches or there is none. */
+export function shadowingAgentsOnPath(ownVersion: string): { path: string; version: string } | undefined {
+  try {
+    const path = execFileSync("/bin/sh", ["-c", "command -v agents"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    if (!path) return undefined;
+    const version = execFileSync(path, ["--version"], { encoding: "utf-8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return version === ownVersion ? undefined : { path, version };
+  } catch {
+    return undefined;
+  }
+}
+
 export interface HookRuntimeProbe {
-  /** Lines from agents_hook_probe: "ok <node> <cli>" or "fail <node> <error>". */
+  /** Lines from agents_hook_probe: "ok <binary>", "ok <node> <cli>" or "fail <node> <error>". */
   shellEnvironment: string[];
   /** The same with a bare PATH, as agents launched from a login shell or the app may have. */
   minimalEnvironment: string[];
@@ -1728,7 +1743,9 @@ export function autoSetupIfNeeded(): void {
     if (current === stored) return;
 
     // Spawn detached so it doesn't block the CLI
-    const child = spawn(process.execPath, [process.argv[1], "setup", "--quiet"], {
+    const [command, ...commandArgs] = getSelfArgv();
+    if (!command) return;
+    const child = spawn(command, [...commandArgs, "setup", "--quiet"], {
       detached: true,
       stdio: "ignore",
       env: { ...process.env, AGENTS_NO_AUTO_SETUP: "1" },

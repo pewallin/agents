@@ -6,6 +6,7 @@ import { resolveProfile, type LaunchProfile } from "./config.js";
 import { splitCommandArgv } from "./workspace.js";
 import { execFileCapture } from "./shell.js";
 import { setTmuxPaneCommandMetadata } from "./tmux-pane-metadata.js";
+import { getSelfArgv } from "./paths.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
 
@@ -290,12 +291,6 @@ export function resolveResumePane(
   return fallbackAgentPaneFromTmuxDisplay(paneFilter, fallbackAgent, tmuxPaneLookup);
 }
 
-/** This CLI as it was started, so the respawned pane runs the same one. */
-function currentAgentsArgv(): string[] | undefined {
-  const script = process.argv[1];
-  return script ? [process.execPath, script] : undefined;
-}
-
 export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSessionResumeResult {
   const pane = resolveResumePane(options.pane, scan(), options.agent);
   if (!pane) {
@@ -363,7 +358,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     || stateWorkspaceCwd(pane.agent, pane.tmuxPaneId, snapshot)
     || (pane.cwd ? normalizeHistoryCwd(pane.cwd) : process.cwd());
   const command = renderShellCommand(invocation.argv);
-  const respawnCommand = renderResumeRespawnCommand(invocation.argv, { agentsArgv: currentAgentsArgv() });
+  const respawnCommand = renderResumeRespawnCommand(invocation.argv, { agentsArgv: getSelfArgv() });
 
   try {
     if (target.targetKind === "new-session") {

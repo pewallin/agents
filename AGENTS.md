@@ -104,7 +104,16 @@ npm run build        # tsc → dist/
 npm run test         # vitest run (58 tests)
 npm run dev          # tsc --watch
 npm run dev:watch    # vite-node hot reload for watch mode
+npm run build:binary # single executable via Bun → dist-bin/<platform>/ (--target all for every platform)
 ```
+
+The compiled binary (`scripts/build-binary.ts`) runs without node or node_modules. Its code
+lives in Bun's virtual file system, so anything that needs real files beside the code goes
+through `getResourceRoot()` in `paths.ts` (extensions/, the zellij bridge plugin), and anything
+that starts this CLI again goes through `getSelfArgv()` (never `process.argv[1]`, which is a
+virtual path in the binary). Ship the whole `dist-bin/<platform>/` directory, not just the
+executable: `agents setup` points hooks at its `extensions/`, and `hook-runtime.env` records
+the binary as `AGENTS_HOOK_BIN`.
 
 Test files: `src/*.test.ts` (excluded from tsc output via tsconfig.json).
 - `grid.test.ts` — layout computation, geometry, tiling, contiguity (22 tests)

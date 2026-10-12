@@ -4,8 +4,9 @@
 # without nvm, or a node that cannot start (for example Homebrew's node after a missing
 # library). So the CLI is not found through PATH alone and failures are not thrown away:
 #
-#   - `agents setup` records the node it ran with and its cli.js in hook-runtime.env. That
-#     node is only the first choice: if it is gone (a removed nvm version) or crashes, the
+#   - `agents setup` records how to run the CLI in hook-runtime.env: a compiled binary
+#     (AGENTS_HOOK_BIN), or the node it ran with and its cli.js. The binary needs no node.
+#     The node is only the first choice: if it is gone (a removed nvm version) or crashes, the
 #     next candidate is tried (PATH, nvm's newest install, Homebrew, /usr/local).
 #   - stdout is discarded (some agents add hook output to the conversation); stderr and the
 #     exit code of a failed report go to <agents home>/logs/hooks.log.
@@ -58,6 +59,17 @@ agents_hook_cli_path() {
   [ -f "$repo_dir/dist/cli.js" ] && printf '%s\n' "$repo_dir/dist/cli.js"
 }
 
+# A compiled CLI shipped beside these extensions (<root>/agents next to <root>/extensions).
+agents_hook_bin_path() {
+  if [ -n "${AGENTS_HOOK_BIN:-}" ] && [ -x "$AGENTS_HOOK_BIN" ]; then
+    printf '%s\n' "$AGENTS_HOOK_BIN"
+    return 0
+  fi
+  local root_dir
+  root_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+  [ -f "$root_dir/agents" ] && [ -x "$root_dir/agents" ] && printf '%s\n' "$root_dir/agents"
+}
+
 # A failure that says nothing about the report itself: the program could not run.
 agents_hook_could_not_run() {
   [ "$1" -eq 126 ] || [ "$1" -eq 127 ] || [ "$1" -ge 128 ]
@@ -74,12 +86,21 @@ agents_hook_extend_path() {
 
 # agents_hook_run <agent> <agents CLI arguments...>
 agents_hook_run() {
-  local agent="$1" runtime cli node err status tried=0
+  local agent="$1" runtime bin cli node err status tried=0
   shift
   agents_hook_extend_path
   runtime="$(agents_hook_home)/hook-runtime.env"
   # shellcheck disable=SC1090
   [ -r "$runtime" ] && . "$runtime"
+  bin="$(agents_hook_bin_path)"
+  if [ -n "$bin" ]; then
+    tried=1
+    err="$("$bin" "$@" 2>&1 >/dev/null)"
+    status=$?
+    [ "$status" -eq 0 ] && return 0
+    agents_hook_log "$agent" "$status" "$bin" "$err"
+    agents_hook_could_not_run "$status" || return 0
+  fi
   cli="$(agents_hook_cli_path)"
   if [ -n "$cli" ]; then
     while IFS= read -r node; do
@@ -108,11 +129,19 @@ agents_hook_run() {
 # Checks what a report would run, for `agents doctor`: one line per node tried,
 # "ok <node> <cli>" or "fail <node> <first line of the error>". Exits 0 when one starts.
 agents_hook_probe() {
-  local runtime cli node err
+  local runtime bin cli node err
   agents_hook_extend_path
   runtime="$(agents_hook_home)/hook-runtime.env"
   # shellcheck disable=SC1090
   [ -r "$runtime" ] && . "$runtime"
+  bin="$(agents_hook_bin_path)"
+  if [ -n "$bin" ]; then
+    if err="$("$bin" --version 2>&1)"; then
+      printf 'ok %s\n' "$bin"
+      return 0
+    fi
+    printf 'fail %s %s\n' "$bin" "$(printf '%s' "$err" | head -n 1 | cut -c1-200)"
+  fi
   cli="$(agents_hook_cli_path)"
   if [ -z "$cli" ]; then
     printf 'fail - no cli.js (run agents setup)\n'
