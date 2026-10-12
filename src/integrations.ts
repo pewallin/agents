@@ -69,7 +69,7 @@ export const INTEGRATION_SPECS: AgentIntegrationSpec[] = [
   {
     agent: "codex",
     installMethod: "config-hooks",
-    configuredEvents: ["UserPromptSubmit", "Stop"],
+    configuredEvents: ["UserPromptSubmit", "Stop", "SessionStart", "SessionEnd"],
     capabilities: {
       working: true,
       idle: true,

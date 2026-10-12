@@ -115,6 +115,8 @@ virtual path in the binary). Ship the whole `dist-bin/<platform>/` directory, no
 executable: `agents setup` points hooks at its `extensions/`, and `hook-runtime.env` records
 the binary as `AGENTS_HOOK_BIN`. A binary outside `~/.agents/agents-cli/` (the app's install
 location) never runs auto-setup, so trying out a fresh build leaves the user's hooks alone.
+Auto-setup also stays away when another install owns the hooks (the CLI recorded in
+`hook-runtime.env`, shown by `agents doctor`); only an explicit `agents setup` moves them.
 
 Test files: `src/*.test.ts` (excluded from tsc output via tsconfig.json).
 - `grid.test.ts` — layout computation, geometry, tiling, contiguity (22 tests)

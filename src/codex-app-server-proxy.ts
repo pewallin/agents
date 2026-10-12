@@ -66,7 +66,9 @@ export async function runCodexAppServerWebSocketProxy(
       if (socket.readyState === WebSocket.OPEN) socket.close(1000);
     });
 
+    let opened = false;
     socket.addEventListener("open", () => {
+      opened = true;
       for (const line of queuedLines.splice(0)) socket.send(line);
       if (inputEnded) socket.close(1000);
     });
@@ -77,7 +79,9 @@ export async function runCodexAppServerWebSocketProxy(
       process.stdout.write(message.endsWith("\n") ? message : `${message}\n`);
     });
     socket.addEventListener("error", () => {
-      console.error(`Failed to connect to Codex app-server at ${endpoint}`);
+      // Node's WebSocket can raise an error while closing after stdin ended; that is a clean end.
+      if (opened && inputEnded) return finish(0);
+      console.error(`${opened ? "Lost connection to" : "Failed to connect to"} Codex app-server at ${endpoint}`);
       finish(1);
     });
     socket.addEventListener("close", (event) => {

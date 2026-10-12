@@ -198,7 +198,7 @@ const { Command } = commander;
 const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState, clearPrimaryState, getAgentStateEntry } = state;
-const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks, shadowingAgentsOnPath } = setupMod;
+const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks, shadowingAgentsOnPath, hookRuntimeOwner } = setupMod;
 const hookLogHint = () => "logs/hooks.log in the agents home";
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
@@ -1353,6 +1353,7 @@ program
       return status === "ok" ? `ok (${node})` : `failed ${node}: ${rest.join(" ")}`;
     });
     console.log("hooks runtime");
+    console.log(`  owner: ${hookRuntimeOwner() ?? "none (run agents setup)"}`);
     console.log(`  this shell: ${describe(probe.shellEnvironment).join("; ")}`);
     console.log(`  bare PATH: ${describe(probe.minimalEnvironment).join("; ")}`);
     const usable = (lines: string[]) => lines.some((line) => line.startsWith("ok "));

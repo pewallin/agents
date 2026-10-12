@@ -1292,6 +1292,28 @@ export function hookRuntimeText(): string {
   return ["# Written by `agents setup`; read by extensions/lib/agents-hook.sh.", ...lines, ""].join("\n");
 }
 
+/** The CLI the hooks run now, from hook-runtime.env: a binary or a cli.js; undefined when
+ *  none is recorded. */
+export function hookRuntimeOwner(): string | undefined {
+  let text = "";
+  try { text = readFileSync(hookRuntimePath(), "utf-8"); } catch { return undefined; }
+  const value = (key: string) => text.match(new RegExp(`^${key}='(.*)'$`, "m"))?.[1]?.replace(/'\\''/g, "'");
+  return value("AGENTS_HOOK_BIN") ?? value("AGENTS_HOOK_CLI");
+}
+
+/** Another installed CLI owns the hooks: auto-setup from this one would take them over, and two
+ *  installs would keep taking them from each other. Only an explicit `agents setup` moves them. */
+function otherInstallOwnsHooks(): boolean {
+  const owner = hookRuntimeOwner();
+  if (!owner || !existsSync(owner)) return false;
+  const self = isCompiledBinary() ? process.execPath : join(__dirname, "cli.js");
+  try {
+    return realpathSync(owner) !== realpathSync(self);
+  } catch {
+    return true;
+  }
+}
+
 export function writeHookRuntime(): void {
   const text = hookRuntimeText();
   try {
@@ -1743,6 +1765,7 @@ export function autoSetupIfNeeded(): void {
     let stored = "";
     try { stored = readFileSync(HASH_FILE, "utf-8").trim(); } catch {}
     if (current === stored) return;
+    if (otherInstallOwnsHooks()) return;
 
     // Spawn detached so it doesn't block the CLI
     const [command, ...commandArgs] = getSelfArgv();
