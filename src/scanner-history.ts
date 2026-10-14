@@ -284,7 +284,7 @@ export function getHistoryResumeInfo(
       };
     case "pi":
       if (!opts.sessionPath) return undefined;
-      const piArgv = ["pi", "--session", opts.sessionPath, "--yolo"];
+      const piArgv = ["pi", "--session", opts.sessionPath];
       return {
         strategy: "switch-in-place",
         target: opts.sessionPath,

@@ -153,7 +153,7 @@ export function agentResumeInvocation(
     case "pi":
       return {
         strategy: "switch-in-place",
-        argv: buildResumeArgv(baseArgv ?? ["pi"], ["--session", target.target, "--yolo"]),
+        argv: buildResumeArgv(baseArgv ?? ["pi"], ["--session", target.target]),
       };
     case "opencode":
       if (target.targetKind !== "session-id") return undefined;

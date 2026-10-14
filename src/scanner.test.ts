@@ -955,8 +955,8 @@ describe("getHistoryResumeInfo", () => {
       strategy: "switch-in-place",
       target: "/tmp/pi-session.jsonl",
       targetKind: "session-path",
-      command: "pi --session /tmp/pi-session.jsonl --yolo",
-      argv: ["pi", "--session", "/tmp/pi-session.jsonl", "--yolo"],
+      command: "pi --session /tmp/pi-session.jsonl",
+      argv: ["pi", "--session", "/tmp/pi-session.jsonl"],
     });
   });
 
@@ -1049,7 +1049,7 @@ describe("resume helpers", () => {
     });
     expect(agentResumeInvocation("pi", { target: "/tmp/pi.jsonl", targetKind: "session-path" })).toEqual({
       strategy: "switch-in-place",
-      argv: ["pi", "--session", "/tmp/pi.jsonl", "--yolo"],
+      argv: ["pi", "--session", "/tmp/pi.jsonl"],
     });
     expect(agentResumeInvocation("opencode", { target: "opencode-123", targetKind: "session-id" })).toEqual({
       strategy: "restart",

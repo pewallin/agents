@@ -47,9 +47,9 @@ export interface Config {
 let _cached: Config | null = null;
 
 const DEFAULT_CONFIG: Config = {
-  defaultCommand: "claude --dangerously-skip-permissions",
+  defaultCommand: "claude",
   profiles: {
-    claude: { command: "claude --dangerously-skip-permissions", workspace: "default" },
+    claude: { command: "claude", workspace: "default" },
   },
   defaultProfile: "claude",
   commands: [],

@@ -116,15 +116,15 @@ Add `bind -n M-b run-shell "node ~/code/agents/dist/cli.js back 2>/dev/null || t
 {
   "profiles": {
     "claude": {
-      "command": "claude --dangerously-skip-permissions",
+      "command": "claude",
       "workspace": "default"
     },
     "copilot": {
-      "command": "copilot --yolo",
+      "command": "copilot",
       "workspace": "default"
     },
     "pi": {
-      "command": "pi --yolo",
+      "command": "pi",
       "workspace": "small"
     },
     "opencode": {
@@ -232,6 +232,11 @@ After a reboot, restore happens the first time tmux starts — the app may promp
 ## Agent flags
 
 Flags for running agents without approval prompts and for resuming sessions.
+
+No auto-approve flag is on by default. An agent started with one runs any command it
+decides on, so a prompt injection in a repository, an issue or a web page runs as you. Add
+one to a profile's command only where you accept that. A resumed session keeps the flags it
+was started with and gets none added.
 
 | Agent | Continue session | Auto-approve | Notes |
 |-------|-----------------|--------------|-------|
