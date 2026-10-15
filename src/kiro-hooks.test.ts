@@ -154,8 +154,8 @@ describe("Kiro hooks", () => {
       expect(uninstall().find((result) => result.agent === "kiro")?.action).toBe("uninstalled");
       expect(() => readFileSync(v2ConfigPath)).toThrow();
       expect(() => readFileSync(v3ConfigPath)).toThrow();
-      const settings = JSON.parse(readFileSync(join(directory, ".kiro", "settings", "cli.json"), "utf-8"));
-      expect(settings["chat.defaultAgent"]).toBeUndefined();
+      // Setup wrote cli.json only for the default agent, so nothing of it stays.
+      expect(readdirSync(join(directory, ".kiro"))).toEqual([]);
     } finally {
       restoreEnvironment("HOME", previousHome);
       restoreEnvironment("AGENTS_SETUP_HASH_PATH", previousSetupHashPath);

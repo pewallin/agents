@@ -158,6 +158,28 @@ function commandExists(command: string): boolean {
   }
 }
 
+/** JSON with the indentation and final newline of the file it replaces (2 spaces for a new file),
+ *  so a user's own settings file keeps its look. */
+export function jsonInStyleOf(value: unknown, originalText: string): string {
+  const indent = originalText.match(/^[{[][ \t]*\r?\n([ \t]+)\S/)?.[1] ?? "  ";
+  const endsWithNewline = originalText === "" || originalText.endsWith("\n");
+  return JSON.stringify(value, null, indent) + (endsWithNewline ? "\n" : "");
+}
+
+/** Removes directory and then its parents while they are empty, never `stop` or above it. */
+function removeEmptyDirectories(directory: string, stop: string): void {
+  let current = directory;
+  while (current.startsWith(stop + "/")) {
+    try {
+      if (readdirSync(current).length > 0) return;
+      rmdirSync(current);
+    } catch {
+      return;
+    }
+    current = dirname(current);
+  }
+}
+
 function setupClaude(): SetupResult {
   const settingsPath = join(homedir(), ".claude", "settings.json");
   if (!existsSync(join(homedir(), ".claude"))) {
@@ -165,9 +187,11 @@ function setupClaude(): SetupResult {
   }
 
   let settings: any = {};
+  let originalText = "";
   if (existsSync(settingsPath)) {
     try {
-      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      originalText = readFileSync(settingsPath, "utf-8");
+      settings = JSON.parse(originalText);
     } catch {
       return { agent: "claude", action: "skipped", detail: "could not parse settings.json" };
     }
@@ -203,7 +227,7 @@ function setupClaude(): SetupResult {
     return { agent: "claude", action: "installed" };
   }
 
-  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  writeFileSync(settingsPath, jsonInStyleOf(settings, originalText));
   return { agent: "claude", action: "installed", detail: "patched ~/.claude/settings.json" };
 }
 
@@ -214,8 +238,10 @@ function uninstallClaude(): SetupResult {
   }
 
   let settings: any;
+  let originalText: string;
   try {
-    settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    originalText = readFileSync(settingsPath, "utf-8");
+    settings = JSON.parse(originalText);
   } catch {
     return { agent: "claude", action: "skipped", detail: "could not parse settings.json" };
   }
@@ -250,7 +276,7 @@ function uninstallClaude(): SetupResult {
     return { agent: "claude", action: "not-installed" };
   }
 
-  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  writeFileSync(settingsPath, jsonInStyleOf(settings, originalText));
   return { agent: "claude", action: "uninstalled", detail: "removed hooks from ~/.claude/settings.json" };
 }
 
@@ -301,28 +327,55 @@ function isOurCodexHook(group: any): boolean {
   return s.includes("extensions/codex/") || s.includes("report-state.sh") || s.includes("stop-hook.sh") || s.includes("--agent codex");
 }
 
+const CODEX_HOOKS_FLAG = "hooks = true # added by agents setup";
+const CODEX_HOOKS_ON = /^hooks\s*=\s*true\s*(?:#.*)?$/m;
+
 export function ensureCodexHooksEnabled(configText: string): { text: string; changed: boolean } {
   let text = configText.replace(/^codex_hooks\s*=\s*(?:true|false)\s*$/gm, "");
   text = text.replace(/\n{3,}/g, "\n\n");
   const removedDeprecatedFlag = text !== configText;
 
-  if (/^hooks\s*=\s*true\s*$/m.test(text)) {
+  if (CODEX_HOOKS_ON.test(text)) {
     return { text, changed: removedDeprecatedFlag };
   }
 
   if (/^hooks\s*=\s*false\s*$/m.test(text)) {
-    return { text: text.replace(/^hooks\s*=\s*false\s*$/m, "hooks = true"), changed: true };
+    return { text: text.replace(/^hooks\s*=\s*false\s*$/m, CODEX_HOOKS_FLAG), changed: true };
   }
 
   if (/^\[features\]\s*$/m.test(text)) {
     return {
-      text: text.replace(/^\[features\]\s*$/m, `[features]\nhooks = true`),
+      text: text.replace(/^\[features\]\s*$/m, `[features]\n${CODEX_HOOKS_FLAG}`),
       changed: true,
     };
   }
 
   const suffix = text.endsWith("\n") || text.length === 0 ? "" : "\n";
-  return { text: `${text}${suffix}\n[features]\nhooks = true\n`, changed: true };
+  return { text: `${text}${suffix}\n[features]\n${CODEX_HOOKS_FLAG}\n`, changed: true };
+}
+
+/** Takes back the hooks flag setup turned on (marked by its comment), and a [features] table
+ *  left empty by that. A flag the user set stays. */
+export function removeCodexHooksFlag(configText: string): { text: string; changed: boolean } {
+  const lines = configText.split("\n");
+  const flag = lines.findIndex((line) => /^hooks\s*=\s*true\s*# added by agents setup\s*$/.test(line));
+  if (flag < 0) return { text: configText, changed: false };
+  lines.splice(flag, 1);
+
+  let header = flag - 1;
+  while (header >= 0 && !lines[header].trim().startsWith("[")) header--;
+  if (header >= 0 && lines[header].trim() !== "[features]") header = -1;
+  const rest = lines.slice(header + 1);
+  const nextTable = rest.findIndex((line) => line.trim().startsWith("["));
+  const body = nextTable < 0 ? rest : rest.slice(0, nextTable);
+  if (header >= 0 && body.every((line) => line.trim() === "")) {
+    let from = header;
+    while (from > 0 && lines[from - 1].trim() === "") from--;
+    lines.splice(from, header + 1 + body.length - from, ...(nextTable >= 0 && from > 0 ? [""] : []));
+  }
+
+  const text = lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+  return { text: text.trim() === "" ? "" : text.replace(/\n*$/, "\n"), changed: true };
 }
 
 function normalizeCodexHooksJson(hooksJson: Record<string, any>): { hooksJson: Record<string, any>; hookRoot: Record<string, any[]>; changed: boolean } {
@@ -448,6 +501,14 @@ function uninstallCodex(): SetupResult {
     writeFileSync(CODEX_HOOKS_PATH, JSON.stringify(hooksJson, null, 2) + "\n");
   }
 
+  // Other hooks still need the flag.
+  if (Object.keys(hookRoot).length === 0 && existsSync(CODEX_CONFIG_PATH)) {
+    try {
+      const flag = removeCodexHooksFlag(readFileSync(CODEX_CONFIG_PATH, "utf-8"));
+      if (flag.changed) writeFileSync(CODEX_CONFIG_PATH, flag.text);
+    } catch {}
+  }
+
   return { agent: "codex", action: "uninstalled", detail: "removed hooks from ~/.codex/hooks.json" };
 }
 
@@ -515,11 +576,7 @@ function uninstallCopilot(): SetupResult {
     unlinkSync(target);
   }
 
-  // Remove directory if empty
-  try {
-    const remaining = readdirSync(extDir);
-    if (remaining.length === 0) rmdirSync(extDir);
-  } catch {}
+  removeEmptyDirectories(extDir, join(homedir(), ".copilot"));
 
   return { agent: "copilot", action: "uninstalled", detail: "removed ~/.copilot/extensions/agents-reporting/" };
 }
@@ -901,6 +958,7 @@ function uninstallKiro(): SetupResult {
     }
   }
 
+  const kiroDir = join(homedir(), ".kiro");
   const removed: string[] = [];
   if (hasAgent) {
     unlinkSync(KIRO_AGENT_PATH);
@@ -910,13 +968,20 @@ function uninstallKiro(): SetupResult {
     unlinkSync(KIRO_V3_HOOK_PATH);
     removed.push("Kiro v3 global hooks");
   }
+  removeEmptyDirectories(dirname(KIRO_AGENT_PATH), kiroDir);
+  removeEmptyDirectories(dirname(KIRO_V3_HOOK_PATH), kiroDir);
 
   let detail = `removed ${removed.join(" and ")}`;
   const { settings } = readKiroSettings();
   if (settings["chat.defaultAgent"] === KIRO_AGENT_NAME) {
     delete settings["chat.defaultAgent"];
-    mkdirSync(dirname(KIRO_SETTINGS_PATH), { recursive: true });
-    writeFileSync(KIRO_SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n");
+    if (Object.keys(settings).length === 0) {
+      // Setup wrote the file for this one key.
+      unlinkSync(KIRO_SETTINGS_PATH);
+      removeEmptyDirectories(dirname(KIRO_SETTINGS_PATH), kiroDir);
+    } else {
+      writeFileSync(KIRO_SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n");
+    }
     detail = mergeDetail(detail, `cleared default agent ${KIRO_AGENT_NAME}`) || detail;
   }
   return { agent: "kiro", action: "uninstalled", detail };
@@ -1378,7 +1443,13 @@ export function probeHooks(): HookRuntimeProbe {
 }
 
 export function uninstall(): SetupResult[] {
-  return [uninstallClaude(), uninstallCodex(), uninstallCopilot(), uninstallPi(), uninstallOpencode(), uninstallKiro(), uninstallHermes()];
+  const results = [uninstallClaude(), uninstallCodex(), uninstallCopilot(), uninstallPi(), uninstallOpencode(), uninstallKiro(), uninstallHermes()];
+  // No hooks are left to run a CLI, and the next setup starts over.
+  for (const path of [hookRuntimePath(), HASH_FILE]) {
+    try { unlinkSync(path); } catch {}
+  }
+  removeEmptyDirectories(getAgentsHome(), homedir());
+  return results;
 }
 
 function doctorClaude(spec: AgentIntegrationSpec): DoctorResult {
@@ -1444,7 +1515,7 @@ function doctorCodex(spec: AgentIntegrationSpec): DoctorResult {
   }
 
   const installedEvents: string[] = [];
-  if (/^hooks\s*=\s*true\s*$/m.test(configText)) {
+  if (CODEX_HOOKS_ON.test(configText)) {
     const normalized = normalizeCodexHooksJson(hooksJson);
     const hookRoot = normalized.hookRoot;
     const expected = codexHookEntries();
@@ -1456,7 +1527,7 @@ function doctorCodex(spec: AgentIntegrationSpec): DoctorResult {
     }
   }
 
-  if (!/^hooks\s*=\s*true\s*$/m.test(configText) && installedEvents.length === 0) {
+  if (!CODEX_HOOKS_ON.test(configText) && installedEvents.length === 0) {
     return doctorResult(spec, "not-installed", "hooks is not enabled", []);
   }
 
