@@ -111,12 +111,6 @@ export function resolveTmuxReportBinding(input: TmuxReportBindingInput): TmuxRep
  *  showed; otherwise an agent that is never verified looks the same as one never reporting. */
 export function logRejectedReport(input: TmuxReportBindingInput): void {
   try {
-    const dir = getLogsDir();
-    mkdirSync(dir, { recursive: true });
-    const file = join(dir, "hooks.log");
-    try {
-      if (statSync(file).size > 262_144) renameSync(file, `${file}.1`);
-    } catch {}
     const fields = [
       `pane=${input.requestedSession}`,
       `foreground=${input.foregroundAgent ?? "-"}`,
@@ -126,7 +120,26 @@ export function logRejectedReport(input: TmuxReportBindingInput): void {
       `session=${input.reportedExternalSessionId ?? "-"}/${input.expectedExternalSessionId ?? "-"}`,
       ...tmuxReachability(input.requestedSession),
     ];
-    appendFileSync(file, `${new Date().toISOString().replace(/\.\d+Z$/, "Z")} ${input.reportedAgent} rejected unverified-pane ${fields.join(" ")}\n`);
+    appendHooksLog(`${input.reportedAgent} rejected unverified-pane ${fields.join(" ")}`);
+  } catch {}
+}
+
+/** A Codex report from the shared app-server names the pane of the Codex that started it. With
+ *  more than one Codex using it, which one reports is unknown, so the report is left out. */
+export function logRejectedSharedAppServerReport(envPane: string | undefined, clients: string[]): void {
+  appendHooksLog(`codex rejected shared-app-server pane=${envPane || "-"} clients=${clients.join(",") || "-"}`
+    + " (a Codex started with --no-daemon or through agents codex-session reports its own pane)");
+}
+
+function appendHooksLog(line: string): void {
+  try {
+    const dir = getLogsDir();
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "hooks.log");
+    try {
+      if (statSync(file).size > 262_144) renameSync(file, `${file}.1`);
+    } catch {}
+    appendFileSync(file, `${new Date().toISOString().replace(/\.\d+Z$/, "Z")} ${line}\n`);
   } catch {}
 }
 

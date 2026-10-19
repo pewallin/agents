@@ -176,6 +176,7 @@ const [
   usageMod,
   doneMod,
   codexSessionMod,
+  codexSharedAppServer,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -192,6 +193,7 @@ const [
   import("./usage.js"),
   import("./done.js"),
   import("./codex-session.js"),
+  import("./codex-shared-app-server.js"),
 ]);
 
 const { Command } = commander;
@@ -1127,6 +1129,16 @@ program
     let wsSnapshot: undefined | { command: string; cwd: string; mux?: "tmux" | "zellij" };
     const muxKind = detectMultiplexer();
     const externalSessionId = opts.externalSessionId as string | undefined;
+    if (muxKind === "tmux" && opts.agent?.trim().toLowerCase() === "codex" && session?.startsWith("%")) {
+      const shared = codexSharedAppServer.resolveCodexSharedAppServerReport();
+      if (shared.shared) {
+        if (!shared.pane) {
+          reportBinding.logRejectedSharedAppServerReport(session, shared.clients);
+          return;
+        }
+        session = shared.pane;
+      }
+    }
     if (muxKind === "tmux" && session?.startsWith("%")) {
       const paneMetadata = readTmuxPaneReportMetadata(session);
       const foregroundAgent = paneMetadata?.foregroundCommand

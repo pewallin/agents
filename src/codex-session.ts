@@ -60,7 +60,8 @@ export function createCodexSessionLaunchPlan(input: CodexSessionLaunchInput): Co
     },
     tui: {
       executable,
-      args: argv.slice(1),
+      // The TUI is connected to its own app-server with --remote, which Codex refuses beside --no-daemon.
+      args: argv.slice(1).filter((arg) => arg !== "--no-daemon"),
     },
   };
 }

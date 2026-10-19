@@ -33,6 +33,17 @@ describe("createCodexSessionLaunchPlan", () => {
     });
   });
 
+  it("drops --no-daemon, which Codex refuses beside the --remote it adds", () => {
+    const plan = createCodexSessionLaunchPlan({
+      command: "codex --no-daemon -m gpt-6-astra 'ROLE: worker.'",
+      paneId: "%25",
+      runtimeTempDir: "/tmp/agents-runtime",
+      processId: 4242,
+    });
+
+    expect(plan.tui.args).toEqual(["-m", "gpt-6-astra", "ROLE: worker."]);
+  });
+
   it("keeps the pane identity in the app-server environment and cleans up", () => {
     const directory = mkdtempSync(join(tmpdir(), "agents-codex-session-"));
     const runtimeDirectory = `/private/tmp/agents-codex-runtime-${process.pid}`;
