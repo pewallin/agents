@@ -54,6 +54,7 @@ export interface DoctorResult {
 
 const STATE_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "state-hook.sh");
 const STOP_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "stop-hook.sh");
+const COMPACT_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "compact-hook.sh");
 
 const CLAUDE_HOOKS = {
   PreToolUse: [{ hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} working` }] }],
@@ -66,7 +67,11 @@ const CLAUDE_HOOKS = {
   ],
   // The agent is there from its start (not first prompt) until its process ends. Compaction
   // restarts a session mid-work and /clear and /resume end one while Claude keeps running.
-  SessionStart: [{ matcher: "startup|resume|clear", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} idle` }] }],
+  // After a compaction, an agent that coordinates workers gets its protocol back.
+  SessionStart: [
+    { matcher: "startup|resume|clear", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} idle` }] },
+    { matcher: "compact", hooks: [{ type: "command", command: COMPACT_HOOK_SCRIPT }] },
+  ],
   SessionEnd: [{ matcher: "prompt_input_exit|logout|other", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} exited` }] }],
 };
 
@@ -1817,7 +1822,7 @@ function computeSetupHash(): string {
   h.update(JSON.stringify(kiroV3HookConfig()));
   h.update(JSON.stringify(hermesHooksBlock()));
   h.update("kiro-default-agent-v1");
-  for (const ext of ["lib/agents-hook.sh", "claude/state-hook.sh", "claude/stop-hook.sh", "claude/prompt-hook.sh", "codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs", "kiro/report-state.sh", "hermes/report-state.sh"]) {
+  for (const ext of ["lib/agents-hook.sh", "lib/coordinator-reminder.sh", "claude/state-hook.sh", "claude/stop-hook.sh", "claude/prompt-hook.sh", "claude/compact-hook.sh", "codex/report-state.sh", "codex/stop-hook.sh", "copilot/extension.mjs", "pi/dustbot-reporting.ts", "opencode/index.mjs", "kiro/report-state.sh", "hermes/report-state.sh"]) {
     const p = join(EXTENSIONS_DIR, ext);
     try { h.update(readFileSync(p)); } catch {}
   }

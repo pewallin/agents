@@ -18,7 +18,10 @@ INPUT=$(cat)
 # SessionStart: present and idle from the start, except the restart after a compaction mid-work.
 if [ "$STATE" = "started" ]; then
   SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null)
-  [ "$SOURCE" = "compact" ] && exit 0
+  # A coordinator gets its protocol back as context.
+  if [ "$SOURCE" = "compact" ]; then
+    exec "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/lib/coordinator-reminder.sh"
+  fi
   STATE="idle"
 fi
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // .sessionId // .thread_id // .threadId // .agent_id // .agentId // empty' 2>/dev/null)
