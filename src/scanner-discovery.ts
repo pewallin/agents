@@ -1,7 +1,7 @@
 import { existsSync } from "fs";
 import { basename, join } from "path";
 import { getRuntimeTempDir } from "./paths.js";
-import { exec, execAsync, execFileCapture } from "./shell.js";
+import { exec, execAsync, execFileCapture, gitBranch, gitBranchAsync } from "./shell.js";
 
 // macOS `comm` is a truncated path (and can contain spaces). `ucomm` is the
 // executable name; keep full args separately for Node wrappers and session IDs.
@@ -305,28 +305,14 @@ export function findAgentOnTtyInTree(tty: string, tree: ProcessTree): string | n
 
 export function buildBranchCache(uniqueCwds: Set<string>): Map<string, string | undefined> {
   const branchCache = new Map<string, string | undefined>();
-  if (uniqueCwds.size === 0) return branchCache;
-
-  const cwdArr = [...uniqueCwds];
-  const script = cwdArr.map(d => `git -C ${JSON.stringify(d)} rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""`).join("\n");
-  const branches = exec(`bash -c ${JSON.stringify(script)}`).split("\n");
-  for (let i = 0; i < cwdArr.length; i++) {
-    branchCache.set(cwdArr[i], branches[i] || undefined);
-  }
+  for (const dir of uniqueCwds) branchCache.set(dir, gitBranch(dir));
   return branchCache;
 }
 
 export async function buildBranchCacheAsync(uniqueCwds: Set<string>): Promise<Map<string, string | undefined>> {
-  const branchCache = new Map<string, string | undefined>();
-  if (uniqueCwds.size === 0) return branchCache;
-
   const cwdArr = [...uniqueCwds];
-  const script = cwdArr.map(d => `git -C ${JSON.stringify(d)} rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""`).join("\n");
-  const branches = (await execAsync(`bash -c ${JSON.stringify(script)}`)).split("\n");
-  for (let i = 0; i < cwdArr.length; i++) {
-    branchCache.set(cwdArr[i], branches[i] || undefined);
-  }
-  return branchCache;
+  const branches = await Promise.all(cwdArr.map(dir => gitBranchAsync(dir)));
+  return new Map(cwdArr.map((dir, i) => [dir, branches[i]]));
 }
 
 export function findLeafProcessSync(pid: string): string {

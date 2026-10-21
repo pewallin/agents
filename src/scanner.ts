@@ -1,7 +1,7 @@
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { basename, join } from "path";
-import { exec, execAsync } from "./shell.js";
+import { exec, execAsync, gitBranch } from "./shell.js";
 import { getAgentStateEntry, readStateSnapshot, rebindStateSnapshotToExternalSession } from "./state.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { BACK_ENV, switchBack } from "./back.js";
@@ -483,7 +483,7 @@ function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
       processSessionId: observedExternalSessionId,
       stateSessionId: stateExternalSessionId(agentName, p.id, stateSnapshot),
     });
-    const zellijBranch = p.cwd ? exec(`git -C ${JSON.stringify(p.cwd)} rev-parse --abbrev-ref HEAD 2>/dev/null`) || undefined : undefined;
+    const zellijBranch = p.cwd ? gitBranch(p.cwd) : undefined;
 
     // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
     const richDetail = stateDetail(agentName, p.id, stateSnapshot);

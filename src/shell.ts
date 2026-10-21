@@ -2,11 +2,12 @@
  * Shared shell execution wrapper used across the project.
  * All tmux and process commands go through this.
  */
-import { execSync as nodeExecSync, exec as nodeExecCb, spawn, spawnSync } from "child_process";
+import { execSync as nodeExecSync, exec as nodeExecCb, execFile as nodeExecFileCb, spawn, spawnSync } from "child_process";
 import { closeSync, openSync } from "fs";
 import { promisify } from "util";
 
 const nodeExecAsync = promisify(nodeExecCb);
+const nodeExecFileAsync = promisify(nodeExecFileCb);
 
 const EXEC_TIMEOUT = 5000;
 
@@ -140,4 +141,25 @@ export async function execAsync(cmd: string): Promise<string> {
     if (e?.stdout) return (e.stdout as string).trim();
     return "";
   }
+}
+
+/** Async execFile without a shell — returns stdout trimmed, or "" on error. */
+export async function execFileAsync(cmd: string, args: string[]): Promise<string> {
+  try {
+    const { stdout } = await nodeExecFileAsync(cmd, args, { encoding: "utf-8", timeout: EXEC_TIMEOUT });
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+}
+
+/** The branch checked out in a directory, or undefined. Runs git without a shell, so the
+ *  directory name is never interpreted. */
+export function gitBranch(dir: string): string | undefined {
+  const result = execFileCapture("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"]);
+  return result.status === 0 && result.stdout ? result.stdout : undefined;
+}
+
+export async function gitBranchAsync(dir: string): Promise<string | undefined> {
+  return (await execFileAsync("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"])) || undefined;
 }

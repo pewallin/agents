@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "fs";
 import { randomUUID } from "crypto";
 import { dirname, join, resolve } from "path";
-import { exec } from "./shell.js";
+import { exec, execFileCapture } from "./shell.js";
 import { getMux, detectMultiplexer } from "./multiplexer.js";
 import { loadConfig, resolveProfile } from "./config.js";
 import { readStates, reportState } from "./state.js";
@@ -133,7 +133,7 @@ export function prepareWorkspaceDir(path: string): boolean {
     if (state === "valid") return true;
     if (state !== "creatable") return false;
     mkdirSync(path, { recursive: true });
-    exec(`git -C ${JSON.stringify(path)} init`);
+    execFileCapture("git", ["-C", path, "init"]);
     return existsSync(path) && statSync(path).isDirectory() && existsSync(join(path, ".git"));
   } catch {
     return false;
