@@ -1103,6 +1103,8 @@ program
   .option("--context <text>", "Context description for this workspace")
   .option("--context-tokens <n>", "Current token usage in conversation", parseInt)
   .option("--context-max <n>", "Context window limit for the model", parseInt)
+  .option("--spend <n>", "Session spend so far, in --spend-unit", parseFloat)
+  .option("--spend-unit <unit>", "Unit of --spend, e.g. AIU or credits")
   .option("--reporter <id>", "Auxiliary reporter identity for contributor state")
   .option("--auxiliary", "Write an auxiliary contributor state instead of the primary session state")
   .option("--session <id>", "Session ID (reads from stdin if not provided)")
@@ -1197,6 +1199,8 @@ program
     let modelSource = opts.modelSource as string | undefined;
     let ctxTokens = isNaN(opts.contextTokens) ? undefined : opts.contextTokens;
     let ctxMax = isNaN(opts.contextMax) ? undefined : opts.contextMax;
+    const spend = typeof opts.spend === "number" && Number.isFinite(opts.spend) ? opts.spend : undefined;
+    const spendUnit = spend !== undefined ? opts.spendUnit as string | undefined : undefined;
     if (opts.auxiliary && !opts.reporter) {
       console.error("--auxiliary requires --reporter");
       process.exit(1);
@@ -1241,6 +1245,8 @@ program
         workspace: wsSnapshot,
         contextTokens: ctxTokens,
         contextMax: ctxMax,
+        spend,
+        spendUnit,
       });
     }
   });

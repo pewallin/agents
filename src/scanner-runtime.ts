@@ -276,6 +276,7 @@ export function runtimeStateFromAgent(agent: AgentPane): AgentRuntimeState {
     ...(agent.context ? { context: agent.context } : {}),
     ...(agent.contextTokens !== undefined ? { contextTokens: agent.contextTokens } : {}),
     ...(agent.contextMax !== undefined ? { contextMax: agent.contextMax } : {}),
+    ...(agent.spend !== undefined ? { spend: agent.spend, ...(agent.spendUnit ? { spendUnit: agent.spendUnit } : {}) } : {}),
     ...(agent.stateSource ? { stateSource: agent.stateSource } : {}),
     ...(agent.primaryState ? { primaryState: agent.primaryState } : {}),
     ...(agent.auxiliaryReporters?.length ? { auxiliaryReporters: agent.auxiliaryReporters } : {}),

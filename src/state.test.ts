@@ -158,6 +158,20 @@ describe("reportState", () => {
     });
   });
 
+  it("keeps a session's spend until a report carries a new one", () => {
+    const session = `%vitest-spend-${Date.now()}`;
+
+    reportState("copilot", session, "working", { externalSessionId: "s1", spend: 12.5, spendUnit: "AIU" });
+    reportState("copilot", session, "idle", { externalSessionId: "s1" });
+    expect(getAgentStateEntry("copilot", session)).toMatchObject({ spend: 12.5, spendUnit: "AIU" });
+
+    reportState("copilot", session, "working", { externalSessionId: "s1", spend: 30, spendUnit: "AIU" });
+    expect(getAgentStateEntry("copilot", session)?.spend).toBe(30);
+
+    reportState("copilot", session, "idle", { externalSessionId: "s2" });
+    expect(getAgentStateEntry("copilot", session)?.spend).toBeUndefined();
+  });
+
   it("does not carry session-scoped metadata across an external session change", () => {
     const session = `%vitest-session-boundary-${Date.now()}`;
 

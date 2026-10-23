@@ -34,6 +34,8 @@ export interface StateEntry extends ModelMetadata {
   context?: string;
   contextTokens?: number;
   contextMax?: number;
+  spend?: number;          // session spend so far, in spendUnit (Copilot AIU, Kiro credits)
+  spendUnit?: string;
   workspace?: WorkspaceSnapshot;
   cleanup?: CleanupState;
 }
@@ -389,6 +391,7 @@ function isReportOptions(value: unknown): value is ReportOptions {
       || "workspace" in value
       || "contextTokens" in value
       || "contextMax" in value
+      || "spend" in value
       || "activity" in value
     );
 }
@@ -423,6 +426,8 @@ export interface ReportOptions extends ModelMetadata {
   workspace?: WorkspaceSnapshot;
   contextTokens?: number;
   contextMax?: number;
+  spend?: number;
+  spendUnit?: string;
   activity?: boolean;
 }
 
@@ -437,7 +442,7 @@ export function reportState(agent: string, session: string, state: ReportedState
     ? optsOrContext
     : { context: optsOrContext as string | undefined, workspace, contextTokens, contextMax, model, externalSessionId };
 
-  let { detail, intent, responsePreview, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax } = opts;
+  let { detail, intent, responsePreview, externalSessionId: extSessionId, context, workspace: ws, contextTokens: ctxTokens, contextMax: ctxMax, spend, spendUnit } = opts;
   const existing = readStateFile(agent, session);
   const sessionChanged = extSessionId !== undefined
     && existing?.externalSessionId !== undefined
@@ -464,6 +469,10 @@ export function reportState(agent: string, session: string, state: ReportedState
   if (context === undefined && !sessionChanged) context = existing?.context;
   if (ctxTokens === undefined && !sessionChanged) ctxTokens = existing?.contextTokens;
   if (ctxMax === undefined && !sessionChanged) ctxMax = existing?.contextMax;
+  if (spend === undefined && !sessionChanged) {
+    spend = existing?.spend;
+    spendUnit = existing?.spendUnit;
+  }
   // Preserve existing workspace if it has a sessionName (seeded by createWorkspace).
   // Hook-reported snapshots lack sessionName and should not overwrite authoritative data.
   if (ws === undefined || (existing?.workspace?.sessionName && !ws?.sessionName)) {
@@ -483,6 +492,7 @@ export function reportState(agent: string, session: string, state: ReportedState
     ...(context ? { context } : {}),
     ...(ctxTokens !== undefined ? { contextTokens: ctxTokens } : {}),
     ...(ctxMax !== undefined ? { contextMax: ctxMax } : {}),
+    ...(spend !== undefined ? { spend, ...(spendUnit ? { spendUnit } : {}) } : {}),
     ...(ws ? { workspace: ws } : {}),
   };
   writeStateFile(agent, session, entry);

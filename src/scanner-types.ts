@@ -26,6 +26,8 @@ export interface AgentPane {
   context?: string;
   contextTokens?: number;
   contextMax?: number;
+  spend?: number;
+  spendUnit?: string;
   stateSource?: "primary" | "contributor";
   primaryState?: string;
   auxiliaryReporters?: string[];
@@ -47,6 +49,8 @@ export interface AgentRuntimeState {
   context?: string;
   contextTokens?: number;
   contextMax?: number;
+  spend?: number;
+  spendUnit?: string;
   stateSource?: "primary" | "contributor";
   primaryState?: string;
   auxiliaryReporters?: string[];

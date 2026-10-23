@@ -47,6 +47,9 @@ const SESSION_ID = process.env.TMUX_PANE || "default";
 // Track context window usage and structured model identity
 let contextTokens = undefined;
 let contextMax = undefined;
+// Session spend in nano-AIU: the last usage checkpoint (session-wide) plus each call since.
+let spendNanoAiu = undefined;
+let sawAssistantUsage = false;
 let externalSessionId = undefined;
 let currentProvider = "github-copilot";
 let currentModelId = undefined;
@@ -76,6 +79,7 @@ function report(state, extraArgs = []) {
   if (externalSessionId) args.push("--external-session-id", String(externalSessionId));
   if (contextTokens !== undefined) args.push("--context-tokens", String(contextTokens));
   if (contextMax !== undefined) args.push("--context-max", String(contextMax));
+  if (spendNanoAiu !== undefined) args.push("--spend", String(Math.round(spendNanoAiu / 1e7) / 100), "--spend-unit", "AIU");
   execFile(...agentsCommand("copilot", args), (err) => {
     if (err) {
       console.error(`[agents-reporting] agents report failed: ${err.message}`);
@@ -96,7 +100,25 @@ function handleSessionEvent(event) {
     case "session.usage_checkpoint":
       contextTokens = event.data?.currentTokens ?? event.data?.tokenUsage?.currentTokens ?? contextTokens;
       contextMax = event.data?.tokenLimit ?? event.data?.tokenUsage?.tokenLimit ?? contextMax;
+      // A checkpoint's total covers every call before it.
+      if (event.type === "session.usage_checkpoint" && typeof event.data?.totalNanoAiu === "number") {
+        spendNanoAiu = event.data.totalNanoAiu;
+      }
       break;
+    case "assistant.usage": {
+      const nanoAiu = event.data?.copilotUsage?.totalNanoAiu;
+      if (typeof nanoAiu === "number") {
+        sawAssistantUsage = true;
+        spendNanoAiu = (spendNanoAiu ?? 0) + nanoAiu;
+      }
+      break;
+    }
+    case "session.usage_record": {
+      // Newer CLIs record each call this way too; count it only where assistant.usage is absent.
+      const nanoAiu = event.data?.totalNanoAiu ?? event.data?.copilotUsage?.totalNanoAiu ?? event.data?.total_nano_aiu;
+      if (!sawAssistantUsage && typeof nanoAiu === "number") spendNanoAiu = (spendNanoAiu ?? 0) + nanoAiu;
+      break;
+    }
     case "permission.requested":
       report("approval");
       break;

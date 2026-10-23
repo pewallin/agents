@@ -1,5 +1,6 @@
 import { deriveModelDisplay, getAgentStateEntry, getAgentStateProvenance } from "./state.js";
 import { inferContextFromContent, inferModelMetadataFromContent, readCodexTokenUsageFromSession } from "./scanner-runtime.js";
+import { readKiroSessionUsage } from "./kiro-session-usage.js";
 import type { ModelMetadata, StateSnapshot } from "./state.js";
 import type { AgentRuntimeState } from "./scanner-types.js";
 
@@ -75,16 +76,28 @@ export function stateWorkspaceCwd(agent: string, paneId?: string, snapshot?: Sta
   return entry?.workspace?.cwd;
 }
 
-export function stateTokens(agent: string, paneId?: string, snapshot?: StateSnapshot): { contextTokens?: number; contextMax?: number } {
+export interface StateUsage {
+  contextTokens?: number;
+  contextMax?: number;
+  spend?: number;
+  spendUnit?: string;
+}
+
+function spendFields(usage: StateUsage): StateUsage {
+  return usage.spend !== undefined ? { spend: usage.spend, ...(usage.spendUnit ? { spendUnit: usage.spendUnit } : {}) } : {};
+}
+
+export function stateTokens(agent: string, paneId?: string, snapshot?: StateSnapshot): StateUsage {
   const entry = paneId ? getAgentStateEntry(agent, paneId, snapshot) : null;
   if (!entry) return {};
   return {
     ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
     ...(entry.contextMax !== undefined ? { contextMax: entry.contextMax } : {}),
+    ...spendFields(entry),
   };
 }
 
-export function mergedContextTokens(agent: string, paneId: string | undefined, content: string, snapshot?: StateSnapshot): { contextTokens?: number; contextMax?: number } {
+export function mergedContextTokens(agent: string, paneId: string | undefined, content: string, snapshot?: StateSnapshot): StateUsage {
   const stored = stateTokens(agent, paneId, snapshot);
 
   if (agent.toLowerCase() === "codex") {
@@ -96,6 +109,17 @@ export function mergedContextTokens(agent: string, paneId: string | undefined, c
     return {
       ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : sessionUsageFresh && sessionUsage.contextTokens !== undefined ? { contextTokens: sessionUsage.contextTokens } : {}),
       ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : sessionUsageFresh && sessionUsage.contextMax !== undefined ? { contextMax: sessionUsage.contextMax } : {}),
+      ...spendFields(stored),
+    };
+  }
+
+  // Kiro's hooks carry neither context nor spend; its session files have both.
+  if (agent.toLowerCase() === "kiro") {
+    const sessionUsage = readKiroSessionUsage(stateExternalSessionId(agent, paneId, snapshot));
+    return {
+      ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens, ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : {}) }
+        : sessionUsage.contextTokens !== undefined ? { contextTokens: sessionUsage.contextTokens, contextMax: sessionUsage.contextMax } : {}),
+      ...spendFields(stored.spend !== undefined ? stored : sessionUsage),
     };
   }
 
@@ -108,6 +132,7 @@ export function mergedContextTokens(agent: string, paneId: string | undefined, c
   return {
     ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens } : inferred.contextTokens !== undefined ? { contextTokens: inferred.contextTokens } : {}),
     ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : inferred.contextMax !== undefined ? { contextMax: inferred.contextMax } : {}),
+    ...spendFields(stored),
   };
 }
 

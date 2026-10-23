@@ -429,6 +429,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
       ...(context ? { context } : {}),
       ...(tokenInfo.contextTokens !== undefined ? { contextTokens: tokenInfo.contextTokens } : {}),
       ...(tokenInfo.contextMax !== undefined ? { contextMax: tokenInfo.contextMax } : {}),
+      ...(tokenInfo.spend !== undefined ? { spend: tokenInfo.spend, ...(tokenInfo.spendUnit ? { spendUnit: tokenInfo.spendUnit } : {}) } : {}),
       ...provenance,
     });
   }

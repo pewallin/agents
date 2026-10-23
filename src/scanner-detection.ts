@@ -266,6 +266,7 @@ export function reconcileStaleCodexWorkingState(
     ...(entry.workspace ? { workspace: entry.workspace } : {}),
     ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
     ...(entry.contextMax !== undefined ? { contextMax: entry.contextMax } : {}),
+    ...(entry.spend !== undefined ? { spend: entry.spend, spendUnit: entry.spendUnit } : {}),
   });
   if (snapshot) upsertStateSnapshotEntry(snapshot, updated);
 }

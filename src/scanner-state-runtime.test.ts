@@ -1,5 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "fs";
-import { homedir } from "os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { createStateSnapshot } from "./state.js";
@@ -144,5 +144,36 @@ describe("hook-authoritative runtime metadata", () => {
       modelLabel: "GPT-5 Codex",
       model: "openai/gpt-5-codex",
     });
+  });
+});
+
+describe("session spend", () => {
+  it("passes a Copilot session's reported spend through with its context", () => {
+    const snapshot = createStateSnapshot(
+      [{ agent: "copilot", session: "%7", state: "idle", ts: 100, contextTokens: 160_000, contextMax: 1_000_000, spend: 312.4, spendUnit: "AIU" }],
+      [],
+    );
+    expect(mergedContextTokens("copilot", "%7", "", snapshot)).toEqual({ contextTokens: 160_000, contextMax: 1_000_000, spend: 312.4, spendUnit: "AIU" });
+  });
+
+  it("reads a Kiro session's context and credits from Kiro's session file", () => {
+    const sessions = mkdtempSync(join(tmpdir(), "kiro-sessions-"));
+    const previous = process.env.AGENTS_KIRO_SESSIONS_DIR;
+    process.env.AGENTS_KIRO_SESSIONS_DIR = sessions;
+    try {
+      mkdirSync(join(sessions, "cli"), { recursive: true });
+      writeFileSync(join(sessions, "cli", "kiro-s1.json"), JSON.stringify({
+        session_state: {
+          rts_model_state: { model_info: { model_id: "claude-opus-5.5" } },
+          conversation_metadata: { user_turn_metadatas: [{ metering_usage: [{ value: 4.2, unit: "credit" }], final_context_usage_percentage: 15.5 }] },
+        },
+      }));
+      const snapshot = createStateSnapshot([{ agent: "kiro", session: "%8", state: "idle", ts: 100, externalSessionId: "kiro-s1" }], []);
+      expect(mergedContextTokens("kiro", "%8", "", snapshot)).toEqual({ contextTokens: 155_000, contextMax: 1_000_000, spend: 4.2, spendUnit: "credits" });
+    } finally {
+      if (previous === undefined) delete process.env.AGENTS_KIRO_SESSIONS_DIR;
+      else process.env.AGENTS_KIRO_SESSIONS_DIR = previous;
+      rmSync(sessions, { recursive: true, force: true });
+    }
   });
 });
