@@ -117,6 +117,8 @@ the binary as `AGENTS_HOOK_BIN`. A binary outside `~/.agents/agents-cli/` (the a
 location) never runs auto-setup, so trying out a fresh build leaves the user's hooks alone.
 Auto-setup also stays away when another install owns the hooks (the CLI recorded in
 `hook-runtime.env`, shown by `agents doctor`); only an explicit `agents setup` moves them.
+It only refreshes hooks a setup installed: with no `.setup-hash` (never set up, or `agents
+uninstall` took them out) it does nothing, so a user who turned the hooks off keeps them off.
 
 Test files: `src/*.test.ts` (excluded from tsc output via tsconfig.json).
 - `grid.test.ts` — layout computation, geometry, tiling, contiguity (22 tests)

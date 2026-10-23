@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +22,7 @@ describe("automatic hook setup", () => {
     vi.stubEnv("AGENTS_SETUP_HASH_PATH", join(directory, "hash"));
     vi.stubEnv("AGENTS_NO_AUTO_SETUP", "");
     vi.resetModules();
+    writeFileSync(join(directory, "hash"), "older");
     spawn.mockReturnValue({ unref });
     const { autoSetupIfNeeded } = await import("./setup.js");
 
@@ -36,5 +37,16 @@ describe("automatic hook setup", () => {
     vi.stubEnv("AGENTS_NO_AUTO_SETUP", "1");
     autoSetupIfNeeded();
     expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it("never installs hooks that were not set up or that uninstall took out", async () => {
+    directory = mkdtempSync(join(tmpdir(), "agents-auto-setup-"));
+    vi.stubEnv("AGENTS_SETUP_HASH_PATH", join(directory, "hash"));
+    vi.stubEnv("AGENTS_NO_AUTO_SETUP", "");
+    vi.resetModules();
+    const { autoSetupIfNeeded } = await import("./setup.js");
+
+    autoSetupIfNeeded();
+    expect(spawn).not.toHaveBeenCalled();
   });
 });

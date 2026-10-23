@@ -1840,7 +1840,9 @@ export function autoSetupIfNeeded(): void {
     const current = computeSetupHash();
     let stored = "";
     try { stored = readFileSync(HASH_FILE, "utf-8").trim(); } catch {}
-    if (current === stored) return;
+    // Auto-setup only refreshes hooks a setup put there: without its hash the hooks were never
+    // installed or `agents uninstall` took them out, and only an explicit `agents setup` adds them.
+    if (!stored || current === stored) return;
     if (otherInstallOwnsHooks()) return;
 
     // Spawn detached so it doesn't block the CLI
