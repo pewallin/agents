@@ -55,10 +55,13 @@ export interface DoctorResult {
 const STATE_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "state-hook.sh");
 const STOP_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "stop-hook.sh");
 const COMPACT_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "compact-hook.sh");
+const STEER_HOOK_SCRIPT = join(EXTENSIONS_DIR, "claude", "steer-hook.sh");
 
 const CLAUDE_HOOKS = {
   PreToolUse: [{ hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} working` }] }],
   UserPromptSubmit: [{ hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} working` }] }],
+  // After each tool call: messages a coordinator steers into this turn (docs/steer-inbox.md).
+  PostToolUse: [{ hooks: [{ type: "command", command: STEER_HOOK_SCRIPT }] }],
   Stop: [{ hooks: [{ type: "command", command: STOP_HOOK_SCRIPT }] }],
   Notification: [
     { matcher: "idle_prompt", hooks: [{ type: "command", command: `${STATE_HOOK_SCRIPT} idle` }] },
@@ -1480,6 +1483,7 @@ function doctorClaude(spec: AgentIntegrationSpec): DoctorResult {
   const exactHooks = [
     { name: "PreToolUse", event: "PreToolUse", def: CLAUDE_HOOKS.PreToolUse[0] },
     { name: "UserPromptSubmit", event: "UserPromptSubmit", def: CLAUDE_HOOKS.UserPromptSubmit[0] },
+    { name: "PostToolUse", event: "PostToolUse", def: CLAUDE_HOOKS.PostToolUse[0] },
     { name: "Stop", event: "Stop", def: CLAUDE_HOOKS.Stop[0] },
     { name: "Notification:idle_prompt", event: "Notification", def: CLAUDE_HOOKS.Notification[0] },
     { name: "Notification:permission_prompt", event: "Notification", def: CLAUDE_HOOKS.Notification[1] },

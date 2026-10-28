@@ -1,5 +1,5 @@
 import { execFileSync } from "child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { fileURLToPath } from "url";
@@ -43,6 +43,37 @@ describe("Claude hook scripts", () => {
     expect(valueAfter(result.argv, "--model-id")).toBe("claude-opus-4-6");
     expect(valueAfter(result.argv, "--provider")).toBe("anthropic");
     expect(valueAfter(result.argv, "--response-preview")).toBe("All done.");
+  });
+
+  it("hands steered messages to the turn as additionalContext, once, and says the pane's Claude takes them", () => {
+    const directory = mkdtempSync(join(tmpdir(), "agents-claude-steer-test-"));
+    temporaryDirectories.push(directory);
+    const inbox = join(directory, "runtime", "tmp", "steer", "4242-pane-7");
+    const scriptPath = fileURLToPath(new URL("../extensions/claude/steer-hook.sh", import.meta.url));
+    const run = () => execFileSync("bash", [scriptPath], {
+      input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Bash" }),
+      env: { ...process.env, TMUX: "/tmp/sock,4242,0", TMUX_PANE: "%7", AGENTS_HOME: directory, AGENTS_TMP_DIR: "" },
+      encoding: "utf8",
+    });
+
+    // No message: nothing on stdout, and the inbox says this Claude takes steered messages.
+    expect(run()).toBe("");
+    const harness = JSON.parse(readFileSync(join(inbox, "harness.json"), "utf8"));
+    expect(harness.harness).toBe("claude");
+    expect(Number.isInteger(harness.pid)).toBe(true);
+
+    writeFileSync(join(inbox, "m-1.msg"), JSON.stringify({ id: "m-1", text: "From coordinator: use v2" }));
+    writeFileSync(join(inbox, "m-2.msg"), JSON.stringify({ id: "m-2", text: "From coordinator: skip the docs" }));
+    const output = JSON.parse(run());
+    expect(output.hookSpecificOutput.hookEventName).toBe("PostToolUse");
+    expect(output.hookSpecificOutput.additionalContext).toContain("From coordinator: use v2");
+    expect(output.hookSpecificOutput.additionalContext).toContain("From coordinator: skip the docs");
+    expect(JSON.parse(readFileSync(join(inbox, "m-1.ack.json"), "utf8")).state).toBe("steered");
+    expect(existsSync(join(inbox, "m-1.msg"))).toBe(false);
+    expect(existsSync(join(inbox, "m-1.taken"))).toBe(true);
+
+    // The next tool call finds nothing left to hand over.
+    expect(run()).toBe("");
   });
 });
 

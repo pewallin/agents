@@ -46,6 +46,7 @@ export const INTEGRATION_SPECS: AgentIntegrationSpec[] = [
     configuredEvents: [
       "PreToolUse",
       "UserPromptSubmit",
+      "PostToolUse",
       "Stop",
       "Notification:idle_prompt",
       "Notification:permission_prompt",

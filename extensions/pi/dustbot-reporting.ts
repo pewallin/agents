@@ -11,7 +11,7 @@
  */
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { appendFile, existsSync, readdirSync, realpathSync } from "node:fs";
+import { appendFile, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -277,6 +277,90 @@ function shouldSettleIdleFromActivityBoundary({
   return !!lastAssistantStopReason && TERMINAL_ASSISTANT_STOP_REASONS.has(lastAssistantStopReason);
 }
 
+// Steered messages (docs/steer-inbox.md): a coordinator's `agents-app-control agent send --mode
+// steer` puts a message in this pane's steer inbox; while a prompt runs, this extension takes it
+// and hands it to Pi with sendUserMessage(..., { deliverAs: "steer" }), which delivers it after
+// the current tool calls and before the next model call, inside the same run. Taking is a rename
+// (<id>.msg -> <id>.taken), so a message the CLI withdraws at the same moment is taken or
+// withdrawn, never both. <id>.ack.json says steered when Pi has it, acknowledged when Pi shows it
+// as a user message of the run.
+export function steerInboxDirectory(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const serverPid = env.TMUX?.split(",")[1];
+  const pane = env.TMUX_PANE;
+  if (!serverPid || !pane?.startsWith("%")) return undefined;
+  const home = env.AGENTS_HOME || join(env.AGENTS_SHARED_HOME || join(homedir(), ".agents"), env.AGENTS_PRODUCT_DIRNAME || "agents-app");
+  return join(env.AGENTS_TMP_DIR || join(home, "runtime", "tmp"), "steer", `${serverPid}-pane-${pane.slice(1)}`);
+}
+
+const STEER_POLL_MS = 500;
+
+export function createSteerInbox(pi: Pick<ExtensionAPI, "sendUserMessage">, dir: string | undefined, now = () => new Date()) {
+  const waiting = new Map<string, string>();
+  const ack = (id: string, state: string, detail: string) => {
+    try {
+      writeFileSync(join(dir!, `${id}.ack.json`), `${JSON.stringify({ state, detail, at: now().toISOString() })}\n`);
+    } catch {}
+  };
+  return {
+    // Says that this pane's Pi takes steered messages.
+    announce(): void {
+      if (!dir) return;
+      try {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "harness.json"), `${JSON.stringify({ harness: "pi", pid: process.pid, at: now().toISOString() })}\n`);
+      } catch {}
+    },
+    // Takes every waiting message and hands it to the run in progress.
+    take(): number {
+      if (!dir) return 0;
+      let names: string[] = [];
+      try {
+        names = readdirSync(dir).filter((name) => name.endsWith(".msg")).sort();
+      } catch {
+        return 0;
+      }
+      let taken = 0;
+      for (const name of names) {
+        const id = name.slice(0, -4);
+        const takenFile = join(dir, `${id}.taken`);
+        try {
+          renameSync(join(dir, name), takenFile);
+        } catch {
+          continue; // Withdrawn, or taken by another reader.
+        }
+        let text = "";
+        try {
+          text = String(JSON.parse(readFileSync(takenFile, "utf8")).text || "").trim();
+        } catch {}
+        if (!text) {
+          ack(id, "rejected", "no text");
+          continue;
+        }
+        try {
+          pi.sendUserMessage(text, { deliverAs: "steer" });
+        } catch (error) {
+          ack(id, "rejected", `Pi refused it: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+        waiting.set(text, id);
+        ack(id, "steered", "handed to Pi with deliverAs: steer");
+        taken += 1;
+      }
+      return taken;
+    },
+    // A user message of the run that is one of ours: Pi delivered it into the run.
+    delivered(message: any): void {
+      if (message?.role !== "user" || waiting.size === 0) return;
+      const content = message.content;
+      const text = (typeof content === "string" ? content : Array.isArray(content) ? content.filter((part: any) => part?.type === "text").map((part: any) => part.text).join("") : "").trim();
+      const id = waiting.get(text);
+      if (!id) return;
+      waiting.delete(text);
+      ack(id, "acknowledged", "Pi delivered it into the run as a user message");
+    },
+  };
+}
+
 const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   let activePrompt = false;
   let lastState: PiState | undefined;
@@ -287,6 +371,26 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
   let lastAssistantMessageSeen: any | undefined;
   const pendingToolExecutions = new Set<string>();
   const activeToolNames = new Map<string, string>();
+  const steerInbox = createSteerInbox(pi, steerInboxDirectory());
+  let steerTimer: ReturnType<typeof setInterval> | undefined;
+  let steerCtx: any;
+
+  // Only while a run is in progress and not idle: a message for an idle Pi is not steering.
+  function startSteering(ctx: any): void {
+    steerCtx = ctx;
+    if (steerTimer) return;
+    steerInbox.announce();
+    steerTimer = setInterval(() => {
+      if (!activePrompt || ctxIsIdle(steerCtx)) return;
+      steerInbox.take();
+    }, STEER_POLL_MS);
+    steerTimer.unref?.();
+  }
+
+  function stopSteering(): void {
+    if (steerTimer) clearInterval(steerTimer);
+    steerTimer = undefined;
+  }
 
   function setState(state: PiState, ctx: any, detail?: string | null, force = false, metadata: ReportMetadata = {}): void {
     const nextIntent = metadata.clearIntent ? undefined : metadata.intent ?? lastIntent;
@@ -352,6 +456,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     });
     if (!shouldSettle) return;
     activePrompt = false;
+    stopSteering();
     clearActivity();
     const preview = responsePreview(lastAssistantMessageSeen);
     const metadata = preview ? { responsePreview: preview } : {};
@@ -376,8 +481,17 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     );
   });
 
+  pi.on("session_start", async () => {
+    steerInbox.announce();
+  });
+
+  pi.on("message_start", async (event: any) => {
+    steerInbox.delivered(event?.message);
+  });
+
   pi.on("agent_start", async (_event: any, ctx: any) => {
     debug("agent_start");
+    startSteering(ctx);
     activePrompt = true;
     lastAssistantStopReason = undefined;
     lastAssistantMessageSeen = undefined;
@@ -402,6 +516,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
       return;
     }
     activePrompt = false;
+    stopSteering();
     clearActivity();
     const preview = responsePreview(lastAssistantMessageSeen);
     const metadata = preview ? { responsePreview: preview } : {};
@@ -523,6 +638,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     lastAssistantStopReason = undefined;
     lastAssistantMessageSeen = undefined;
     clearActivity();
+    stopSteering();
     // The agent leaves the pane: its state goes away instead of staying idle.
     setState("exited", ctx, null, true, { clearIntent: true });
   });
