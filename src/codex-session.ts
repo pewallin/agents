@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { basename, dirname, join } from "path";
 import { splitCommandArgv } from "./agent-restore.js";
-import { execFileInheritUntilExit, spawnBackgroundLogged } from "./shell.js";
+import { execFileInheritUntilExit, spawnBackgroundLogged, type ManagedBackgroundProcess } from "./shell.js";
 
 export interface CodexSessionProcessPlan {
   executable: string;
@@ -13,6 +13,8 @@ export interface CodexSessionLaunchPlan {
   logPath: string;
   server: CodexSessionProcessPlan;
   tui: CodexSessionProcessPlan;
+  /** The configured command as it is, for a pane whose app-server did not start. */
+  plainTui: CodexSessionProcessPlan;
 }
 
 export interface CodexSessionLaunchInput {
@@ -32,6 +34,8 @@ export interface PaneLocalCodexSessionResult {
   signal: NodeJS.Signals | null;
   endpointMetadataRemoved: boolean;
   logPath: string;
+  /** False when the app-server did not start and Codex ran without one. */
+  appServer: boolean;
 }
 
 function socketStem(paneId: string): string {
@@ -63,6 +67,7 @@ export function createCodexSessionLaunchPlan(input: CodexSessionLaunchInput): Co
       // The TUI is connected to its own app-server with --remote, which Codex refuses beside --no-daemon.
       args: argv.slice(1).filter((arg) => arg !== "--no-daemon"),
     },
+    plainTui: { executable, args: argv.slice(1) },
   };
 }
 
@@ -106,21 +111,29 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
     logPath: plan.logPath,
   });
 
+  let endpoint: string | undefined;
+  try {
+    endpoint = waitForListeningEndpoint(server, plan.logPath, startupTimeoutMs);
+  } catch (error) {
+    // The agent matters more than its web view: Codex starts without an app-server, as it would
+    // have without this command, and only Codex Web is unavailable in this pane.
+    server.terminate();
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Codex Web is unavailable in this pane: ${message}. Starting Codex without it.`);
+    const result = execFileInheritUntilExit(plan.plainTui.executable, plan.plainTui.args, input.environment);
+    if (result.error) throw result.error;
+    return {
+      status: result.status,
+      signal: result.signal,
+      endpointMetadataRemoved: !existsSync(plan.endpointMetadataPath),
+      logPath: plan.logPath,
+      appServer: false,
+    };
+  }
+
   let tuiStatus = 1;
   let tuiSignal: NodeJS.Signals | null = null;
   try {
-    const deadline = Date.now() + startupTimeoutMs;
-    let endpoint: string | undefined;
-    while (!(endpoint = readListeningEndpoint(plan.logPath))) {
-      if (server.error) throw server.error;
-      if (server.exitCode !== null || server.signalCode !== null) {
-        throw new Error(`Codex app-server exited before its endpoint was ready. Log: ${plan.logPath}`);
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for Codex app-server. Log: ${plan.logPath}`);
-      }
-      sleepSync(25);
-    }
     writeEndpointMetadata(plan.endpointMetadataPath, endpoint, input.processId);
 
     const result = execFileInheritUntilExit(
@@ -140,5 +153,26 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
     signal: tuiSignal,
     endpointMetadataRemoved: !existsSync(plan.endpointMetadataPath),
     logPath: plan.logPath,
+    appServer: true,
   };
+}
+
+function waitForListeningEndpoint(
+  server: ManagedBackgroundProcess,
+  logPath: string,
+  timeoutMs: number,
+): string {
+  const deadline = Date.now() + timeoutMs;
+  let endpoint: string | undefined;
+  while (!(endpoint = readListeningEndpoint(logPath))) {
+    if (server.error) throw server.error;
+    if (server.exitCode !== null || server.signalCode !== null) {
+      throw new Error(`Codex app-server exited before its endpoint was ready. Log: ${logPath}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for Codex app-server. Log: ${logPath}`);
+    }
+    sleepSync(25);
+  }
+  return endpoint;
 }
