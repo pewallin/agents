@@ -11,6 +11,7 @@ describe("createCodexSessionLaunchPlan", () => {
       paneId: "%346",
       runtimeTempDir: "/tmp/agents-runtime",
       processId: 4242,
+      supportsNoDaemon: true,
     });
 
     expect(plan.endpointMetadataPath).toBe("/tmp/agents-runtime/codex-app-server/pane-346.json");
@@ -39,9 +40,31 @@ describe("createCodexSessionLaunchPlan", () => {
       paneId: "%25",
       runtimeTempDir: "/tmp/agents-runtime",
       processId: 4242,
+      supportsNoDaemon: true,
     });
 
     expect(plan.tui.args).toEqual(["-m", "gpt-6-astra", "ROLE: worker."]);
+  });
+
+  it("drops a --remote the command inherited, so the TUI runs on this pane's app-server only", () => {
+    const plan = createCodexSessionLaunchPlan({
+      command: "codex --remote ws://127.0.0.1:9 --remote-auth-token-env=TOKEN --no-daemon -c model_reasoning_effort=high resume --last -- '--remote stays in the prompt'",
+      paneId: "%25",
+      runtimeTempDir: "/tmp/agents-runtime",
+      processId: 4242,
+      supportsNoDaemon: true,
+    });
+
+    expect(plan.tui.args).toEqual([
+      "-c", "model_reasoning_effort=high", "resume", "--last", "--", "--remote stays in the prompt",
+    ]);
+    expect(plan.plainTui.args).toEqual(["--no-daemon", ...plan.tui.args]);
+  });
+
+  it("starts the TUI on its own with --no-daemon only where Codex has it", () => {
+    const input = { command: "codex -m gpt-test", paneId: "%25", runtimeTempDir: "/tmp/agents-runtime", processId: 1 };
+    expect(createCodexSessionLaunchPlan({ ...input, supportsNoDaemon: true }).plainTui.args).toEqual(["--no-daemon", "-m", "gpt-test"]);
+    expect(createCodexSessionLaunchPlan({ ...input, supportsNoDaemon: false }).plainTui.args).toEqual(["-m", "gpt-test"]);
   });
 
   it("keeps the pane identity in the app-server environment and cleans up", () => {
@@ -72,6 +95,7 @@ if (args[0] === "app-server") {
         paneId: "%55",
         runtimeTempDir: runtimeDirectory,
         processId: 101,
+        supportsNoDaemon: true,
         environment: {
           ...process.env,
           TMUX_PANE: "%55",
@@ -130,10 +154,11 @@ if (args[0] === "app-server") {
         runtimeTempDir: runtimeDirectory,
         processId: 102,
         startupTimeoutMs: 500,
+        supportsNoDaemon: true,
         environment: { ...process.env, TMUX_PANE: "%56", CODEX_SESSION_TEST_OUTPUT: outputPath },
       });
 
-      // The configured command as it was, --no-daemon included, and its own exit status.
+      // Codex on its own, never on the shared daemon, and its own exit status.
       expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
         args: ["--no-daemon", "-m", "gpt-test", "ROLE: worker."],
       });
@@ -168,6 +193,7 @@ if (args[0] === "app-server") {
         paneId: "%57",
         runtimeTempDir: runtimeDirectory,
         processId: 103,
+        supportsNoDaemon: true,
         environment: { ...process.env, TMUX_PANE: "%57" },
       });
 

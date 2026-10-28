@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { basename, dirname, join } from "path";
 import { splitCommandArgv } from "./agent-restore.js";
+import { spawnSync } from "child_process";
 import { execFileInheritUntilExit, spawnBackgroundLogged, type ManagedBackgroundProcess } from "./shell.js";
 
 export interface CodexSessionProcessPlan {
@@ -12,8 +13,12 @@ export interface CodexSessionLaunchPlan {
   endpointMetadataPath: string;
   logPath: string;
   server: CodexSessionProcessPlan;
+  /** The TUI on this pane's app-server; --remote and its endpoint go first when it starts. */
   tui: CodexSessionProcessPlan;
-  /** The configured command as it is, for a pane whose app-server did not start. */
+  /**
+   * The TUI on its own, for a pane whose app-server did not start. It gets --no-daemon where the
+   * Codex has it, so it never runs on the shared daemon with another pane's environment.
+   */
   plainTui: CodexSessionProcessPlan;
 }
 
@@ -22,6 +27,8 @@ export interface CodexSessionLaunchInput {
   paneId: string;
   runtimeTempDir: string;
   processId: number;
+  /** Whether this Codex has --no-daemon; asked of `codex --help` when it is not given. */
+  supportsNoDaemon?: boolean;
 }
 
 export interface PaneLocalCodexSessionInput extends CodexSessionLaunchInput {
@@ -55,6 +62,11 @@ export function createCodexSessionLaunchPlan(input: CodexSessionLaunchInput): Co
   const endpointMetadataPath = join(directory, `${stem}.json`);
   const logPath = join(directory, `${stem}-${input.processId}.log`);
 
+  // This command picks how the TUI runs, so the configured command's own choice goes: Codex refuses
+  // --no-daemon beside --remote, and a --remote inherited from another pane is that pane's server.
+  const args = withoutCodexServerOptions(argv.slice(1));
+  const supportsNoDaemon = input.supportsNoDaemon ?? codexSupportsNoDaemon(executable);
+
   return {
     endpointMetadataPath,
     logPath,
@@ -62,13 +74,36 @@ export function createCodexSessionLaunchPlan(input: CodexSessionLaunchInput): Co
       executable,
       args: ["app-server", "--listen", "ws://127.0.0.1:0"],
     },
-    tui: {
-      executable,
-      // The TUI is connected to its own app-server with --remote, which Codex refuses beside --no-daemon.
-      args: argv.slice(1).filter((arg) => arg !== "--no-daemon"),
-    },
-    plainTui: { executable, args: argv.slice(1) },
+    tui: { executable, args },
+    plainTui: { executable, args: supportsNoDaemon ? ["--no-daemon", ...args] : args },
   };
+}
+
+const CODEX_SERVER_OPTIONS_WITH_VALUE = new Set(["--remote", "--remote-auth-token-env"]);
+
+export function withoutCodexServerOptions(args: string[]): string[] {
+  const output: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") {
+      output.push(...args.slice(index));
+      break;
+    }
+    if (arg === "--no-daemon") continue;
+    if (CODEX_SERVER_OPTIONS_WITH_VALUE.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if ([...CODEX_SERVER_OPTIONS_WITH_VALUE].some((option) => arg.startsWith(`${option}=`))) continue;
+    output.push(arg);
+  }
+  return output;
+}
+
+// A Codex from before the shared daemon has no --no-daemon and refuses it.
+function codexSupportsNoDaemon(executable: string): boolean {
+  const help = spawnSync(executable, ["--help"], { encoding: "utf8", timeout: 5_000 });
+  return help.status === 0 && /--no-daemon\b/.test(help.stdout || "");
 }
 
 function sleepSync(milliseconds: number): void {
