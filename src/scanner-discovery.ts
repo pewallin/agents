@@ -167,7 +167,9 @@ function parseProcessTree(raw: string): ProcessTree {
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+([-\d.,]+)\s+(\d+)\s*(.*)$/);
+    // A ucomm may hold spaces (Kiro's terminal proxy is "zsh (kiro-cli-term)"): it takes the
+    // fewest words that leave a tty, %cpu and rss behind it.
+    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(.+?)\s+(\S+)\s+([-\d.,]+)\s+(\d+)(?:\s+(.*))?$/);
     if (!match) continue;
 
     const rssKB = parseInt(match[6], 10) || 0;
@@ -212,9 +214,15 @@ export function findAgentLeafInTree(
   return best ? { agentName: best.agentName, process: best.process } : null;
 }
 
+const SHELL_PROCS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "tcsh", "csh"]);
+
+// A shell counts by its executable only: its arguments may name an agent it runs a hook for
+// (Copilot's and Pi's extensions start `bash -c '… agents_hook_run "$@"' … copilot report`), or
+// one it was asked to start.
 function reporterOwnedAgentName(entry: ProcEntry): string | null {
   if (/\bagents(?:\.js)?\s+resurrect\s+agent\b/.test(entry.args)) return null;
   if (/\b(?:agents|cli\.js)\s+report\b/.test(entry.args)) return null;
+  if (SHELL_PROCS.has(normalizeProcessToken(entry.comm))) return null;
   return detectAgentProcess(entry.comm, entry.args);
 }
 

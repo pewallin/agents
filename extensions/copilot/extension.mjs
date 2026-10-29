@@ -5,7 +5,7 @@
  * to the agents dashboard via `agents report`.
  *
  * - working: user prompt submitted, or tool executing
- * - approval: ask_user tool is waiting for user input
+ * - approval: a permission request waits for the user (working again once it is answered)
  * - idle: turn complete, waiting for next prompt
  *
  * Also tracks context window usage via session.usage_info events.
@@ -70,6 +70,11 @@ function applyModelSelection(candidate, providerFallback = currentProvider) {
   currentModelLabel = trimmed;
 }
 
+// Reports run one at a time, in the order of their events. Each one checks the pane's process
+// tree, which takes a moment: started side by side, a "working" from a tool's end could land after
+// the turn's "idle" and leave the pane working until its next turn.
+let reportChain = Promise.resolve();
+
 function report(state, extraArgs = []) {
   const args = ["report", "--agent", "copilot", "--state", state, "--session", SESSION_ID, ...extraArgs];
   if (currentProvider) args.push("--provider", String(currentProvider));
@@ -80,11 +85,16 @@ function report(state, extraArgs = []) {
   if (contextTokens !== undefined) args.push("--context-tokens", String(contextTokens));
   if (contextMax !== undefined) args.push("--context-max", String(contextMax));
   if (spendNanoAiu !== undefined) args.push("--spend", String(Math.round(spendNanoAiu / 1e7) / 100), "--spend-unit", "AIU");
-  execFile(...agentsCommand("copilot", args), (err) => {
-    if (err) {
-      console.error(`[agents-reporting] agents report failed: ${err.message}`);
-    }
-  });
+  const command = agentsCommand("copilot", args);
+  reportChain = reportChain.then(() => new Promise((resolve) => {
+    execFile(...command, (err) => {
+      if (err) {
+        console.error(`[agents-reporting] agents report failed: ${err.message}`);
+      }
+      resolve();
+    });
+  }));
+  return reportChain;
 }
 
 function handleSessionEvent(event) {
@@ -125,6 +135,8 @@ function handleSessionEvent(event) {
     case "tool.execution_start":
       report(event.data?.toolName === "ask_user" ? "question" : "working");
       break;
+    // Answered (or approved on its own): the tool runs, or the turn goes on.
+    case "permission.completed":
     case "tool.execution_complete":
     case "assistant.turn_start":
       report("working");
@@ -148,7 +160,7 @@ const session = await joinSession({
     },
     onSessionEnd: async () => {
       // The agent leaves the pane: its state goes away instead of staying idle.
-      report("exited");
+      await report("exited");
     },
   },
 });
