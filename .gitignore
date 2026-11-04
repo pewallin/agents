@@ -7,3 +7,4 @@ dist-bin/
 bridge-plugin/target/
 storage.sqlite3*
 .shape/
+dist-web/

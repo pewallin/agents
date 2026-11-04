@@ -91,6 +91,7 @@ if (args[0] === "app-server") {
 
     try {
       const result = runPaneLocalCodexSession({
+        acpHostArgv: null,
         command: `${executable} --model gpt-test`,
         paneId: "%55",
         runtimeTempDir: runtimeDirectory,
@@ -149,6 +150,7 @@ if (args[0] === "app-server") {
 
     try {
       const result = runPaneLocalCodexSession({
+        acpHostArgv: null,
         command: `${executable} --no-daemon -m gpt-test 'ROLE: worker.'`,
         paneId: "%56",
         runtimeTempDir: runtimeDirectory,
@@ -189,6 +191,7 @@ if (args[0] === "app-server") {
 
     try {
       const result = runPaneLocalCodexSession({
+        acpHostArgv: null,
         command: `${executable}`,
         paneId: "%57",
         runtimeTempDir: runtimeDirectory,

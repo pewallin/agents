@@ -7,6 +7,7 @@
 // Each target gets <outdir>/<target>/ with:
 //   agents        the executable
 //   extensions/   hook scripts and agent extensions; `agents setup` links agents to these
+//   acp-view/     the prebuilt ACP web view `agents acp-host` serves (npm run build:web)
 //   build.json    version, git commit, whether src/ had uncommitted changes, target and build
 //                 time (also baked into the binary)
 // The code lives in Bun's virtual file system, so the binary finds extensions/ next to itself
@@ -47,8 +48,12 @@ for (const target of targets) {
 }
 const outdir = resolve(option("--outdir") ?? join(ROOT, "dist-bin"));
 
+// The ACP web view is plain static files, the same for every target.
+execFileSync("npm", ["run", "-s", "build:web"], { cwd: ROOT, stdio: "inherit" });
+const ACP_VIEW = join(ROOT, "dist-web", "acp-view");
+
 const version = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8")).version as string;
-const dirty = git("status", "--porcelain", "--", "src", "extensions", "package.json", "package-lock.json") !== "";
+const dirty = git("status", "--porcelain", "--", "src", "extensions", "web", "package.json", "package-lock.json") !== "";
 const gitCommit = git("rev-parse", "HEAD");
 
 for (const target of targets) {
@@ -84,6 +89,7 @@ for (const target of targets) {
   }
 
   cpSync(join(ROOT, "extensions"), join(dir, "extensions"), { recursive: true });
+  cpSync(ACP_VIEW, join(dir, "acp-view"), { recursive: true });
   if (existsSync(join(ROOT, BRIDGE_WASM))) {
     mkdirSync(dirname(join(dir, BRIDGE_WASM)), { recursive: true });
     cpSync(join(ROOT, BRIDGE_WASM), join(dir, BRIDGE_WASM));

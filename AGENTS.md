@@ -37,6 +37,9 @@ src/
   multiplexer.ts    — Multiplexer interface + auto-detection (tmux vs zellij)
   mux-tmux.ts       — tmux Multiplexer backend
   mux-zellij.ts     — zellij Multiplexer backend (talks to bridge plugin via pipe)
+  codex-session.ts  — a Codex pane's own app-server (Codex Web, ACP view) and its ACP host
+  acp-host.ts       — the pane's ACP web view host: static web client, one codex-acp per client
+  acp-host-cli.ts   — the hidden `acp-host` and `codex-acp` commands (codex-acp is bundled)
   components/
     Dashboard.tsx    — main watch-mode UI (Ink/React), preview, grid, sidebar
     AgentTable.tsx   — responsive table with adaptive column widths
@@ -49,6 +52,7 @@ extensions/
   opencode/          — OpenCode plugin (index.mjs, installed as npm package)
   kiro/              — Kiro CLI hook script (wired via ~/.kiro/agents/agents-reporting.json and Kiro's default agent setting when unset)
 
+web/acp-view/        — the ACP web view (React, @acp-components); `npm run build:web` → dist-web/
 bridge-plugin/       — Rust WASM plugin for zellij (see bridge-plugin/README.md)
 docs/                — feature plans (zellij-support.md)
 ```
@@ -105,6 +109,7 @@ npm run test         # vitest run (58 tests)
 npm run dev          # tsc --watch
 npm run dev:watch    # vite-node hot reload for watch mode
 npm run build:binary # single executable via Bun → dist-bin/<platform>/ (--target all for every platform)
+npm run build:web    # the ACP web view → dist-web/acp-view (build:binary runs it and ships acp-view/)
 ```
 
 The compiled binary (`scripts/build-binary.ts`) runs without node or node_modules. Its code

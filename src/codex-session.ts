@@ -3,6 +3,7 @@ import { basename, dirname, join } from "path";
 import { splitCommandArgv } from "./agent-restore.js";
 import { spawnSync } from "child_process";
 import { execFileInheritUntilExit, spawnBackgroundLogged, type ManagedBackgroundProcess } from "./shell.js";
+import { getSelfArgv } from "./paths.js";
 
 export interface CodexSessionProcessPlan {
   executable: string;
@@ -34,6 +35,11 @@ export interface CodexSessionLaunchInput {
 export interface PaneLocalCodexSessionInput extends CodexSessionLaunchInput {
   environment: NodeJS.ProcessEnv;
   startupTimeoutMs?: number;
+  /**
+   * Starts the pane's ACP host (`agents acp-host`) beside its app-server, warm, so the ACP web
+   * view opens without starting anything. Defaults to this CLI; null leaves it out.
+   */
+  acpHostArgv?: string[] | null;
 }
 
 export interface PaneLocalCodexSessionResult {
@@ -168,8 +174,10 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
 
   let tuiStatus = 1;
   let tuiSignal: NodeJS.Signals | null = null;
+  let acpHost: ManagedBackgroundProcess | undefined;
   try {
     writeEndpointMetadata(plan.endpointMetadataPath, endpoint, input.processId);
+    acpHost = startAcpHost(input, plan, endpoint);
 
     const result = execFileInheritUntilExit(
       plan.tui.executable,
@@ -180,6 +188,7 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
     tuiStatus = result.status;
     tuiSignal = result.signal;
   } finally {
+    acpHost?.terminate();
     server.terminate();
     removeOwnedEndpointMetadata(plan.endpointMetadataPath, input.processId);
   }
@@ -190,6 +199,26 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
     logPath: plan.logPath,
     appServer: true,
   };
+}
+
+/** The ACP web view's host: optional, so nothing about Codex depends on it starting. */
+function startAcpHost(
+  input: PaneLocalCodexSessionInput,
+  plan: CodexSessionLaunchPlan,
+  endpoint: string,
+): ManagedBackgroundProcess | undefined {
+  if (input.environment.AGENTS_ACP_HOST === "0") return undefined;
+  const argv = input.acpHostArgv === undefined ? getSelfArgv() : input.acpHostArgv;
+  if (!argv || argv.length === 0) return undefined;
+  try {
+    return spawnBackgroundLogged(
+      argv[0],
+      [...argv.slice(1), "acp-host", "--pane", input.paneId, "--app-server", endpoint, "--cwd", process.cwd()],
+      { env: input.environment, logPath: plan.logPath.replace(/\.log$/, "-acp-host.log") },
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 function waitForListeningEndpoint(
