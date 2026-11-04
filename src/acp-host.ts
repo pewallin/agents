@@ -1,8 +1,8 @@
-// The ACP host of a Codex pane: a loopback web server, started warm by `agents codex-session`
-// beside the pane's app-server, that serves the prebuilt ACP web view and gives each WebSocket
-// client its own codex-acp process. codex-acp runs on the pane's app-server through this CLI's
-// app-server proxy (CODEX_PATH is this CLI, AGENTS_CODEX_APP_SERVER_URL the pane's server), so
-// the web view and the TUI share the pane's Codex thread live.
+// The ACP host of an agent pane (`agents acp-session`): a loopback web server that serves the
+// prebuilt ACP web view and gives each WebSocket client its own process of the agent's ACP
+// adapter, bridged frame per line. It knows nothing of any one agent: what to start comes from
+// the agent table in acp-host-cli.ts (for Codex, codex-acp on the pane's own app-server, so the
+// web view and the TUI share the thread live).
 //
 // Only this machine reaches it (127.0.0.1), and only a page with the pane's token can open the
 // agent: the WebSocket needs the token, an Origin of this server and a Host of this server. The
@@ -19,17 +19,20 @@ export interface AcpHostMetadata {
   url: string;
   token: string;
   processId: number;
+  /** ACP registry id of the agent the host serves. */
+  agent: string;
 }
 
 export interface AcpHostOptions {
   paneId: string;
-  appServerUrl: string;
+  /** The agent the host serves: its ACP registry id and the name the view shows. */
+  agent: { id: string; name: string };
   runtimeTempDir: string;
   /** Directory with the built web view (index.html, assets/). */
   webRoot: string;
   /** The working directory sessions are loaded with: the pane's. */
   cwd: string;
-  /** How to start the ACP agent for one client. */
+  /** How to start the agent's ACP adapter for one client. */
   agentCommand: { command: string; args: string[]; env: NodeJS.ProcessEnv };
   /** Keep one agent process started ahead of the next client. */
   warmSpare?: boolean;
@@ -58,13 +61,14 @@ const CONTENT_TYPES: Record<string, string> = {
 
 export function acpHostMetadataPath(runtimeTempDir: string, paneId: string): string {
   const normalized = paneId.trim().replace(/^%/, "pane-").replace(/[^A-Za-z0-9._-]/g, "-");
-  return join(runtimeTempDir, "acp-host", `${normalized || "pane-unknown"}.json`);
+  return join(runtimeTempDir, "acp-session", `${normalized || "pane-unknown"}.json`);
 }
 
 export function readAcpHostMetadata(path: string): AcpHostMetadata | undefined {
   try {
     const value = JSON.parse(readFileSync(path, "utf8")) as Partial<AcpHostMetadata>;
-    if (typeof value.url === "string" && typeof value.token === "string" && typeof value.processId === "number") {
+    if (typeof value.url === "string" && typeof value.token === "string" && typeof value.processId === "number"
+      && typeof value.agent === "string") {
       return value as AcpHostMetadata;
     }
   } catch {}
@@ -122,7 +126,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       response.writeHead(403).end("forbidden host");
       return;
     }
-    handleHttp(request, response, { webRoot, token, cwd: options.cwd });
+    handleHttp(request, response, { webRoot, token, cwd: options.cwd, agent: options.agent });
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
@@ -150,9 +154,9 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const port = (server.address() as { port: number }).port;
   const url = `http://127.0.0.1:${port}`;
 
-  mkdirSync(join(options.runtimeTempDir, "acp-host"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(options.runtimeTempDir, "acp-session"), { recursive: true, mode: 0o700 });
   const temporaryPath = `${metadataPath}.${process.pid}.tmp`;
-  writeFileSync(temporaryPath, JSON.stringify({ url, token, processId: process.pid } satisfies AcpHostMetadata), { mode: 0o600 });
+  writeFileSync(temporaryPath, JSON.stringify({ url, token, processId: process.pid, agent: options.agent.id } satisfies AcpHostMetadata), { mode: 0o600 });
   chmodSync(temporaryPath, 0o600);
   renameSync(temporaryPath, metadataPath);
   if (options.warmSpare) spare = startAgent();
@@ -208,7 +212,7 @@ function bridge(ws: WebSocket, child: ChildProcess, log: (message: string) => vo
 function handleHttp(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { webRoot: string; token: string; cwd: string },
+  context: { webRoot: string; token: string; cwd: string; agent: { id: string; name: string } },
 ): void {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -226,7 +230,7 @@ function handleHttp(
       return;
     }
     response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" })
-      .end(JSON.stringify({ cwd: context.cwd }));
+      .end(JSON.stringify({ cwd: context.cwd, agent: context.agent }));
     return;
   }
 

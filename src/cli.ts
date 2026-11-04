@@ -83,16 +83,16 @@ if (shouldRunCodexAppServerProxy(args, process.env)) {
   process.exit(await runCodexAppServerWebSocketProxy());
 }
 
-// A Codex pane's ACP web view: the host codex-session starts beside the pane's app-server, and
-// the codex-acp agent it starts per client. Neither needs the rest of the CLI, and codex-acp's
-// stdout is its protocol channel.
+// An agent pane's ACP web view: the host (`acp-session`, which codex-session starts for Codex)
+// and the bundled Codex adapter it starts per client. Neither needs the rest of the CLI, and an
+// adapter's stdout is its protocol channel.
 if (firstArg === "codex-acp") {
   await (await import("./acp-host-cli.js")).runCodexAcpAgent();
 }
-if (firstArg === "acp-host") {
-  const { runAcpHostCommand } = await import("./acp-host-cli.js");
+if (firstArg === "acp-session") {
+  const { runAcpSessionCommand } = await import("./acp-host-cli.js");
   const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
-  await runAcpHostCommand(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp"));
+  await runAcpSessionCommand(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp"));
 }
 
 const muxKind = detectMultiplexer();

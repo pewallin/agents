@@ -1,7 +1,7 @@
-// The ACP web view of one Codex pane. The page address names the thread (/thread/<id>) and
-// carries the pane's token in its fragment (#token=...); the page connects to the agent the
-// host gives this client, loads that thread and shows it. No agent or session picker: the pane
-// decides what is shown.
+// The ACP web view of one agent pane, for any agent. The page address names the session
+// (/thread/<id>) and carries the pane's token in its fragment (#token=...); the page asks the
+// host which agent it serves, connects to the adapter the host starts for this client, loads
+// that session and shows it. No agent or session picker: the pane decides what is shown.
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { acpStore, loadSession } from "@acp-components/core";
@@ -16,7 +16,10 @@ import {
 import "@acp-components/react/styles.css";
 import "./view.css";
 
-const AGENT_ID = "codex";
+interface HostInfo {
+  cwd: string;
+  agent: { id: string; name: string };
+}
 const started = performance.now();
 const timings: Record<string, number> = {};
 (window as unknown as { __acpTimings: typeof timings }).__acpTimings = timings;
@@ -49,16 +52,16 @@ function Message({ text }: { text: string }) {
   return <div className="acp-view-message">{text}</div>;
 }
 
-function ThreadView({ cwd }: { cwd: string }) {
+function ThreadView({ cwd, agent }: HostInfo) {
   const { getClient } = useAcpContext();
-  const { status } = useConnectionStatus(AGENT_ID);
+  const { status } = useConnectionStatus(agent.id);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (status !== "connected" || loaded || !sessionId) return;
     mark("connected");
-    const client = getClient(AGENT_ID);
+    const client = getClient(agent.id);
     if (!client) return;
     let cancelled = false;
     // The composer finds the agent of a session through the store's workspaces; a session
@@ -66,14 +69,14 @@ function ThreadView({ cwd }: { cwd: string }) {
     const store = acpStore.getState();
     store.addWorkspace(cwd);
     store.setActiveWorkspace(cwd);
-    store.addSession({ id: sessionId, cwd, agentId: AGENT_ID, loaded: false });
+    store.addSession({ id: sessionId, cwd, agentId: agent.id, loaded: false });
     store.setActiveSession(sessionId);
     loadSession(client, sessionId, cwd)
       .then(() => {
         if (cancelled) return;
         mark("loaded");
         setLoaded(true);
-        document.title = "Codex";
+        document.title = agent.name;
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
@@ -83,14 +86,14 @@ function ThreadView({ cwd }: { cwd: string }) {
         setError(detail);
       });
     return () => { cancelled = true; };
-  }, [status, loaded, cwd, getClient]);
+  }, [status, loaded, cwd, agent, getClient]);
 
-  if (!sessionId) return <Message text="This pane has no Codex thread yet." />;
-  if (error) return <Message text={`Could not open the thread: ${error}`} />;
+  if (!sessionId) return <Message text={`This pane has no ${agent.name} session yet.`} />;
+  if (error) return <Message text={`Could not open the session: ${error}`} />;
   if (status === "error" || status === "disconnected") {
-    return <Message text={status === "error" ? "Could not reach Codex." : "Connecting to Codex…"} />;
+    return <Message text={status === "error" ? `Could not reach ${agent.name}.` : `Connecting to ${agent.name}…`} />;
   }
-  if (!loaded) return <Message text="Opening the thread…" />;
+  if (!loaded) return <Message text="Opening the session…" />;
   return (
     <div className="acp-view-root" data-acp-ready="true">
       <ChatView sessionId={sessionId} />
@@ -100,28 +103,28 @@ function ThreadView({ cwd }: { cwd: string }) {
 }
 
 function App() {
-  const [cwd, setCwd] = useState<string | null>(null);
+  const [info, setInfo] = useState<HostInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
     fetch("/api/info", { headers: { Authorization: `Bearer ${token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error(`host answered ${response.status}`)))
-      .then((info: { cwd: string }) => setCwd(info.cwd))
+      .then((value: HostInfo) => setInfo(value))
       .catch((reason: Error) => setError(reason.message));
   }, []);
 
   if (!token) return <Message text="This page needs the pane's token; open it from Agents Next." />;
   if (error) return <Message text={`Could not reach the pane's ACP host: ${error}`} />;
-  if (!cwd) return <Message text="Connecting to Codex…" />;
+  if (!info) return <Message text="Connecting…" />;
   const url = `ws://${location.host}/acp?token=${encodeURIComponent(token)}`;
   return (
     <AcpProvider
-      agents={[{ id: AGENT_ID, name: "Codex", transport: { type: "websocket", url } }]}
+      agents={[{ id: info.agent.id, name: info.agent.name, transport: { type: "websocket", url } }]}
       theme={prefersDark ? "dark" : "light"}
-      defaultCwd={cwd}
+      defaultCwd={info.cwd}
     >
-      <ThreadView cwd={cwd} />
+      <ThreadView cwd={info.cwd} agent={info.agent} />
     </AcpProvider>
   );
 }

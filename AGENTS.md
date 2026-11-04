@@ -37,9 +37,10 @@ src/
   multiplexer.ts    — Multiplexer interface + auto-detection (tmux vs zellij)
   mux-tmux.ts       — tmux Multiplexer backend
   mux-zellij.ts     — zellij Multiplexer backend (talks to bridge plugin via pipe)
-  codex-session.ts  — a Codex pane's own app-server (Codex Web, ACP view) and its ACP host
-  acp-host.ts       — the pane's ACP web view host: static web client, one codex-acp per client
-  acp-host-cli.ts   — the hidden `acp-host` and `codex-acp` commands (codex-acp is bundled)
+  codex-session.ts  — a Codex pane's own app-server (Codex Web, ACP view); starts its acp-session
+  acp-host.ts       — an agent pane's ACP view host: static web client, one adapter per client
+  acp-host-cli.ts   — `acp-session --agent <ACP registry id>` and its agent table; the bundled
+                      `codex-acp` adapter command
   components/
     Dashboard.tsx    — main watch-mode UI (Ink/React), preview, grid, sidebar
     AgentTable.tsx   — responsive table with adaptive column widths
@@ -52,7 +53,7 @@ extensions/
   opencode/          — OpenCode plugin (index.mjs, installed as npm package)
   kiro/              — Kiro CLI hook script (wired via ~/.kiro/agents/agents-reporting.json and Kiro's default agent setting when unset)
 
-web/acp-view/        — the ACP web view (React, @acp-components); `npm run build:web` → dist-web/
+web/acp-view/        — the agent-neutral ACP web view (React, @acp-components); `npm run build:web` → dist-web/
 bridge-plugin/       — Rust WASM plugin for zellij (see bridge-plugin/README.md)
 docs/                — feature plans (zellij-support.md)
 ```

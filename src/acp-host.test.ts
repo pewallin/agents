@@ -36,7 +36,7 @@ describe("acp-host", () => {
   async function start(warmSpare = false) {
     host = await startAcpHost({
       paneId: "%42",
-      appServerUrl: "ws://127.0.0.1:1",
+      agent: { id: "test-acp", name: "Test" },
       runtimeTempDir: join(dir, "rt"),
       webRoot: join(dir, "web"),
       cwd: dir,
@@ -55,8 +55,8 @@ describe("acp-host", () => {
 
   it("writes the pane's metadata where the app looks, readable by the user alone", async () => {
     const h = await start();
-    expect(h.metadataPath).toBe(join(dir, "rt", "acp-host", "pane-42.json"));
-    expect(readAcpHostMetadata(h.metadataPath)).toEqual({ url: h.url, token: h.token, processId: process.pid });
+    expect(h.metadataPath).toBe(join(dir, "rt", "acp-session", "pane-42.json"));
+    expect(readAcpHostMetadata(h.metadataPath)).toEqual({ url: h.url, token: h.token, processId: process.pid, agent: "test-acp" });
     expect(statSync(h.metadataPath).mode & 0o777).toBe(0o600);
     expect(h.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     await h.close();
@@ -93,7 +93,7 @@ describe("acp-host", () => {
     expect((await fetch(`${h.url}/api/info`)).status).toBe(401);
     expect((await fetch(`${h.url}/api/info`, { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
     const info = await fetch(`${h.url}/api/info`, { headers: { Authorization: `Bearer ${h.token}` } });
-    expect(await info.json()).toEqual({ cwd: dir });
+    expect(await info.json()).toEqual({ cwd: dir, agent: { id: "test-acp", name: "Test" } });
   });
 
   it("refuses a WebSocket without the token or from another origin", async () => {

@@ -36,8 +36,8 @@ export interface PaneLocalCodexSessionInput extends CodexSessionLaunchInput {
   environment: NodeJS.ProcessEnv;
   startupTimeoutMs?: number;
   /**
-   * Starts the pane's ACP host (`agents acp-host`) beside its app-server, warm, so the ACP web
-   * view opens without starting anything. Defaults to this CLI; null leaves it out.
+   * Starts the pane's ACP view (`agents acp-session --agent codex-acp`) beside its app-server,
+   * warm, so the view opens without starting anything. Defaults to this CLI; null leaves it out.
    */
   acpHostArgv?: string[] | null;
 }
@@ -201,7 +201,7 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
   };
 }
 
-/** The ACP web view's host: optional, so nothing about Codex depends on it starting. */
+/** The pane's ACP view: optional, so nothing about Codex depends on it starting. */
 function startAcpHost(
   input: PaneLocalCodexSessionInput,
   plan: CodexSessionLaunchPlan,
@@ -213,8 +213,8 @@ function startAcpHost(
   try {
     return spawnBackgroundLogged(
       argv[0],
-      [...argv.slice(1), "acp-host", "--pane", input.paneId, "--app-server", endpoint, "--cwd", process.cwd()],
-      { env: input.environment, logPath: plan.logPath.replace(/\.log$/, "-acp-host.log") },
+      [...argv.slice(1), "acp-session", "--agent", "codex-acp", "--pane", input.paneId, "--app-server", endpoint, "--cwd", process.cwd()],
+      { env: input.environment, logPath: plan.logPath.replace(/\.log$/, "-acp-session.log") },
     );
   } catch {
     return undefined;
