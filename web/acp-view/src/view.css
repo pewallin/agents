@@ -3,12 +3,19 @@ body {
   font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   background: var(--acp-color-bg-primary, Canvas);
   color: var(--acp-color-text-primary, CanvasText);
+  overflow: hidden;
 }
-.acp-view-root { height: 100%; display: flex; flex-direction: column; }
-.acp-view-root > * { min-height: 0; }
-.acp-view-root > :first-child { flex: 1; }
+/* The view fills the pane whatever the providers wrap it in; the message list scrolls. */
+.acp-view-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.acp-view-root > :first-child { flex: 1; min-height: 0; }
 .acp-view-message {
-  height: 100%;
+  position: fixed;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -17,3 +24,7 @@ body {
   color: GrayText;
   text-align: center;
 }
+/* The components fade messages in from opacity 0. A web view that is not on screen (another
+   tab, a hidden pane) pauses animations, which left messages invisible; show them at once. */
+[class*="_acp-message-bubble_"],
+[class*="_acp-message-in"] { animation: none !important; }
