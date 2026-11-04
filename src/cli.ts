@@ -84,10 +84,13 @@ if (shouldRunCodexAppServerProxy(args, process.env)) {
 }
 
 // An agent pane's ACP web view: the host (`acp-session`, which codex-session starts for Codex)
-// and the bundled Codex adapter it starts per client. Neither needs the rest of the CLI, and an
+// and the bundled adapters (Codex, Claude) it starts per client. Neither needs the rest of the CLI, and an
 // adapter's stdout is its protocol channel.
 if (firstArg === "codex-acp") {
   await (await import("./acp-host-cli.js")).runCodexAcpAgent();
+}
+if (firstArg === "claude-acp") {
+  await (await import("./acp-host-cli.js")).runClaudeAcpAgent();
 }
 if (firstArg === "acp-session") {
   const { runAcpSessionCommand } = await import("./acp-host-cli.js");

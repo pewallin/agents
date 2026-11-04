@@ -39,8 +39,10 @@ src/
   mux-zellij.ts     — zellij Multiplexer backend (talks to bridge plugin via pipe)
   codex-session.ts  — a Codex pane's own app-server (Codex Web, ACP view); starts its acp-session
   acp-host.ts       — an agent pane's ACP view host: static web client, one adapter per client
-  acp-host-cli.ts   — `acp-session --agent <ACP registry id>` and its agent table; the bundled
-                      `codex-acp` adapter command
+  acp-host-cli.ts   — `acp-session --agent <ACP registry id>` and its agent table (adapter, resume
+                      command); the bundled `codex-acp` and `claude-acp` adapter commands
+  acp-handoff.ts    — `acp-session --tui`: an agent without a shared session runs its TUI under
+                      a supervisor that hands the session to the ACP view and back
   components/
     Dashboard.tsx    — main watch-mode UI (Ink/React), preview, grid, sidebar
     AgentTable.tsx   — responsive table with adaptive column widths

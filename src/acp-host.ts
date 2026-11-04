@@ -21,6 +21,12 @@ export interface AcpHostMetadata {
   processId: number;
   /** ACP registry id of the agent the host serves. */
   agent: string;
+  /**
+   * live: the view shares the agent's session with its TUI (Codex, on the pane's app-server).
+   * handoff: one of them has the session at a time; the view takes it over (POST /api/handoff)
+   * and gives it back (POST /api/return, or Enter in the pane).
+   */
+  mode: "live" | "handoff";
 }
 
 export interface AcpHostOptions {
@@ -34,16 +40,31 @@ export interface AcpHostOptions {
   cwd: string;
   /** How to start the agent's ACP adapter for one client. */
   agentCommand: { command: string; args: string[]; env: NodeJS.ProcessEnv };
+  /** For an agent that cannot share its session: the pane's TUI hands it over and back. */
+  handoff?: AcpHandoffControl;
+  /** Every line between a client and its adapter, for the pane's plain-text transcript. */
+  onAgentLine?: (line: string) => void;
+  onClientLine?: (line: string) => void;
   /** Keep one agent process started ahead of the next client. */
   warmSpare?: boolean;
   port?: number;
   log?: (message: string) => void;
 }
 
+export interface AcpHandoffControl {
+  /** Whether the view has the session now; before that no client may open the agent. */
+  inView(): boolean;
+  /** Takes the session over from the TUI: answers 409 with a reason while the agent works. */
+  handOff(sessionId: string): Promise<{ status: number; message?: string }>;
+  giveBack(): Promise<void>;
+}
+
 export interface AcpHost {
   readonly url: string;
   readonly token: string;
   readonly metadataPath: string;
+  /** Ends every client and its adapter process; the host and its warm spare stay. */
+  closeClients(): void;
   close(): Promise<void>;
 }
 
@@ -126,6 +147,10 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       response.writeHead(403).end("forbidden host");
       return;
     }
+    if (request.method === "POST" && (request.url === "/api/handoff" || request.url === "/api/return")) {
+      handleControl(request, response, token, options.handoff);
+      return;
+    }
     handleHttp(request, response, { webRoot, token, cwd: options.cwd, agent: options.agent });
   });
 
@@ -144,7 +169,13 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(request, socket, head, (ws) => bridge(ws, takeAgent(), log));
+    // Two processes in one session overwrite each other's history: while the TUI has it, no.
+    if (options.handoff && !options.handoff.inView()) {
+      socket.write("HTTP/1.1 409 Conflict\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => bridge(ws, takeAgent(), log, options));
   });
 
   await new Promise<void>((resolveListen, reject) => {
@@ -156,16 +187,26 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
 
   mkdirSync(join(options.runtimeTempDir, "acp-session"), { recursive: true, mode: 0o700 });
   const temporaryPath = `${metadataPath}.${process.pid}.tmp`;
-  writeFileSync(temporaryPath, JSON.stringify({ url, token, processId: process.pid, agent: options.agent.id } satisfies AcpHostMetadata), { mode: 0o600 });
+  writeFileSync(temporaryPath, JSON.stringify({ url, token, processId: process.pid, agent: options.agent.id, mode: options.handoff ? "handoff" : "live" } satisfies AcpHostMetadata), { mode: 0o600 });
   chmodSync(temporaryPath, 0o600);
   renameSync(temporaryPath, metadataPath);
   if (options.warmSpare) spare = startAgent();
   log(`listening on ${url}`);
 
+  const closeClients = () => {
+    for (const client of wss.clients) client.close(1001, "the session went back to the terminal");
+    for (const child of children) {
+      if (child === spare) continue;
+      child.stdin?.end();
+      child.kill("SIGTERM");
+    }
+  };
+
   return {
     url,
     token,
     metadataPath,
+    closeClients,
     async close() {
       if (closed) return;
       closed = true;
@@ -182,7 +223,12 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
 
 /** One WebSocket client to one agent process: a text frame is one JSON-RPC message, a stdout
  *  line is one frame back. */
-function bridge(ws: WebSocket, child: ChildProcess, log: (message: string) => void): void {
+function bridge(
+  ws: WebSocket,
+  child: ChildProcess,
+  log: (message: string) => void,
+  taps: Pick<AcpHostOptions, "onAgentLine" | "onClientLine"> = {},
+): void {
   let finished = false;
   const finish = () => {
     if (finished) return;
@@ -194,11 +240,14 @@ function bridge(ws: WebSocket, child: ChildProcess, log: (message: string) => vo
   };
   const lines = createInterface({ input: child.stdout! });
   lines.on("line", (line) => {
-    if (line.trim() && ws.readyState === ws.OPEN) ws.send(line);
+    if (!line.trim()) return;
+    taps.onAgentLine?.(line);
+    if (ws.readyState === ws.OPEN) ws.send(line);
   });
   ws.on("message", (data, isBinary) => {
     if (isBinary || finished) return;
     const text = data.toString();
+    taps.onClientLine?.(text);
     child.stdin?.write(text.endsWith("\n") ? text : `${text}\n`);
   });
   ws.on("close", finish);
@@ -206,6 +255,45 @@ function bridge(ws: WebSocket, child: ChildProcess, log: (message: string) => vo
   child.once("exit", (code, signal) => {
     log(`agent ${child.pid} exited (${code ?? signal})`);
     finish();
+  });
+}
+
+function handleControl(
+  request: IncomingMessage,
+  response: ServerResponse,
+  token: string,
+  handoff: AcpHandoffControl | undefined,
+): void {
+  const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+  if (!tokensMatch(token, auth)) {
+    response.writeHead(401, { "Cache-Control": "no-store" }).end();
+    return;
+  }
+  if (!handoff) {
+    response.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ message: "This agent shares its session live; there is nothing to hand over." }));
+    return;
+  }
+  let body = "";
+  request.on("data", (chunk: Buffer) => { body += chunk.toString(); if (body.length > 4096) request.destroy(); });
+  request.on("end", async () => {
+    try {
+      if (request.url === "/api/return") {
+        await handoff.giveBack();
+        response.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+        return;
+      }
+      const sessionId = String((JSON.parse(body || "{}") as { session?: unknown }).session ?? "").trim();
+      if (!/^[A-Za-z0-9._:-]{1,200}$/.test(sessionId)) {
+        response.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ message: "A session id is needed." }));
+        return;
+      }
+      const result = await handoff.handOff(sessionId);
+      response.writeHead(result.status, { "Content-Type": "application/json", "Cache-Control": "no-store" })
+        .end(JSON.stringify({ message: result.message ?? "" }));
+    } catch (error) {
+      response.writeHead(500, { "Content-Type": "application/json" })
+        .end(JSON.stringify({ message: error instanceof Error ? error.message : String(error) }));
+    }
   });
 }
 

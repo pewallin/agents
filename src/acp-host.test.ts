@@ -56,7 +56,7 @@ describe("acp-host", () => {
   it("writes the pane's metadata where the app looks, readable by the user alone", async () => {
     const h = await start();
     expect(h.metadataPath).toBe(join(dir, "rt", "acp-session", "pane-42.json"));
-    expect(readAcpHostMetadata(h.metadataPath)).toEqual({ url: h.url, token: h.token, processId: process.pid, agent: "test-acp" });
+    expect(readAcpHostMetadata(h.metadataPath)).toEqual({ url: h.url, token: h.token, processId: process.pid, agent: "test-acp", mode: "live" });
     expect(statSync(h.metadataPath).mode & 0o777).toBe(0o600);
     expect(h.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     await h.close();
@@ -106,6 +106,49 @@ describe("acp-host", () => {
       });
       expect(outcome).toBe("refused");
     }
+  });
+
+  it("lets no client open a hand-off agent until the view has the session", async () => {
+    let inView = false;
+    const handed: string[] = [];
+    host = await startAcpHost({
+      paneId: "%43",
+      agent: { id: "test-acp", name: "Test" },
+      runtimeTempDir: join(dir, "rt"),
+      webRoot: join(dir, "web"),
+      cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", ECHO_AGENT], env: process.env },
+      handoff: {
+        inView: () => inView,
+        handOff: async (id) => { handed.push(id); inView = true; return { status: 200 }; },
+        giveBack: async () => { inView = false; },
+      },
+    });
+    const h = host;
+    expect(readAcpHostMetadata(h.metadataPath)?.mode).toBe("handoff");
+    const refused = await new Promise<string>((resolve) => {
+      const ws = connect(h);
+      ws.on("open", () => resolve("open"));
+      ws.on("error", () => resolve("refused"));
+    });
+    expect(refused).toBe("refused");
+    const post = (path: string, body: object, token = h.token) => fetch(`${h.url}${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect((await post("/api/handoff", { session: "s1" }, "wrong")).status).toBe(401);
+    expect((await post("/api/handoff", { session: "bad id!" })).status).toBe(400);
+    expect((await post("/api/handoff", { session: "s1" })).status).toBe(200);
+    expect(handed).toEqual(["s1"]);
+    const opened = await new Promise<string>((resolve) => {
+      const ws = connect(h);
+      ws.on("open", () => { resolve("open"); ws.close(); });
+      ws.on("error", () => resolve("refused"));
+    });
+    expect(opened).toBe("open");
+    expect((await post("/api/return", {})).status).toBe(200);
+    expect(inView).toBe(false);
   });
 
   it("bridges each client to its own agent process, one message per frame", async () => {
