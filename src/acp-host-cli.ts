@@ -167,15 +167,6 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     resume: (tuiCommand, sessionId) =>
       resumeWith(tuiCommand, ["--resume"], ["--continue"], (id) => ["--resume", id])(sessionId),
   },
-  gemini: {
-    id: "gemini",
-    name: "Gemini",
-    stateAgent: "gemini",
-    tested: false,
-    command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "gemini"), args: ["--experimental-acp"], env: { ...process.env } }),
-    resume: (tuiCommand, sessionId) =>
-      resumeWith(tuiCommand, ["--resume", "-r"], [], (id) => ["--resume", id])(sessionId),
-  },
   kiro: {
     id: "kiro",
     name: "Kiro",

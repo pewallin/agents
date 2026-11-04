@@ -16,7 +16,7 @@ describe("acp hand-off", () => {
 
   it("shares Codex live and hands every other agent over", () => {
     expect(ACP_AGENTS["codex-acp"].resume).toBeUndefined();
-    for (const id of ["claude-acp", "opencode", "pi-acp", "github-copilot-cli", "gemini", "kiro"]) {
+    for (const id of ["claude-acp", "opencode", "pi-acp", "github-copilot-cli", "kiro"]) {
       expect(ACP_AGENTS[id].resume, id).toBeDefined();
     }
   });
