@@ -33,7 +33,9 @@ export interface ToolCall {
 
 /** One entry of the conversation, in order. A tool call is kept by id in `toolCalls`. */
 export type Item =
-  | { type: "user"; id: string; text: string; images: number; local?: boolean; at?: number }
+  | { type: "user"; id: string; text: string; images: number; local?: boolean; at?: number;
+      /** A turn another client started (the pane's TUI): Codex does not pass its prompt on. */
+      external?: boolean }
   | { type: "agent"; id: string; text: string; at?: number }
   | { type: "thought"; id: string; text: string; at?: number }
   | { type: "tool"; id: string; at?: number };
@@ -67,6 +69,9 @@ export interface SessionState {
   replaying: boolean;
   /** When the agent last reported anything, for the length of a live turn. */
   lastEventAt?: number;
+  /** The agent's state as its hooks report it for the pane (the app shows the same): a turn the
+   *  pane's TUI runs is work too, though no prompt of ours is in flight. */
+  agentState?: string | null;
 }
 
 export const emptySession = (): SessionState => ({
@@ -90,6 +95,7 @@ export type SessionAction =
   | { type: "promptEnded" }
   | { type: "permissionRequested"; request: PermissionRequest }
   | { type: "permissionAnswered"; id: string }
+  | { type: "agentState"; state: string | null }
   | { type: "reset" };
 
 function textOf(block: ContentBlock): string {
@@ -192,7 +198,18 @@ export function applyUpdate(state: SessionState, update: SessionUpdate, eventAt?
     case "usage_update":
       return { ...state, usage: { used: update.used, size: update.size, cost: update.cost } };
     case "session_info_update": {
-      const activity = reportedActivity(update) ?? state.activity;
+      const reported = reportedActivity(update);
+      // A turn starts that no prompt of ours began: the pane's TUI sent it. It gets a turn of its
+      // own here, though Codex does not pass its prompt on.
+      if (reported === "working" && state.activity !== "working" && !state.prompting && !state.replaying) {
+        const id = `external-${state.nextLocalId}`;
+        state = {
+          ...state,
+          nextLocalId: state.nextLocalId + 1,
+          items: [...state.items, { type: "user", id, text: "", images: 0, external: true, at }],
+        };
+      }
+      const activity = reported ?? state.activity;
       const title = "title" in update && typeof update.title === "string" ? update.title : state.title;
       return { ...state, title, activity: state.prompting ? "working" : activity };
     }
@@ -230,6 +247,8 @@ export function reduce(state: SessionState, action: SessionAction): SessionState
       return { ...state, permissions: [...state.permissions, action.request] };
     case "permissionAnswered":
       return { ...state, permissions: state.permissions.filter((request) => request.id !== action.id) };
+    case "agentState":
+      return state.agentState === action.state ? state : { ...state, agentState: action.state };
     case "reset":
       return emptySession();
   }
@@ -239,5 +258,9 @@ export function reduce(state: SessionState, action: SessionAction): SessionState
  *  permission, works while in a turn, else is idle. */
 export function attention(state: SessionState): "needs-you" | "working" | "idle" {
   if (state.permissions.length > 0) return "needs-you";
-  return state.activity === "working" || state.prompting ? "working" : "idle";
+  if (state.activity === "working" || state.prompting) return "working";
+  // A turn the pane's TUI runs, as the agent's hooks report it (approval and question wait there).
+  return state.agentState && AGENT_BUSY.has(state.agentState) ? "working" : "idle";
 }
+
+const AGENT_BUSY = new Set(["working", "approval", "question", "compacting"]);

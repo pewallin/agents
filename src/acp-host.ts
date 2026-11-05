@@ -9,7 +9,7 @@
 // token is in the pane's metadata file (0600), which is how the app finds the host's address.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
@@ -57,6 +57,9 @@ export interface AcpHostOptions {
   log?: (message: string) => void;
   /** The agent's own log files: their last lines go into the diagnostics. */
   agentLogFiles?: string[];
+  /** The pane's agent state file (state/<agent>-<pane>.json, the agent's hooks write it): the
+   *  same truth the app shows, sent to the views, so a turn the TUI runs shows in them too. */
+  agentStateFile?: string;
 }
 
 export interface AcpHandoffControl {
@@ -226,6 +229,28 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     lastActivity = state;
     options.onActivity?.(state);
   };
+  // The agent's own state as its hooks report it, sent to the views as it changes.
+  let agentState: string | undefined;
+  const readAgentState = () => {
+    if (!options.agentStateFile) return undefined;
+    try {
+      const value = JSON.parse(readFileSync(options.agentStateFile, "utf8")) as { state?: unknown };
+      return typeof value.state === "string" ? value.state : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const agentStateChanged = () => {
+    const next = readAgentState();
+    if (next === agentState) return;
+    agentState = next;
+    const event = `event: agent-state\ndata: ${JSON.stringify({ state: next ?? null })}\n\n`;
+    for (const listener of events) listener.write(event);
+  };
+  if (options.agentStateFile) {
+    agentState = readAgentState();
+    watchFile(options.agentStateFile, { interval: 500 }, agentStateChanged);
+  }
   let nextClient = 1;
   let spare: ChildProcess | undefined;
   let closed = false;
@@ -274,7 +299,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       token,
       cwd: options.cwd,
       agent: options.agent,
-      state: () => ({ state: activity.state, mode: options.handoff ? "handoff" : "live", inView: options.handoff?.inView() ?? true, clients: wss.clients.size }),
+      state: () => ({ state: activity.state, agentState: agentState ?? null, mode: options.handoff ? "handoff" : "live", inView: options.handoff?.inView() ?? true, clients: wss.clients.size }),
       diagnostics: () => ({
         agent: options.agent,
         pane: options.paneId,
@@ -400,6 +425,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     async close() {
       if (closed) return;
       closed = true;
+      if (options.agentStateFile) unwatchFile(options.agentStateFile, agentStateChanged);
       if (readAcpHostMetadata(metadataPath)?.token === token) rmSync(metadataPath, { force: true });
       for (const client of wss.clients) client.close(1001, "host closing");
       for (const child of children) {

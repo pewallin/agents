@@ -73,3 +73,30 @@ describe("session state", () => {
     expect(state.commands[0].name).toBe("review");
   });
 });
+
+describe("the agent's own state", () => {
+  it("makes a turn the pane's TUI runs work in the view too, and nothing else", () => {
+    let state = reduce(emptySession(), { type: "agentState", state: "working" });
+    expect(attention(state)).toBe("working");
+    state = reduce(state, { type: "agentState", state: "approval" });
+    expect(attention(state)).toBe("working");
+    state = reduce(state, { type: "agentState", state: "idle" });
+    expect(attention(state)).toBe("idle");
+    state = reduce(state, { type: "agentState", state: null });
+    expect(attention(state)).toBe("idle");
+  });
+});
+
+describe("a turn the pane's TUI starts", () => {
+  it("gets a turn of its own, marked as sent from the terminal, and none for a turn of ours", () => {
+    const active = { sessionUpdate: "session_info_update", _meta: { codex: { threadStatus: { type: "active" } } } } as never;
+    const idle = { sessionUpdate: "session_info_update", _meta: { codex: { threadStatus: { type: "idle" } } } } as never;
+    let state = reduce(emptySession(), { type: "update", update: active, at: 1 });
+    expect(state.items).toEqual([{ type: "user", id: "external-1", text: "", images: 0, external: true, at: 1 }]);
+    expect(attention(state)).toBe("working");
+    state = reduce(state, { type: "update", update: idle, at: 2 });
+    state = reduce(state, { type: "promptSent", text: "hi", at: 3 });
+    state = reduce(state, { type: "update", update: active, at: 4 });
+    expect(state.items.filter((item) => item.type === "user" && item.external)).toHaveLength(1);
+  });
+});

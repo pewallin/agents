@@ -234,6 +234,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         agentCommand: input.host.agentCommand,
         warmSpare: true,
         agentLogFiles: agent.logFiles?.(),
+        agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
         onActivity: reportViewActivity(agent.stateAgent, paneId),
         handoff: { inView: () => mode === "view", handOff, giveBack },
         onAgentLine: (line) => { if (mode === "view") transcript.agentLine(line); },

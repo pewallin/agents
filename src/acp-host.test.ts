@@ -294,7 +294,39 @@ describe("acp-host", () => {
     const h = await start();
     expect((await fetch(`${h.url}/api/state`)).status).toBe(401);
     const state = await fetch(`${h.url}/api/state`, { headers: { Authorization: `Bearer ${h.token}` } });
-    expect(await state.json()).toEqual({ state: "idle", mode: "live", inView: true, clients: 0 });
+    expect(await state.json()).toEqual({ state: "idle", agentState: null, mode: "live", inView: true, clients: 0 });
+  });
+
+  it("follows the agent's state file and tells the views when it changes", async () => {
+    const stateFile = join(dir, "codex-%42.json");
+    writeFileSync(stateFile, JSON.stringify({ state: "idle", ts: 1 }));
+    host = await startAcpHost({
+      paneId: "%42",
+      agent: { id: "test-acp", name: "Test" },
+      runtimeTempDir: join(dir, "rt"),
+      webRoot: join(dir, "web"),
+      cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", ECHO_AGENT], env: process.env },
+      agentStateFile: stateFile,
+    });
+    const h = host;
+    const auth = { headers: { Authorization: `Bearer ${h.token}` } };
+    expect((await (await fetch(`${h.url}/api/state`, auth)).json() as { agentState: string }).agentState).toBe("idle");
+    const controller = new AbortController();
+    const response = await fetch(`${h.url}/api/events`, { ...auth, signal: controller.signal });
+    const reader = response.body!.getReader();
+    const seen = (async () => {
+      let text = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return text;
+        text += new TextDecoder().decode(value);
+        if (text.includes("event: agent-state")) return text;
+      }
+    })();
+    writeFileSync(stateFile, JSON.stringify({ state: "working", ts: 2 }));
+    expect(await seen).toContain('data: {"state":"working"}');
+    controller.abort();
   });
 
   it("ranks files for the @ menu: names that start with the query first", () => {

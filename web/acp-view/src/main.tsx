@@ -80,6 +80,57 @@ function Down() {
   return <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4l2.5 2.5L7.5 4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>;
 }
 
+/** The scroll position as a thumb that shows while the page scrolls and fades a second after,
+ *  and can be dragged. The native one stays on screen where scroll bars always show. */
+function ScrollThumb({ target }: { target: React.RefObject<HTMLDivElement | null> }) {
+  const thumb = useRef<HTMLDivElement>(null);
+  const [geometry, setGeometry] = useState<{ top: number; height: number } | null>(null);
+  const [shown, setShown] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    const element = target.current;
+    if (!element) return;
+    let hide: ReturnType<typeof setTimeout> | undefined;
+    const measure = () => {
+      const { scrollTop, scrollHeight, clientHeight } = element;
+      if (scrollHeight <= clientHeight + 1) { setGeometry(null); return; }
+      const height = Math.max(28, (clientHeight / scrollHeight) * clientHeight);
+      const top = (scrollTop / (scrollHeight - clientHeight)) * (clientHeight - height);
+      setGeometry({ top, height });
+    };
+    const onScroll = () => {
+      measure();
+      setShown(true);
+      clearTimeout(hide);
+      hide = setTimeout(() => setShown(false), 1000);
+    };
+    measure();
+    element.addEventListener("scroll", onScroll, { passive: true });
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    return () => { element.removeEventListener("scroll", onScroll); observer.disconnect(); clearTimeout(hide); };
+  }, [target]);
+  if (!geometry) return null;
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const element = target.current;
+    if (!element) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startTop = element.scrollTop;
+    const ratio = (element.scrollHeight - element.clientHeight) / (element.clientHeight - geometry.height);
+    setDragging(true);
+    const move = (moveEvent: PointerEvent) => { element.scrollTop = startTop + (moveEvent.clientY - startY) * ratio; };
+    const up = () => { setDragging(false); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return (
+    <div ref={thumb} className={`thumb${shown ? " on" : ""}${dragging ? " drag" : ""}`}
+      style={{ top: geometry.top, height: geometry.height }} onPointerDown={onPointerDown} aria-hidden="true" />
+  );
+}
+
 function Notice({ children }: { children: ReactNode }) {
   return <div className="notice">{children}</div>;
 }
@@ -225,7 +276,9 @@ function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: bo
   const streaming = last && working;
   return (
     <>
-      {turn.user && <div className={`you${turn.user.local ? " pending" : ""}`}>{turn.user.text}</div>}
+      {turn.user && (turn.user.external
+        ? <div className="you external">Sent from the terminal</div>
+        : <div className={`you${turn.user.local ? " pending" : ""}`}>{turn.user.text}</div>)}
       <Activity turn={turn} working={streaming && turn.answer.length === 0} cwd={cwd} />
       {turn.answer.length > 0 && (
         <div className="say">
@@ -598,6 +651,16 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   useEffect(() => {
     if (!token) return;
     const events = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+    // The agent's state as the app sees it (its hooks): a turn the TUI runs shows here too.
+    const dispatch = useSession.getState().dispatch;
+    const followAgentState = () => hostJson<{ agentState?: string | null }>("/api/state")
+      .then((value) => dispatch({ type: "agentState", state: value.agentState ?? null }), () => {});
+    void followAgentState();
+    events.addEventListener("open", () => void followAgentState());
+    events.addEventListener("agent-state", (event) => {
+      const { state } = JSON.parse((event as MessageEvent<string>).data) as { state: string | null };
+      dispatch({ type: "agentState", state });
+    });
     events.addEventListener("send", (event) => {
       const { review: id, text } = JSON.parse((event as MessageEvent<string>).data) as { review: string; text: string };
       if (!myReviews.current.has(id)) return;
@@ -648,6 +711,8 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   return (
     <div className={`view${review ? " reviewing" : ""}`} data-acp-ready="true" data-attention={state}>
       <div className="main">
+        <div className="scroll-wrap">
+        <ScrollThumb target={scroller} />
         <div className="scroll" ref={scroller} onScroll={(event) => {
           const element = event.currentTarget;
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
@@ -663,6 +728,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
               <Ask key={request.id} request={request} agentName={info.agent.name} session={session} focused={index === 0} cwd={info.cwd} />
             ))}
           </div>
+        </div>
         </div>
         <PlanLine />
         <Dock session={session} info={info} now={now} />

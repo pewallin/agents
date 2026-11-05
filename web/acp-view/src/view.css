@@ -29,14 +29,23 @@ button { font: inherit; color: inherit; }
 
 .view { position: fixed; inset: 0; display: flex; }
 .main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
-.scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.col { max-width: 700px; margin: 0 auto; padding: 28px 28px 24px; display: flex; flex-direction: column; gap: 18px; }
+.scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+/* The page draws its own thumb (ScrollThumb): the native one stays on screen in a web view where
+   scroll bars always show, so it fades a second after scrolling stops. */
+.scroll::-webkit-scrollbar { display: none; }
+.scroll-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.thumb { position: absolute; right: 2px; width: 7px; border-radius: 4px; background: var(--faint); opacity: 0;
+  transition: opacity .35s ease, width .15s ease; z-index: 2; cursor: default; }
+.thumb.on, .thumb:hover, .thumb.drag { opacity: .85; transition: opacity .1s ease, width .15s ease; }
+.thumb:hover, .thumb.drag { width: 9px; }
+.col { max-width: 1024px; margin: 0 auto; padding: 28px 32px 24px; display: flex; flex-direction: column; gap: 18px; }
 .col > * { flex-shrink: 0; }
 .empty, .notice { color: var(--dim); }
 .notice button.link { font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: pointer; }
 .notice { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; }
 
 /* what you wrote */
+.you.external { background: none; color: var(--dim); font-size: 13px; padding: 2px 4px; }
 .you { align-self: flex-end; max-width: 86%; background: var(--you); border-radius: 18px; padding: 9px 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .you.pending { opacity: .75; }
 code { font: 12.5px var(--mono); background: var(--tint2); border-radius: 5px; padding: 1px 5px; }
@@ -125,11 +134,11 @@ code { font: 12.5px var(--mono); background: var(--tint2); border-radius: 5px; p
 .plist li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
 .plist .plan-completed { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--faint); }
 .plist .plan-in_progress { font-weight: 500; }
-.plan-line { max-width: 700px; width: 100%; margin: 0 auto; padding: 0 28px 8px; }
+.plan-line { max-width: 1024px; width: 100%; margin: 0 auto; padding: 0 32px 8px; }
 
 /* the field: floating */
-.dock { flex: none; padding: 0 20px 18px; position: relative; }
-.dock .inner { max-width: 700px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; position: relative; }
+.dock { flex: none; padding: 0 32px 18px; position: relative; }
+.dock .inner { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; position: relative; }
 .status { display: flex; align-items: center; gap: 10px; padding: 0 8px; font-size: 12.5px; color: var(--dim); }
 .status .sp { flex: 1; }
 .status kbd { font: 11.5px var(--mono); color: var(--faint); }
@@ -202,7 +211,7 @@ code { font: 12.5px var(--mono); background: var(--tint2); border-radius: 5px; p
 }
 @media (max-width: 520px) {
   .col { padding: 20px 16px 18px; }
-  .dock { padding: 0 10px 12px; }
+  .dock { padding: 0 16px 12px; }
   .plan-line { padding: 0 16px 8px; }
 }
 

@@ -18,7 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { acpHostMetadataPath, startAcpHost } from "./acp-host.js";
 import { runHandoffSession } from "./acp-handoff.js";
-import { getResourceRoot, getSelfArgv, isCompiledBinary } from "./paths.js";
+import { getResourceRoot, getSelfArgv, getStateDir, isCompiledBinary } from "./paths.js";
 import { reportState } from "./state.js";
 
 /** What the view's clients see, reported as the pane's agent state: the app's "needs you" dot
@@ -315,6 +315,7 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
   }
   const host = await startAcpHost({
     agentLogFiles: agent.logFiles?.(),
+    agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
     paneId,
     agent: { id: agent.id, name: agent.name },
     runtimeTempDir,
