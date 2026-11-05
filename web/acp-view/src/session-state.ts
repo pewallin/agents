@@ -72,6 +72,14 @@ export interface SessionState {
   /** The agent's state as its hooks report it for the pane (the app shows the same): a turn the
    *  pane's TUI runs is work too, though no prompt of ours is in flight. */
   agentState?: string | null;
+  /** A turn another client started (Codex said its thread is active) whose first event has not
+   *  come yet: a prompt of its own starts it, else it gets a marker of where it began. */
+  externalTurnPending?: boolean;
+  /** Whether anything of a turn came live since the thread was last idle: Codex may say the
+   *  thread is active after the turn's first events. */
+  liveSinceIdle?: boolean;
+  /** Turns the view stopped (by the id of their user item): they say so. */
+  stoppedTurns?: string[];
 }
 
 export const emptySession = (): SessionState => ({
@@ -96,6 +104,8 @@ export type SessionAction =
   | { type: "permissionRequested"; request: PermissionRequest }
   | { type: "permissionAnswered"; id: string }
   | { type: "agentState"; state: string | null }
+  /** The view stops the turn in progress, its own or one the pane's TUI started. */
+  | { type: "stopped" }
   | { type: "reset" };
 
 function textOf(block: ContentBlock): string {
@@ -169,10 +179,30 @@ function reportedActivity(update: SessionUpdate): Activity | undefined {
   return undefined;
 }
 
+/** The first event of a turn the pane's TUI started: its own prompt clears the wait; any other
+ *  event comes after a marker of where the turn began, since Codex did not pass its prompt on. */
+function startsTurn(state: SessionState, update: SessionUpdate, at: number | undefined): SessionState {
+  const work = update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk"
+    || update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update" || update.sessionUpdate === "plan";
+  const live = at !== undefined && (work || update.sessionUpdate === "user_message_chunk");
+  if (live && !state.liveSinceIdle) state = { ...state, liveSinceIdle: true };
+  if (!state.externalTurnPending) return state;
+  if (update.sessionUpdate === "user_message_chunk") return { ...state, externalTurnPending: false };
+  if (!work) return state;
+  const id = `external-${state.nextLocalId}`;
+  return {
+    ...state,
+    externalTurnPending: false,
+    nextLocalId: state.nextLocalId + 1,
+    items: [...state.items, { type: "user", id, text: "", images: 0, external: true, at }],
+  };
+}
+
 export function applyUpdate(state: SessionState, update: SessionUpdate, eventAt?: number): SessionState {
   // A replayed history has no times: what it shows already happened.
   const at = state.replaying ? undefined : eventAt;
   if (at !== undefined) state = { ...state, lastEventAt: at };
+  state = startsTurn(state, update, at);
   switch (update.sessionUpdate) {
     case "user_message_chunk":
       return appendChunk(state, "user", update.content, update.messageId, at);
@@ -199,16 +229,12 @@ export function applyUpdate(state: SessionState, update: SessionUpdate, eventAt?
       return { ...state, usage: { used: update.used, size: update.size, cost: update.cost } };
     case "session_info_update": {
       const reported = reportedActivity(update);
-      // A turn starts that no prompt of ours began: the pane's TUI sent it. It gets a turn of its
-      // own here, though Codex does not pass its prompt on.
-      if (reported === "working" && state.activity !== "working" && !state.prompting && !state.replaying) {
-        const id = `external-${state.nextLocalId}`;
-        state = {
-          ...state,
-          nextLocalId: state.nextLocalId + 1,
-          items: [...state.items, { type: "user", id, text: "", images: 0, external: true, at }],
-        };
+      // A turn starts that no prompt of ours began: the pane's TUI sent it. Its prompt may come
+      // before this, after it, or not at all; the turn's first other event decides (startsTurn).
+      if (reported === "working" && state.activity !== "working" && !state.prompting && !state.replaying && !state.liveSinceIdle) {
+        state = { ...state, externalTurnPending: true };
       }
+      if (reported === "idle") state = { ...state, externalTurnPending: false, liveSinceIdle: false };
       const activity = reported ?? state.activity;
       const title = "title" in update && typeof update.title === "string" ? update.title : state.title;
       return { ...state, title, activity: state.prompting ? "working" : activity };
@@ -242,11 +268,16 @@ export function reduce(state: SessionState, action: SessionAction): SessionState
       };
     }
     case "promptEnded":
-      return { ...state, prompting: false, activity: "idle", permissions: [] };
+      return { ...state, prompting: false, activity: "idle", permissions: [], liveSinceIdle: false };
     case "permissionRequested":
       return { ...state, permissions: [...state.permissions, action.request] };
     case "permissionAnswered":
       return { ...state, permissions: state.permissions.filter((request) => request.id !== action.id) };
+    case "stopped": {
+      const last = [...state.items].reverse().find((item) => item.type === "user");
+      if (!last || state.stoppedTurns?.includes(last.id)) return state;
+      return { ...state, stoppedTurns: [...(state.stoppedTurns ?? []), last.id] };
+    }
     case "agentState":
       return state.agentState === action.state ? state : { ...state, agentState: action.state };
     case "reset":

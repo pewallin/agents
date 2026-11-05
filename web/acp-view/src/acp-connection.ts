@@ -130,6 +130,8 @@ export function connectSession(options: {
       await this.prompt(blocks);
     },
     async cancel() {
+      // Codex interrupts the thread's turn, whichever client started it (the pane's TUI too).
+      dispatch({ type: "stopped" });
       await agent.notify("session/cancel", { sessionId });
     },
     answerPermission(id, optionId) {

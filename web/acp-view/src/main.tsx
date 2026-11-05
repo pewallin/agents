@@ -239,15 +239,20 @@ function StepLine({ step, cwd }: { step: Step; cwd: string }) {
   return <ToolLine call={step.call} cwd={cwd} />;
 }
 
-function Activity({ turn, working, cwd }: { turn: Turn; working: boolean; cwd: string }) {
+function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolean; stopped: boolean; cwd: string }) {
   const [open, setOpen] = useState(false);
-  if (turn.steps.length === 0) return null;
+  const timed = turn.startedAt !== undefined && turn.endedAt !== undefined && turn.endedAt - turn.startedAt >= 1000;
+  if (turn.steps.length === 0) {
+    return stopped && !working ? <div className="stopped">Stopped{timed ? ` after ${duration(turn.endedAt! - turn.startedAt!)}` : ""}</div> : null;
+  }
   const isOpen = working || open;
   const label = working
     ? "Working"
-    : turn.startedAt !== undefined && turn.endedAt !== undefined && turn.endedAt - turn.startedAt >= 1000
-      ? `Worked for ${duration(turn.endedAt - turn.startedAt)}`
-      : `Worked, ${turn.steps.length} ${turn.steps.length === 1 ? "step" : "steps"}`;
+    : stopped
+      ? `Stopped${timed ? ` after ${duration(turn.endedAt! - turn.startedAt!)}` : ""}`
+      : timed
+        ? `Worked for ${duration(turn.endedAt! - turn.startedAt!)}`
+        : `Worked, ${turn.steps.length} ${turn.steps.length === 1 ? "step" : "steps"}`;
   return (
     <details className="quiet" open={isOpen} onToggle={(event) => { if (!working) setOpen((event.target as HTMLDetailsElement).open); }}>
       <summary>{label} <Chevron /></summary>
@@ -274,12 +279,13 @@ function EditsLine({ changes, onReview, cwd }: { changes: FileChange[]; onReview
 
 function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void }) {
   const streaming = last && working;
+  const stopped = useSession((s) => s.stoppedTurns?.includes(turn.id) ?? false);
   return (
     <>
       {turn.user && (turn.user.external
         ? <div className="you external">Sent from the terminal</div>
         : <div className={`you${turn.user.local ? " pending" : ""}`}>{turn.user.text}</div>)}
-      <Activity turn={turn} working={streaming && turn.answer.length === 0} cwd={cwd} />
+      <Activity turn={turn} working={streaming && turn.answer.length === 0} stopped={stopped} cwd={cwd} />
       {turn.answer.length > 0 && (
         <div className="say">
           {turn.answer.map((item, index) => (

@@ -88,15 +88,59 @@ describe("the agent's own state", () => {
 });
 
 describe("a turn the pane's TUI starts", () => {
-  it("gets a turn of its own, marked as sent from the terminal, and none for a turn of ours", () => {
-    const active = { sessionUpdate: "session_info_update", _meta: { codex: { threadStatus: { type: "active" } } } } as never;
-    const idle = { sessionUpdate: "session_info_update", _meta: { codex: { threadStatus: { type: "idle" } } } } as never;
+  const active = { sessionUpdate: "session_info_update", _meta: { codex: { threadStatus: { type: "active" } } } } as never;
+  const idle = { sessionUpdate: "session_info_update", _meta: { codex: { threadStatus: { type: "idle" } } } } as never;
+  const tool = { sessionUpdate: "tool_call", toolCallId: "t1", title: "Run", kind: "execute", status: "in_progress" } as never;
+  const prompt = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "from the tui" } } as never;
+
+  it("gets a marker of where it began when its prompt does not come, before its first work", () => {
     let state = reduce(emptySession(), { type: "update", update: active, at: 1 });
-    expect(state.items).toEqual([{ type: "user", id: "external-1", text: "", images: 0, external: true, at: 1 }]);
     expect(attention(state)).toBe("working");
-    state = reduce(state, { type: "update", update: idle, at: 2 });
-    state = reduce(state, { type: "promptSent", text: "hi", at: 3 });
-    state = reduce(state, { type: "update", update: active, at: 4 });
+    expect(state.items).toEqual([]);
+    state = reduce(state, { type: "update", update: tool, at: 2 });
+    expect(state.items.map((item) => item.type)).toEqual(["user", "tool"]);
+    expect(state.items[0]).toMatchObject({ external: true, at: 2 });
+  });
+
+  it("starts with its own prompt when Codex passes it on, before or after saying the thread is active", () => {
+    let after = reduce(emptySession(), { type: "update", update: active, at: 1 });
+    after = reduce(after, { type: "update", update: prompt, at: 2 });
+    after = reduce(after, { type: "update", update: tool, at: 3 });
+    expect(after.items.map((item) => item.type === "user" && item.external ? "external" : item.type)).toEqual(["user", "tool"]);
+    let before = reduce(emptySession(), { type: "update", update: prompt, at: 1 });
+    before = reduce(before, { type: "update", update: active, at: 2 });
+    before = reduce(before, { type: "update", update: tool, at: 3 });
+    expect(before.items.map((item) => item.type === "user" && item.external ? "external" : item.type)).toEqual(["user", "tool"]);
+  });
+
+  it("gets no marker when Codex says the thread is active after the turn's first events", () => {
+    let state = reduce(emptySession(), { type: "update", update: prompt, at: 1 });
+    state = reduce(state, { type: "update", update: tool, at: 2 });
+    state = reduce(state, { type: "update", update: active, at: 3 });
+    state = reduce(state, { type: "update", update: { ...(tool as object), sessionUpdate: "tool_call_update", status: "completed" } as never, at: 4 });
+    expect(state.items.filter((item) => item.type === "user" && item.external)).toHaveLength(0);
+    // The next turn, after the thread was idle, starts afresh.
+    state = reduce(state, { type: "update", update: idle, at: 5 });
+    state = reduce(state, { type: "update", update: active, at: 6 });
+    state = reduce(state, { type: "update", update: { ...(tool as object), toolCallId: "t2" } as never, at: 7 });
     expect(state.items.filter((item) => item.type === "user" && item.external)).toHaveLength(1);
+  });
+
+  it("gets no marker for a turn of ours", () => {
+    let state = reduce(emptySession(), { type: "promptSent", text: "hi", at: 1 });
+    state = reduce(state, { type: "update", update: active, at: 2 });
+    state = reduce(state, { type: "update", update: tool, at: 3 });
+    state = reduce(state, { type: "update", update: idle, at: 4 });
+    expect(state.items.filter((item) => item.type === "user" && item.external)).toHaveLength(0);
+  });
+});
+
+describe("a turn the view stops", () => {
+  it("is marked stopped by its user item, once", () => {
+    let state = reduce(emptySession(), { type: "promptSent", text: "go", at: 1 });
+    const id = state.items[0].id;
+    state = reduce(state, { type: "stopped" });
+    state = reduce(state, { type: "stopped" });
+    expect(state.stoppedTurns).toEqual([id]);
   });
 });

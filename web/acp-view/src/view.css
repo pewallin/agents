@@ -45,6 +45,7 @@ button { font: inherit; color: inherit; }
 .notice { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; }
 
 /* what you wrote */
+.stopped { color: var(--dim); font-size: 13.5px; }
 .you.external { background: none; color: var(--dim); font-size: 13px; padding: 2px 4px; }
 .you { align-self: flex-end; max-width: 86%; background: var(--you); border-radius: 18px; padding: 9px 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .you.pending { opacity: .75; }
