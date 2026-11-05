@@ -760,11 +760,12 @@ const KIRO_AGENT_PATH = join(homedir(), ".kiro", "agents", `${KIRO_AGENT_NAME}.j
 const KIRO_V3_HOOK_PATH = join(homedir(), ".kiro", "hooks", `${KIRO_AGENT_NAME}.json`);
 const KIRO_SETTINGS_PATH = join(homedir(), ".kiro", "settings", "cli.json");
 const KIRO_REPORT_SCRIPT = join(EXTENSIONS_DIR, "kiro", "report-state.sh");
+// v3 reads a matcher as a regular expression ("*" fails: "Nothing to repeat"); v2 takes "*".
 const KIRO_V3_HOOK_SPECS = [
   { event: "agentSpawn", name: "agents-reporting-session-start", trigger: "SessionStart" },
   { event: "userPromptSubmit", name: "agents-reporting-user-prompt", trigger: "UserPromptSubmit" },
-  { event: "preToolUse", name: "agents-reporting-pre-tool", trigger: "PreToolUse", matcher: "*" },
-  { event: "postToolUse", name: "agents-reporting-post-tool", trigger: "PostToolUse", matcher: "*" },
+  { event: "preToolUse", name: "agents-reporting-pre-tool", trigger: "PreToolUse", matcher: ".*" },
+  { event: "postToolUse", name: "agents-reporting-post-tool", trigger: "PostToolUse", matcher: ".*" },
   { event: "stop", name: "agents-reporting-stop", trigger: "Stop" },
 ] as const;
 

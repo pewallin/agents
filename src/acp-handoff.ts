@@ -10,7 +10,7 @@
 //
 // The agent's TUI ending on its own ends the pane's command, as it would without this.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { acpHostMetadataPath, startAcpHost, type AcpHost } from "./acp-host.js";
@@ -93,6 +93,36 @@ function textOf(content: unknown): string {
   return "";
 }
 
+/** Waits up to `timeoutMs` for a session lock file to go, or to name a process that has ended. */
+export async function waitForLockRelease(file: string, timeoutMs = 3_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!existsSync(file)) return true;
+    const pid = lockOwner(file);
+    if (pid !== undefined && !processAlive(pid)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+function lockOwner(file: string): number | undefined {
+  try {
+    const match = readFileSync(file, "utf8").match(/\d+/);
+    return match ? Number(match[0]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /** Leaves the terminal as a shell has it after a full-screen program that was stopped. */
 function resetTerminal(): void {
   process.stdout.write("\x1b[0m\x1b[?25h\x1b[?1049l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b>\x1b[2J\x1b[H");
@@ -170,6 +200,10 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     mode = "switching";
     sessionId = id;
     await stopTui();
+    // The agent may hold its session (a lock file) a moment after its TUI ends: the view's
+    // session/load would find it still in use.
+    const lock = agent.sessionLock?.(id);
+    if (lock) log(await waitForLockRelease(lock) ? `lock ${lock} released` : `lock ${lock} still held after 3 s`);
     resetTerminal();
     process.stdout.write(`${agent.name} is in the ACP view (session ${id}).\nPress Enter here to go back to the terminal.\n`);
     mode = "view";
@@ -199,6 +233,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         cwd,
         agentCommand: input.host.agentCommand,
         warmSpare: true,
+        agentLogFiles: agent.logFiles?.(),
         onActivity: reportViewActivity(agent.stateAgent, paneId),
         handoff: { inView: () => mode === "view", handOff, giveBack },
         onAgentLine: (line) => { if (mode === "view") transcript.agentLine(line); },

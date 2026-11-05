@@ -11,6 +11,7 @@ import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession } from "./acp-connection";
+import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, describeCall, duration, shortPath, toolOutput, type FileChange, type Step, type Turn } from "./turns";
 import { ReviewPane } from "./review";
@@ -83,9 +84,69 @@ function Notice({ children }: { children: ReactNode }) {
   return <div className="notice">{children}</div>;
 }
 
+interface HostDiagnosticsReport {
+  agent?: { id: string; name: string };
+  agentInfo?: unknown;
+  agentsCLI?: string;
+  log?: string[];
+  messages?: string[];
+  [key: string]: unknown;
+}
+
+/** What went wrong, as the agent and the host say it, with the diagnostics to send on. */
+function ErrorNotice({ title, error, agentName, onRetry }: {
+  title: string;
+  error: { message: string; data?: string };
+  agentName: string;
+  onRetry?: () => void;
+}) {
+  const [report, setReport] = useState<HostDiagnosticsReport | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    hostJson<HostDiagnosticsReport>("/api/diagnostics").then(setReport, () => setReport(null));
+  }, [error]);
+  // The agent's own last words: what its adapter printed on stderr (logged as "agent <pid>: …").
+  const stderr = (report?.log ?? []).filter((line) => / agent \d+: /.test(line)).slice(-12)
+    .map((line) => line.replace(/^\S+ agent \d+: /, ""));
+  const copy = async () => {
+    const latest = await hostJson<HostDiagnosticsReport>("/api/diagnostics").catch(() => report);
+    const text = JSON.stringify({
+      view: { page: `${location.origin}${location.pathname}`, at: new Date().toISOString(), userAgent: navigator.userAgent },
+      error: { title, ...error },
+      ...(latest ?? { host: "did not answer" }),
+    }, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="notice error-notice">
+      <div className="err">
+        <strong>{title}</strong>
+        <div>{error.message}</div>
+        {error.data && <pre>{error.data}</pre>}
+        {stderr.length > 0 && (<><div className="d">Last output from {agentName}:</div><pre>{stderr.join("\n")}</pre></>)}
+        <div className="acts">
+          {onRetry && <button type="button" className="link" onClick={onRetry}>Reconnect</button>}
+          <button type="button" className="link" onClick={() => void copy()}>{copied ? "Copied" : "Copy diagnostics"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const PRESENT: Record<string, string> = {
-  "Läste": "Läser", "Ändrade": "Ändrar", "Sökte": "Söker", "Körde": "Kör", "Hämtade": "Hämtar",
-  "Tänkte": "Tänker", "Tog bort": "Tar bort", "Flyttade": "Flyttar", "Bytte läge": "Byter läge",
+  "Read": "Reading", "Edited": "Editing", "Searched": "Searching", "Ran": "Running", "Fetched": "Fetching",
+  "Thought": "Thinking", "Deleted": "Deleting", "Moved": "Moving", "Switched mode": "Switching mode",
 };
 
 function ToolLine({ call, cwd }: { call: ToolCall; cwd: string }) {
@@ -94,7 +155,7 @@ function ToolLine({ call, cwd }: { call: ToolCall; cwd: string }) {
   const output = toolOutput(call);
   const diffCount = call.content.some((entry) => entry.type === "diff");
   let meta: ReactNode = null;
-  if (call.status === "failed") meta = <span className="del">misslyckades</span>;
+  if (call.status === "failed") meta = <span className="del">failed</span>;
   else if (diffCount) {
     let added = 0;
     let removed = 0;
@@ -132,10 +193,10 @@ function Activity({ turn, working, cwd }: { turn: Turn; working: boolean; cwd: s
   if (turn.steps.length === 0) return null;
   const isOpen = working || open;
   const label = working
-    ? "Arbetar"
+    ? "Working"
     : turn.startedAt !== undefined && turn.endedAt !== undefined && turn.endedAt - turn.startedAt >= 1000
-      ? `Arbetade i ${duration(turn.endedAt - turn.startedAt)}`
-      : `Arbetade, ${turn.steps.length} ${turn.steps.length === 1 ? "steg" : "steg"}`;
+      ? `Worked for ${duration(turn.endedAt - turn.startedAt)}`
+      : `Worked, ${turn.steps.length} ${turn.steps.length === 1 ? "step" : "steps"}`;
   return (
     <details className="quiet" open={isOpen} onToggle={(event) => { if (!working) setOpen((event.target as HTMLDetailsElement).open); }}>
       <summary>{label} <Chevron /></summary>
@@ -152,10 +213,10 @@ function EditsLine({ changes, onReview, cwd }: { changes: FileChange[]; onReview
   const removed = changes.reduce((sum, change) => sum + change.removed, 0);
   return (
     <div className="edits">
-      <span>{changes.length === 1 ? `1 fil ändrad` : `${changes.length} filer ändrade`}</span>
+      <span>{changes.length === 1 ? `1 file changed` : `${changes.length} files changed`}</span>
       <span className="n"><span className="add">+{added}</span> <span className="del">−{removed}</span></span>
       <span className="files">{changes.slice(0, 4).map((change) => <span key={change.path} title={change.path}>{shortPath(change.path, cwd)}</span>)}</span>
-      <button className="tbtn" type="button" onClick={onReview}>Granska</button>
+      <button className="tbtn" type="button" onClick={onReview}>Review</button>
     </div>
   );
 }
@@ -183,9 +244,9 @@ function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: bo
 /** The step the agent is on, as one shimmering line. */
 function CurrentStep({ turn, now, cwd }: { turn: Turn | undefined; now: number; cwd: string }) {
   const step = turn?.steps.at(-1);
-  let text = "Tänker";
+  let text = "Thinking";
   let since = turn?.startedAt;
-  if (turn && turn.answer.length > 0) text = "Skriver";
+  if (turn && turn.answer.length > 0) text = "Writing";
   else if (step?.type === "tool" && step.call.status !== "completed" && step.call.status !== "failed") {
     const { verb, target } = describeCall(step.call, cwd);
     text = `${PRESENT[verb] ?? verb} ${target}`.trim();
@@ -201,10 +262,10 @@ function CurrentStep({ turn, now, cwd }: { turn: Turn | undefined; now: number; 
 function optionLabel(option: PermissionRequest["options"][number], agentName: string, call: PermissionRequest["toolCall"]): ReactNode {
   const command = commandOf(call);
   switch (option.kind) {
-    case "allow_once": return "Ja";
-    case "allow_always": return command ? <>Ja, och fråga inte igen för <code>{command.split(" ").slice(0, 2).join(" ")}</code></> : "Ja, och fråga inte igen";
-    case "reject_once": return `Nej, och säg vad ${agentName} ska göra i stället`;
-    case "reject_always": return "Nej, aldrig";
+    case "allow_once": return "Yes";
+    case "allow_always": return command ? <>Yes, and don't ask again for <code>{command.split(" ").slice(0, 2).join(" ")}</code></> : "Yes, and don't ask again";
+    case "reject_once": return `No, and tell ${agentName} what to do instead`;
+    case "reject_always": return "No, never";
     default: return option.name;
   }
 }
@@ -222,10 +283,10 @@ function Ask({ request, agentName, session, focused, cwd }: { request: Permissio
   const command = commandOf(request.toolCall);
   const files = (request.toolCall.locations ?? []).map((location) => shortPath(location.path, cwd));
   const question = isPlan
-    ? `Ska ${agentName} köra planen?`
+    ? `Should ${agentName} carry out the plan?`
     : request.toolCall.kind === "edit" && files.length > 0
-      ? `Får ${agentName} ändra ${files.join(", ")}?`
-      : command ? `Får ${agentName} köra det här?` : `Får ${agentName} fortsätta?`;
+      ? `May ${agentName} edit ${files.join(", ")}?`
+      : command ? `May ${agentName} run this?` : `May ${agentName} go on?`;
   const detail = command ?? (isPlan ? undefined : request.toolCall.title ?? undefined);
   const reject = request.options.find((option) => option.kind === "reject_once") ?? request.options.find((option) => option.kind.startsWith("reject"));
 
@@ -320,7 +381,7 @@ function Ring({ percent }: { percent: number }) {
   const x = 7 + 5.4 * Math.sin(angle);
   const y = 7 - 5.4 * Math.cos(angle);
   return (
-    <span className="ring" title="Använd kontext">
+    <span className="ring" title="Context used">
       <svg viewBox="0 0 14 14" aria-hidden="true">
         <circle cx="7" cy="7" r="5.4" fill="none" stroke="currentColor" strokeOpacity=".35" strokeWidth="1.6" />
         {percent > 0 && <path d={`M7 1.6A5.4 5.4 0 ${angle > Math.PI ? 1 : 0} 1 ${x.toFixed(2)} ${y.toFixed(2)}`} fill="none" stroke="currentColor" strokeWidth="1.6" />}
@@ -406,10 +467,10 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
     <div className="dock">
       <div className="inner">
         {mention && hits.length > 0 && (
-          <div className="pop" role="listbox" aria-label="Lägg till">
+          <div className="pop" role="listbox" aria-label="Add">
             {hits.map((hit, index) => (
               <div key={`${hit.kind}-${hit.path}`} style={{ display: "contents" }}>
-                {(index === 0 || hits[index - 1].kind !== hit.kind) && <div className="gh">{hit.kind === "file" ? "Filer" : "Paner"}</div>}
+                {(index === 0 || hits[index - 1].kind !== hit.kind) && <div className="gh">{hit.kind === "file" ? "Files" : "Panes"}</div>}
                 <div role="option" aria-selected={index === selectedHit} className={`it${index === selectedHit ? " sel" : ""}`}
                   onMouseDown={(event) => { event.preventDefault(); pick(hit.path); }} onMouseEnter={() => setSelectedHit(index)}>
                   <span className="p">{hit.path}</span>{hit.note && <small>{hit.note}</small>}
@@ -418,12 +479,12 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
             ))}
           </div>
         )}
-        {queue.map((text, index) => <div className="qd" key={index}>{text} – skickas när turen är klar</div>)}
+        {queue.map((text, index) => <div className="qd" key={index}>{text} – sent when the turn is done</div>)}
         {busy && !asking && (
           <div className="status">
-            <span>{turnStart !== undefined ? `Arbetar i ${duration(now - turnStart)}` : "Arbetar"}</span>
+            <span>{turnStart !== undefined ? `Working for ${duration(now - turnStart)}` : "Working"}</span>
             <span className="sp" />
-            <span><kbd>⏎</kbd> styr · <kbd>⌥⏎</kbd> köar · <kbd>esc</kbd> stoppar</span>
+            <span><kbd>↵</kbd> steer · <kbd>⌥↵</kbd> queue · <kbd>esc</kbd> stop</span>
           </div>
         )}
         <form className="box" onSubmit={(event) => { event.preventDefault(); submit("send"); }}>
@@ -432,7 +493,7 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
             className="input"
             value={draft}
             rows={1}
-            placeholder={busy ? `Styr ${agentName} medan den arbetar` : `Fråga ${agentName}, @ för filer och paner`}
+            placeholder={busy ? `Steer ${agentName} while it works` : `Ask ${agentName}, @ for files and panes`}
             onChange={(event) => {
               setDraft(event.target.value);
               setMention(mentionAt(event.target.value, event.target.selectionStart ?? event.target.value.length));
@@ -460,7 +521,7 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
             }}
           />
           <div className="row">
-            <button className="icon" type="button" aria-label="Lägg till en fil" onClick={() => {
+            <button className="icon" type="button" aria-label="Add a file" onClick={() => {
               const next = draft.endsWith(" ") || !draft ? `${draft}@` : `${draft} @`;
               setDraft(next);
               setMention({ start: next.length - 1, query: "" });
@@ -471,7 +532,7 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
             {showModes && (
               <label className="opt">
                 {modes!.availableModes.find((mode) => mode.id === modes!.currentModeId)?.name ?? modes!.currentModeId} <Down />
-                <select value={modes!.currentModeId} onChange={(event) => void session.setMode(event.target.value)} aria-label="Läge">
+                <select value={modes!.currentModeId} onChange={(event) => void session.setMode(event.target.value)} aria-label="Mode">
                   {modes!.availableModes.map((mode) => <option key={mode.id} value={mode.id}>{mode.name}</option>)}
                 </select>
               </label>
@@ -494,10 +555,10 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
             <span className="sp" />
             {percent !== undefined && <Ring percent={percent} />}
             {busy
-              ? <button className="go" type="button" aria-label="Stoppa" onClick={() => void session.cancel()}>
+              ? <button className="go" type="button" aria-label="Stop" onClick={() => void session.cancel()}>
                   <svg viewBox="0 0 14 14" aria-hidden="true"><rect x="3.8" y="3.8" width="6.4" height="6.4" rx="1.3" fill="currentColor" /></svg>
                 </button>
-              : <button className={`go${draft.trim() ? "" : " off"}`} type="submit" aria-label="Skicka" disabled={!draft.trim()}>
+              : <button className={`go${draft.trim() ? "" : " off"}`} type="submit" aria-label="Send" disabled={!draft.trim()}>
                   <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 11.5v-9M3 6.5l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 </button>}
           </div>
@@ -513,7 +574,7 @@ function PlanLine() {
   const done = plan.filter((entry) => entry.status === "completed").length;
   return (
     <details className="quiet plan-line">
-      <summary>Plan, {done} av {plan.length} klara <Chevron /></summary>
+      <summary>Plan, {done} of {plan.length} done <Chevron /></summary>
       <ol className="plist">
         {plan.map((entry, index) => <li key={index} className={`plan-${entry.status}`}>{entry.content}</li>)}
       </ol>
@@ -592,7 +653,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
         }}>
           <div className="col">
-            {turns.length === 0 && <div className="empty">Inget i sessionen än. Skriv till {info.agent.name} nedan.</div>}
+            {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
               <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working} cwd={info.cwd}
                 onReview={(t) => void openReview(t.changes)} />
@@ -617,11 +678,12 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
 
 function SessionView({ info }: { info: HostInfo }) {
   const dispatch = useSession((s) => s.dispatch);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ title: string; detail: { message: string; data?: string } } | null>(null);
+  const [reconnects, setReconnects] = useState(0);
   const [takenOver, setTakenOver] = useState(false);
-  const [cannotLoad, setCannotLoad] = useState(false);
+  const [cannotLoad, setCannotLoad] = useState<CannotLoadSession | null>(null);
   const [openElsewhere, setOpenElsewhere] = useState(false);
-  // "Ta över här" connects again, asking the host for the session another view has.
+  // "Take over here" connects again, asking the host for the session another view has.
   const [takeOvers, setTakeOvers] = useState(0);
   const takeOverHere = () => { setOpenElsewhere(false); setTakenOver(false); setTakeOvers((count) => count + 1); };
   const [loaded, setLoaded] = useState(false);
@@ -631,7 +693,7 @@ function SessionView({ info }: { info: HostInfo }) {
       sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, takeOver: takeOvers > 0,
       onTakenOver: () => setTakenOver(true),
     })
-    : null, [info.cwd, info.agent.id, dispatch, takeOvers]);
+    : null, [info.cwd, info.agent.id, dispatch, takeOvers, reconnects]);
 
   useEffect(() => {
     if (!session) return;
@@ -642,22 +704,27 @@ function SessionView({ info }: { info: HostInfo }) {
       .then(() => { if (!cancelled) { mark("loaded"); setLoaded(true); } })
       .catch((reason: unknown) => {
         if (cancelled) return;
-        if (reason instanceof CannotLoadSession) { setCannotLoad(true); return; }
+        if (reason instanceof CannotLoadSession) { setCannotLoad(reason); return; }
         if (reason instanceof OpenElsewhere) { session.close(); setOpenElsewhere(true); return; }
-        const detail = reason && typeof reason === "object" && "message" in reason ? String((reason as { message: unknown }).message) : String(reason);
-        setError(detail);
+        setError({ title: "The session could not be opened", detail: errorDetail(reason) });
       });
-    session.closed.then(() => { if (!cancelled) setError(`anslutningen till ${info.agent.name} stängdes`); }, () => {});
+    session.closed.then(
+      () => { if (!cancelled) setError({ title: `The connection to ${info.agent.name} closed`, detail: { message: "The host ended the connection or the agent exited." } }); },
+      (reason: unknown) => { if (!cancelled) setError({ title: `The connection to ${info.agent.name} broke`, detail: errorDetail(reason) }); },
+    );
     return () => { cancelled = true; };
   }, [session, info.agent.name]);
 
-  if (!sessionId) return <Notice>Panen har ingen {info.agent.name}-session än.</Notice>;
+  if (!sessionId) return <Notice>The pane has no {info.agent.name} session yet.</Notice>;
   if (cannotLoad) {
+    const version = cannotLoad.agentInfo?.version;
+    // Copilot's changelog has ACP sessions resumed from 1.0.95 (0.0.406 cannot load one).
+    const minimum = info.agent.id === "github-copilot-cli" ? "1.0.95 or later" : "a version that can";
     return (
       <Notice>
         <div>
-          {info.agent.name} kan inte visa en pågående session i ACP-vyn: agenten kan inte öppna en befintlig session (ACP <code>session/load</code>).
-          <br />Fortsätt i terminalen, eller uppdatera {info.agent.name} till en version som kan det.
+          This {info.agent.name}{version ? ` (${version})` : ""} can't open its session in the web view: it cannot load an existing session (ACP <code>session/load</code>).
+          <br />Update {info.agent.name} to {minimum}, or go on in the terminal.
         </div>
       </Notice>
     );
@@ -665,19 +732,22 @@ function SessionView({ info }: { info: HostInfo }) {
   if (takenOver) {
     return (
       <Notice>
-        <div>Sessionen togs över av en annan vy. <button type="button" className="link" onClick={takeOverHere}>Ta tillbaka den hit</button></div>
+        <div>The session was taken over by another view. <button type="button" className="link" onClick={takeOverHere}>Take it back here</button></div>
       </Notice>
     );
   }
   if (openElsewhere) {
     return (
       <Notice>
-        <div>Sessionen är redan öppen i en annan vy. <button type="button" className="link" onClick={takeOverHere}>Ta över här</button></div>
+        <div>The session is already open in another view. <button type="button" className="link" onClick={takeOverHere}>Take over here</button></div>
       </Notice>
     );
   }
-  if (error) return <Notice>Sessionen gick inte att öppna: {error}</Notice>;
-  if (!session || !loaded) return <Notice>Öppnar sessionen…</Notice>;
+  if (error) {
+    return <ErrorNotice title={error.title} error={error.detail} agentName={info.agent.name}
+      onRetry={() => setReconnects((count) => count + 1)} />;
+  }
+  if (!session || !loaded) return <Notice>Opening the session…</Notice>;
   return <Conversation session={session} info={info} />;
 }
 
@@ -688,12 +758,12 @@ function ReviewPage({ id }: { id: string }) {
   const [state, setState] = useState<"loading" | "ready" | "sent" | "missing">("loading");
   useEffect(() => {
     hostJson<{ changes: FileChange[]; cwd: string; agentName: string }>(`/api/review/${encodeURIComponent(id)}`)
-      .then((value) => { setReview(value); setState("ready"); document.title = `Ändringar – ${value.agentName}`; })
+      .then((value) => { setReview(value); setState("ready"); document.title = `Changes – ${value.agentName}`; })
       .catch(() => setState("missing"));
   }, [id]);
-  if (state === "missing") return <Notice>Granskningen finns inte längre. Öppna den igen från agentens vy.</Notice>;
-  if (!review) return <Notice>Öppnar granskningen…</Notice>;
-  if (state === "sent") return <Notice>Kommentarerna är skickade till {review.agentName}. Panen kan stängas.</Notice>;
+  if (state === "missing") return <Notice>The review is gone. Open it again from the agent's view.</Notice>;
+  if (!review) return <Notice>Opening the review…</Notice>;
+  if (state === "sent") return <Notice>The comments were sent to {review.agentName}. The pane can be closed.</Notice>;
   return (
     <div className="view review-page">
       <ReviewPane changes={review.changes} cwd={review.cwd} agentName={review.agentName}
@@ -718,14 +788,14 @@ function App() {
   useEffect(() => {
     if (!token) return;
     fetch("/api/info", { headers: { Authorization: `Bearer ${token}` } })
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`värden svarade ${response.status}`))))
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`the host answered ${response.status}`))))
       .then((value: HostInfo) => { mark("info"); setInfo(value); })
       .catch((reason: Error) => setError(reason.message));
   }, []);
-  if (!token) return <Notice>Sidan behöver panens token. Öppna den från Agents Next.</Notice>;
+  if (!token) return <Notice>The page needs the pane's token. Open it from Agents Next.</Notice>;
   if (reviewId) return <ReviewPage id={reviewId} />;
-  if (error) return <Notice>Panens ACP-värd svarar inte: {error}</Notice>;
-  if (!info) return <Notice>Ansluter…</Notice>;
+  if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
+  if (!info) return <Notice>Connecting…</Notice>;
   return <SessionView info={info} />;
 }
 

@@ -9,10 +9,11 @@
 // token is in the pane's metadata file (0600), which is how the app finds the host's address.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
+import { getBuildInfo } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 
@@ -54,6 +55,8 @@ export interface AcpHostOptions {
   warmSpare?: boolean;
   port?: number;
   log?: (message: string) => void;
+  /** The agent's own log files: their last lines go into the diagnostics. */
+  agentLogFiles?: string[];
 }
 
 export interface AcpHandoffControl {
@@ -164,8 +167,51 @@ function allowedOrigins(port: number): Set<string> {
   return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
 }
 
+/** The last lines of a log file, or why there are none. */
+export function tailOf(file: string, lines: number): string[] {
+  try {
+    const size = statSync(file).size;
+    const length = Math.min(size, 256 * 1024);
+    const buffer = Buffer.alloc(length);
+    const fd = openSync(file, "r");
+    try { readSync(fd, buffer, 0, length, size - length); } finally { closeSync(fd); }
+    return buffer.toString("utf8").split("\n").filter(Boolean).slice(-lines);
+  } catch (error) {
+    return [`(${error instanceof Error ? error.message : String(error)})`];
+  }
+}
+
+/** What the view's "Copy diagnostics" gets: the host's recent log and the last ACP messages. */
+export class HostDiagnostics {
+  private readonly logLines: string[] = [];
+  private readonly messages: string[] = [];
+  agentInfo: unknown;
+
+  constructor(private readonly limits = { log: 200, messages: 80, messageLength: 2_000 }) {}
+
+  log(message: string): void {
+    this.logLines.push(`${new Date().toISOString()} ${message}`);
+    if (this.logLines.length > this.limits.log) this.logLines.shift();
+  }
+
+  /** `direction` is "view→agent" or "agent→view". */
+  message(client: number, direction: string, line: string): void {
+    const text = line.length > this.limits.messageLength ? `${line.slice(0, this.limits.messageLength)}…` : line;
+    this.messages.push(`${new Date().toISOString()} view ${client} ${direction} ${text}`);
+    if (this.messages.length > this.limits.messages) this.messages.shift();
+    if (direction === "agent→view" && this.agentInfo === undefined && line.includes("\"agentInfo\"")) {
+      try { this.agentInfo = (JSON.parse(line) as { result?: { agentInfo?: unknown } }).result?.agentInfo; } catch { /* not JSON */ }
+    }
+  }
+
+  snapshot(): { agentInfo: unknown; log: string[]; messages: string[] } {
+    return { agentInfo: this.agentInfo, log: [...this.logLines], messages: [...this.messages] };
+  }
+}
+
 export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
-  const log = options.log ?? (() => {});
+  const diagnostics = new HostDiagnostics();
+  const log = (message: string) => { diagnostics.log(message); options.log?.(message); };
   const token = randomBytes(32).toString("base64url");
   const webRoot = resolve(options.webRoot);
   const metadataPath = acpHostMetadataPath(options.runtimeTempDir, options.paneId);
@@ -229,6 +275,16 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       cwd: options.cwd,
       agent: options.agent,
       state: () => ({ state: activity.state, mode: options.handoff ? "handoff" : "live", inView: options.handoff?.inView() ?? true, clients: wss.clients.size }),
+      diagnostics: () => ({
+        agent: options.agent,
+        pane: options.paneId,
+        mode: options.handoff ? "handoff" : "live",
+        hostProcess: process.pid,
+        agentsCLI: ((build) => (build ? `${build.version}+${build.gitCommit.slice(0, 12)}${build.dirty ? "-dirty" : ""}` : "dev"))(getBuildInfo()),
+        cwd: options.cwd,
+        ...diagnostics.snapshot(),
+        agentLogs: Object.fromEntries((options.agentLogFiles ?? []).map((file) => [file, tailOf(file, 60)])),
+      }),
     });
   });
 
@@ -260,22 +316,29 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       return;
     }
     const takesOver = url.searchParams.get("takeover") === "1";
+    // A view's own id, the same across reloads of its page: a view that loads again is not another.
+    const viewId = url.searchParams.get("view") ?? undefined;
     wss.handleUpgrade(request, socket, head, (ws) => {
       const client = nextClient++;
-      const view: OpenView = { sessions: new SessionTracker() };
+      const view: OpenView = { sessions: new SessionTracker(), viewId };
       views.set(client, view);
-      const link = bridge(ws, takeAgent(), log, {
+      const child = takeAgent();
+      log(`view ${client} connected${takesOver ? " (taking over)" : ""}, agent ${child.pid}`);
+      const link = bridge(ws, child, log, {
         onAgentLine: (line) => {
+          diagnostics.message(client, "agent→view", line);
           view.sessions.agentLine(line);
           activity.agentLine(client, line);
           activityChanged();
           options.onAgentLine?.(line);
         },
         onClientLine: (line) => {
+          diagnostics.message(client, "view→agent", line);
           const loading = view.sessions.clientLine(line);
           if (loading) {
             const others = holders(client, loading.sessionId);
-            if (others.length > 0 && !takesOver) {
+            const sameView = others.length > 0 && viewId !== undefined && others.every(([, held]) => held.viewId === viewId);
+            if (others.length > 0 && !takesOver && !sameView) {
               log(`view ${client} asked for session ${loading.sessionId}, open in another view`);
               return JSON.stringify({
                 jsonrpc: "2.0",
@@ -294,7 +357,12 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
           options.onClientLine?.(line);
           return undefined;
         },
-        onClose: () => { views.delete(client); activity.clientGone(client); activityChanged(); },
+        onClose: (code, reason) => {
+          log(`view ${client} closed (${code}${reason ? ` ${reason}` : ""})`);
+          views.delete(client);
+          activity.clientGone(client);
+          activityChanged();
+        },
       });
       view.takeOver = link.takeOver;
     });
@@ -345,6 +413,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
 
 interface OpenView {
   sessions: SessionTracker;
+  viewId?: string;
   takeOver?: () => void;
 }
 
@@ -412,7 +481,7 @@ function bridge(
   taps: Pick<AcpHostOptions, "onAgentLine"> & {
     /** Sees each message from the client; a reply it returns goes back instead of the message going on. */
     onClientLine?: (line: string) => string | undefined;
-    onClose?: () => void;
+    onClose?: (code: number, reason: string) => void;
   } = {},
 ): { takeOver: () => void } {
   let finished = false;
@@ -440,7 +509,7 @@ function bridge(
     }
     child.stdin?.write(text.endsWith("\n") ? text : `${text}\n`);
   });
-  ws.on("close", () => { taps.onClose?.(); finish(); });
+  ws.on("close", (code, reason) => { taps.onClose?.(code, reason.toString()); finish(); });
   ws.on("error", (error) => log(`client error: ${error.message}`));
   child.once("exit", (code, signal) => {
     log(`agent ${child.pid} exited (${code ?? signal})`);
@@ -642,7 +711,7 @@ function handleControl(
 function handleHttp(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { webRoot: string; token: string; cwd: string; agent: { id: string; name: string }; state: () => unknown },
+  context: { webRoot: string; token: string; cwd: string; agent: { id: string; name: string }; state: () => unknown; diagnostics: () => unknown },
 ): void {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -653,7 +722,7 @@ function handleHttp(
     response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }).end("ok");
     return;
   }
-  if (url.pathname === "/api/state" || url.pathname === "/api/files") {
+  if (url.pathname === "/api/state" || url.pathname === "/api/files" || url.pathname === "/api/diagnostics") {
     const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
     if (!tokensMatch(context.token, auth)) {
       response.writeHead(401, { "Cache-Control": "no-store" }).end();
@@ -661,6 +730,11 @@ function handleHttp(
     }
     if (url.pathname === "/api/state") {
       response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(context.state()));
+      return;
+    }
+    if (url.pathname === "/api/diagnostics") {
+      response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" })
+        .end(JSON.stringify({ ...(context.diagnostics() as object), state: context.state() }));
       return;
     }
     void projectFiles(context.cwd).then((files) => {

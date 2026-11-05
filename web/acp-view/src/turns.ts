@@ -107,15 +107,15 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
 }
 
 const VERBS: Record<string, string> = {
-  read: "Läste",
-  edit: "Ändrade",
-  delete: "Tog bort",
-  move: "Flyttade",
-  search: "Sökte",
-  execute: "Körde",
-  think: "Tänkte",
-  fetch: "Hämtade",
-  switch_mode: "Bytte läge",
+  read: "Read",
+  edit: "Edited",
+  delete: "Deleted",
+  move: "Moved",
+  search: "Searched",
+  execute: "Ran",
+  think: "Thought",
+  fetch: "Fetched",
+  switch_mode: "Switched mode",
 };
 
 /** A tool call as one line: a verb and what it acted on. */
@@ -125,7 +125,7 @@ export function describeCall(call: ToolCall, cwd?: string): { verb: string; targ
   const paths = call.locations.map((location) => location.path);
   const diffPaths = call.content.flatMap((entry) => (entry.type === "diff" ? [entry.path] : []));
   const verb = call.kind ? VERBS[call.kind] : undefined;
-  if (call.kind === "execute" && command) return { verb: "Körde", target: command };
+  if (call.kind === "execute" && command) return { verb: "Ran", target: command };
   const files = [...new Set([...diffPaths, ...paths])];
   if (verb && files.length > 0) return { verb, target: files.map((path) => shortPath(path, cwd)).join("  ") };
   if (verb) return { verb, target: stripVerb(call.title) };
@@ -158,11 +158,11 @@ export function toolOutput(call: ToolCall): string {
   return "";
 }
 
-/** "2 min 14 s", "12 s". */
+/** "2m 14s", "12s". */
 export function duration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds} s`;
+  if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
-  return rest ? `${minutes} min ${rest} s` : `${minutes} min`;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
 }

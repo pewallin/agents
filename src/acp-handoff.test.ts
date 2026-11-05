@@ -64,3 +64,63 @@ describe("view activity in the app", () => {
     }
   });
 });
+
+describe("waitForLockRelease", () => {
+  it("goes on once the lock is gone or names an ended process, and waits while its process lives", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { waitForLockRelease } = await import("./acp-handoff.js");
+    const dir = mkdtempSync(join(tmpdir(), "acp-lock-"));
+    const lock = join(dir, "s.lock");
+    expect(await waitForLockRelease(lock, 200)).toBe(true);
+    writeFileSync(lock, String(process.pid));
+    expect(await waitForLockRelease(lock, 300)).toBe(false);
+    writeFileSync(lock, JSON.stringify({ pid: 999999 }));
+    expect(await waitForLockRelease(lock, 300)).toBe(true);
+    writeFileSync(lock, String(process.pid));
+    setTimeout(() => rmSync(lock, { force: true }), 150);
+    expect(await waitForLockRelease(lock, 2_000)).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("tailOf", () => {
+  it("reads a log's last lines, and says why when it cannot", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { tailOf } = await import("./acp-host.js");
+    const dir = mkdtempSync(join(tmpdir(), "acp-tail-"));
+    const file = join(dir, "a.log");
+    writeFileSync(file, Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n") + "\n");
+    expect(tailOf(file, 3)).toEqual(["line 97", "line 98", "line 99"]);
+    expect(tailOf(join(dir, "missing.log"), 3)[0]).toMatch(/^\(ENOENT/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("kiroAcpArgs", () => {
+  it("starts kiro-cli acp on the engine the pane's TUI runs, v3 with the CLI's own login", async () => {
+    const { kiroAcpArgs, ACP_AGENTS: agents } = await import("./acp-host-cli.js");
+    expect(kiroAcpArgs("kiro-cli chat -a --v3 --resume-id sess_1")).toEqual(["acp", "--agent-engine", "v3", "--auth-method", "cli"]);
+    expect(kiroAcpArgs("kiro-cli chat --agent-engine v2")).toEqual(["acp", "--agent-engine", "v2"]);
+    expect(kiroAcpArgs("kiro-cli chat --agent-engine=v3")).toEqual(["acp", "--agent-engine", "v3", "--auth-method", "cli"]);
+    expect(kiroAcpArgs("kiro-cli chat")).toEqual(["acp"]);
+    expect(kiroAcpArgs(undefined)).toEqual(["acp"]);
+    const command = agents.kiro.command({ tuiCommand: "/opt/kiro/bin/kiro-cli chat -a --v3 --resume-id sess_1", runtimeTempDir: "/tmp" });
+    expect(command.command).toBe("/opt/kiro/bin/kiro-cli");
+    expect(command.args).toEqual(["acp", "--agent-engine", "v3", "--auth-method", "cli"]);
+  });
+});
+
+describe("copilotAcpArgs", () => {
+  it("starts copilot --acp with the TUI's options that shape a session, and none of its others", async () => {
+    const { copilotAcpArgs } = await import("./acp-host-cli.js");
+    expect(copilotAcpArgs("copilot --model gpt-5.6 --allow-all-tools --resume abc --effort=high --banner"))
+      .toEqual(["--acp", "--model", "gpt-5.6", "--allow-all-tools", "--effort=high"]);
+    expect(copilotAcpArgs("copilot --yolo --no-sandbox --add-dir /code")).toEqual(["--acp", "--yolo", "--no-sandbox", "--add-dir", "/code"]);
+    expect(copilotAcpArgs("copilot")).toEqual(["--acp"]);
+    expect(copilotAcpArgs(undefined)).toEqual(["--acp"]);
+  });
+});

@@ -14,6 +14,7 @@
 // They run before the rest of the CLI loads: a session's host stays up for the pane's lifetime,
 // and an adapter's stdout is its protocol channel, which nothing else may write to.
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { acpHostMetadataPath, startAcpHost } from "./acp-host.js";
 import { runHandoffSession } from "./acp-handoff.js";
@@ -59,6 +60,10 @@ export interface AcpAgentEntry {
    * (its options stay, a resume it carried is replaced). Absent for a live agent (Codex).
    */
   resume?(tuiCommand: string, sessionId: string): string;
+  /** Hand-off agents: the file the agent holds while a process has the session open. */
+  sessionLock?(sessionId: string): string;
+  /** The agent's own logs, whose last lines go into the view's diagnostics. */
+  logFiles?(): string[];
 }
 
 function shellQuote(value: string): string {
@@ -88,6 +93,49 @@ function resumeWith(
 }
 
 /** The executable of the pane's command when it is the agent's, else the agent's name on PATH. */
+/** The TUI's options that shape a session, and whether each takes a value. */
+const COPILOT_SESSION_OPTIONS: Record<string, boolean> = {
+  "--model": true, "--effort": true, "--reasoning-effort": true,
+  "--allow-all-tools": false, "--allow-all-paths": false, "--allow-all": false, "--yolo": false,
+  "--allow-tool": true, "--deny-tool": true, "--available-tools": true, "--excluded-tools": true,
+  "--add-dir": true, "--sandbox": false, "--no-sandbox": false, "--experimental": false,
+};
+
+/**
+ * `copilot --acp` with the options of the pane's TUI that shape its session (model, effort, tool
+ * permissions, sandbox), so the session behaves in the view as it does in the terminal.
+ */
+export function copilotAcpArgs(tuiCommand: string | undefined): string[] {
+  const words = tuiCommand?.trim().split(/\s+/).slice(1) ?? [];
+  const carried: string[] = [];
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index];
+    const [name, inline] = word.split(/=(.*)/s, 2);
+    if (!(name in COPILOT_SESSION_OPTIONS)) continue;
+    if (!COPILOT_SESSION_OPTIONS[name] || inline !== undefined) {
+      carried.push(word);
+    } else if (index + 1 < words.length) {
+      carried.push(word, words[++index]);
+    }
+  }
+  return ["--acp", ...carried];
+}
+
+/**
+ * `kiro-cli acp` with the engine the pane's TUI runs: a session is kept by the engine that made
+ * it, and v2 (acp's default) answers "Session not found" for a v3 session. v3 asks the client for
+ * an access token (`_kiro/auth/getAccessToken`) unless it uses the CLI's own login.
+ */
+export function kiroAcpArgs(tuiCommand: string | undefined): string[] {
+  const words = tuiCommand?.trim().split(/\s+/) ?? [];
+  const engineIndex = words.findIndex((word) => word === "--agent-engine");
+  const inline = words.find((word) => word.startsWith("--agent-engine="))?.slice("--agent-engine=".length);
+  const engine = inline ?? (engineIndex >= 0 ? words[engineIndex + 1] : undefined)
+    ?? (words.includes("--v3") ? "v3" : words.includes("--v2") ? "v2" : words.includes("--v1") ? "v1" : undefined);
+  if (!engine) return ["acp"];
+  return engine === "v3" ? ["acp", "--agent-engine", "v3", "--auth-method", "cli"] : ["acp", "--agent-engine", engine];
+}
+
 function executableOf(tuiCommand: string | undefined, name: string): string {
   const first = tuiCommand?.trim().split(/\s+/)[0];
   return first && first.split("/").pop() === name ? first : name;
@@ -174,9 +222,9 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     name: "Copilot",
     stateAgent: "copilot",
     tested: false,
-    // Copilot 0.0.406 answers initialize without loadSession, so it cannot take a session over
-    // yet; a later Copilot that loads sessions works with this entry as it is.
-    command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "copilot"), args: ["--acp"], env: { ...process.env } }),
+    // Copilot 0.0.406 answers initialize without loadSession, so it cannot take a session over;
+    // the view says so. Its changelog has ACP sessions resumed from 1.0.95.
+    command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "copilot"), args: copilotAcpArgs(tuiCommand), env: { ...process.env } }),
     resume: (tuiCommand, sessionId) =>
       resumeWith(tuiCommand, ["--resume"], ["--continue"], (id) => ["--resume", id])(sessionId),
   },
@@ -185,9 +233,13 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     name: "Kiro",
     stateAgent: "kiro",
     tested: false,
-    command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "kiro-cli"), args: ["acp"], env: { ...process.env } }),
+    command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "kiro-cli"), args: kiroAcpArgs(tuiCommand), env: { ...process.env } }),
     resume: (tuiCommand, sessionId) =>
       resumeWith(tuiCommand, ["--resume-id"], ["--resume"], (id) => ["--resume-id", id])(sessionId),
+    // Kiro keeps <session>.lock beside a session while a process has it open (its TUI or an ACP
+    // agent), and logs to $TMPDIR/kiro-log/kiro-chat.log (kiro.dev/docs/cli/acp).
+    sessionLock: (sessionId) => join(homedir(), ".kiro", "sessions", "cli", `${sessionId}.lock`),
+    logFiles: () => [process.env.KIRO_CHAT_LOG_FILE || join(tmpdir(), "kiro-log", "kiro-chat.log")],
   },
 };
 
@@ -262,6 +314,7 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
     process.exit(problem?.startsWith("no ACP web view") ? 1 : 2);
   }
   const host = await startAcpHost({
+    agentLogFiles: agent.logFiles?.(),
     paneId,
     agent: { id: agent.id, name: agent.name },
     runtimeTempDir,

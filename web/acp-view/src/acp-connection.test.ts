@@ -57,6 +57,30 @@ describe("connectSession", () => {
     first.close();
     const taking = connectSession({ url, sessionId: "s", cwd: "/", agentId: "codex-acp", dispatch: () => {}, takeOver: true });
     await taking.load();
-    expect(urls).toEqual(["/acp?token=t", "/acp?token=t&takeover=1"]);
+    expect(urls[0]).toMatch(/^\/acp\?token=t&view=[^&]+$/);
+    expect(urls[1]).toBe(`${urls[0]}&takeover=1`);
+  });
+
+  it("answers a request the view does not know (Kiro's _kiro/auth/getAccessToken) with method not found, and goes on", async () => {
+    const answers: unknown[] = [];
+    server = new WebSocketServer({ port: 0 });
+    server.on("connection", (ws) => ws.on("message", (raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.method === "initialize") {
+        // The agent asks the client first, as Kiro v3 does, and answers initialize after.
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: "kiro-1", method: "_kiro/auth/getAccessToken", params: {} }));
+        setTimeout(() => ws.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } })), 50);
+      } else if (message.method === "session/load") {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
+      } else if (message.id === "kiro-1") {
+        answers.push(message);
+      }
+    }));
+    await new Promise((resolve) => server!.once("listening", resolve));
+    const url = `ws://127.0.0.1:${(server.address() as { port: number }).port}/acp?token=t`;
+    const session = connectSession({ url, sessionId: "s", cwd: "/", agentId: "kiro", dispatch: () => {} });
+    await session.load();
+    await expect.poll(() => answers.length).toBe(1);
+    expect((answers[0] as { error?: { code: number } }).error?.code).toBe(-32601);
   });
 });

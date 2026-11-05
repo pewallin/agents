@@ -33,15 +33,15 @@ describe("turns", () => {
 
   it("names a call by verb and what it acted on", () => {
     expect(describeCall({ id: "t", title: "Run", kind: "execute", status: "completed", content: [], locations: [], rawInput: { command: ["bun", "test"] } }))
-      .toEqual({ verb: "Körde", target: "bun test" });
+      .toEqual({ verb: "Ran", target: "bun test" });
     expect(describeCall({ id: "t", title: "Read file", kind: "read", status: "completed", content: [], locations: [{ path: "/repo/src/a.ts" }] }, "/repo"))
-      .toEqual({ verb: "Läste", target: "src/a.ts" });
+      .toEqual({ verb: "Read", target: "src/a.ts" });
   });
 
   it("counts lines and writes durations and paths as people read them", () => {
     expect(countLines(null, "x\ny\n")).toEqual({ added: 2, removed: 0 });
-    expect(duration(134_000)).toBe("2 min 14 s");
-    expect(duration(12_400)).toBe("12 s");
+    expect(duration(134_000)).toBe("2m 14s");
+    expect(duration(12_400)).toBe("12s");
     expect(shortPath("/repo/src/a.ts", "/repo")).toBe("src/a.ts");
   });
 });
@@ -59,6 +59,6 @@ describe("review", () => {
 
   it("turns line comments into one message for the agent", () => {
     expect(commentsMessage([{ path: "/repo/src/a.ts", line: 4, code: "  return rows;", text: "Använd formatJson" }], "/repo"))
-      .toBe("Kommentarer på ändringarna:\n- src/a.ts, vid `return rows;`: Använd formatJson");
+      .toBe("Comments on the changes:\n- src/a.ts, at `return rows;`: Använd formatJson");
   });
 });

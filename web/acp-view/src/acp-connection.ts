@@ -37,9 +37,26 @@ const OPEN_ELSEWHERE_CODE = -32050;
 
 /** The agent cannot open an existing session (no `session/load`), so the view cannot show it. */
 export class CannotLoadSession extends Error {
-  constructor() {
+  /** The agent's name and version as it gives them (initialize's agentInfo). */
+  constructor(readonly agentInfo?: { name?: string; title?: string | null; version?: string }) {
     super("The agent cannot load a session");
   }
+}
+
+let ownViewId: string | undefined;
+function viewId(): string {
+  if (ownViewId) return ownViewId;
+  // The app names its view of the pane (?view=app): any web view it makes for the pane is that view.
+  const named = typeof location !== "undefined" ? new URLSearchParams(location.search).get("view") : null;
+  if (named) return (ownViewId = named);
+  try {
+    ownViewId = sessionStorage.getItem("agents-acp-view-id") ?? undefined;
+  } catch { /* no storage */ }
+  if (!ownViewId) {
+    ownViewId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    try { sessionStorage.setItem("agents-acp-view-id", ownViewId); } catch { /* no storage */ }
+  }
+  return ownViewId;
 }
 
 export function connectSession(options: {
@@ -70,7 +87,9 @@ export function connectSession(options: {
       return new Promise<RequestPermissionResponse>((resolve) => answers.set(id, resolve));
     });
 
-  const url = options.takeOver ? `${options.url}&takeover=1` : options.url;
+  // The view's own id, kept while the page reloads: the host gives the session back to the same
+  // view at once instead of calling it another view.
+  const url = `${options.url}&view=${encodeURIComponent(viewId())}${options.takeOver ? "&takeover=1" : ""}`;
   const connection: ClientConnection = app.connect(createWebSocketStream(url));
   const agent = connection.agent;
   const ready = agent.request("initialize", {
@@ -83,7 +102,7 @@ export function connectSession(options: {
     async load() {
       const initialized = await ready;
       // The view shows a session the pane already has; an agent that cannot load one has no view.
-      if (!initialized.agentCapabilities?.loadSession) throw new CannotLoadSession();
+      if (!initialized.agentCapabilities?.loadSession) throw new CannotLoadSession(initialized.agentInfo ?? undefined);
       dispatch({ type: "loading" });
       const response = await agent.request("session/load", { sessionId, cwd, mcpServers: [] }).catch((error: unknown) => {
         if ((error as { code?: unknown } | null)?.code === OPEN_ELSEWHERE_CODE) throw new OpenElsewhere();

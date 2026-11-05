@@ -214,6 +214,53 @@ describe("acp-host", () => {
     other.close();
   });
 
+  it("gives the session back at once to the same view loading again, as a page reload does", async () => {
+    const h = await start();
+    const viewUrl = (view: string) => `${h.url.replace("http", "ws")}/acp?token=${encodeURIComponent(h.token)}&view=${view}`;
+    const ask = (ws: WebSocket, method: string, params: unknown) => new Promise<{ result?: unknown; error?: { code: number } }>((resolve) => {
+      ws.once("message", (data) => resolve(JSON.parse(data.toString())));
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }));
+    });
+    const opened = (ws: WebSocket) => new Promise((resolve) => ws.once("open", resolve));
+    const before = new WebSocket(viewUrl("app-view"), { headers: { Origin: h.url } });
+    await opened(before);
+    await ask(before, "session/load", { sessionId: "s1" });
+    // The reloaded page connects before its old connection is gone.
+    const closed = new Promise<number>((resolve) => before.once("close", resolve));
+    const after = new WebSocket(viewUrl("app-view"), { headers: { Origin: h.url } });
+    await opened(after);
+    expect((await ask(after, "session/load", { sessionId: "s1" })).error).toBeUndefined();
+    expect(await closed).toBe(TAKEN_OVER_CLOSE_CODE);
+    // Another view is still told the session is open elsewhere.
+    const other = new WebSocket(viewUrl("other-view"), { headers: { Origin: h.url } });
+    await opened(other);
+    expect((await ask(other, "session/load", { sessionId: "s1" })).error?.code).toBe(OPEN_ELSEWHERE_CODE);
+    after.close();
+    other.close();
+  });
+
+  it("tells a holder of the token its log and the last ACP messages, for the view's diagnostics", async () => {
+    const h = await start();
+    const ws = connect(h);
+    await new Promise((resolve) => ws.once("open", resolve));
+    await new Promise((resolve) => {
+      ws.once("message", resolve);
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+    });
+    expect((await fetch(`${h.url}/api/diagnostics`)).status).toBe(401);
+    const report = await (await fetch(`${h.url}/api/diagnostics`, { headers: { Authorization: `Bearer ${h.token}` } })).json() as {
+      agent: { id: string }; mode: string; agentsCLI: string; log: string[]; messages: string[]; state: { clients: number };
+    };
+    expect(report.agent.id).toBe("test-acp");
+    expect(report.mode).toBe("live");
+    expect(report.agentsCLI).toBeTruthy();
+    expect(report.log.some((line) => line.includes("view 1 connected"))).toBe(true);
+    expect(report.messages.some((line) => line.includes("view→agent") && line.includes("initialize"))).toBe(true);
+    expect(report.messages.some((line) => line.includes("agent→view") && line.includes("\"echo\":\"initialize\""))).toBe(true);
+    expect(report.state.clients).toBe(1);
+    ws.close();
+  });
+
   it("knows a view's sessions: those it is given and those it makes", () => {
     const sessions = new SessionTracker();
     expect(sessions.clientLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "a" } }))).toEqual({ id: 1, sessionId: "a" });

@@ -44,8 +44,8 @@ interface Comment { path: string; edit: number; line: number; code: string; text
 /** The comments as one message. Each names its file and quotes its line: an agent's diff may
  *  cover only part of the file, so its line numbers need not be the file's. */
 export function commentsMessage(comments: Array<Omit<Comment, "edit">>, cwd: string): string {
-  const lines = comments.map((comment) => `- ${shortPath(comment.path, cwd)}, vid \`${comment.code.trim()}\`: ${comment.text}`);
-  return `Kommentarer på ändringarna:\n${lines.join("\n")}`;
+  const lines = comments.map((comment) => `- ${shortPath(comment.path, cwd)}, at \`${comment.code.trim()}\`: ${comment.text}`);
+  return `Comments on the changes:\n${lines.join("\n")}`;
 }
 
 export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
@@ -96,11 +96,11 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
   };
 
   return (
-    <aside className="review" aria-label="Granska">
+    <aside className="review" aria-label="Review">
       <div className="rhead">
-        <span className="rtitle">Ändringar</span>
-        <span className="d">{changes.length === 1 ? "1 fil" : `${changes.length} filer`}, {agentName}</span>
-        {onClose && <button className="rclose" type="button" onClick={onClose} aria-label="Stäng granskningen">✕</button>}
+        <span className="rtitle">Changes</span>
+        <span className="d">{changes.length === 1 ? "1 file" : `${changes.length} files`}, {agentName}</span>
+        {onClose && <button className="rclose" type="button" onClick={onClose} aria-label="Close the review">✕</button>}
       </div>
       <div className="rbar">
         {changes.map((item, index) => (
@@ -114,7 +114,7 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
         <table>
           <tbody>
             {sections.map((rows, edit) => (
-              <SectionRows key={edit} label={sections.length > 1 ? `Ändring ${edit + 1} av ${sections.length}` : undefined}>
+              <SectionRows key={edit} label={sections.length > 1 ? `Change ${edit + 1} of ${sections.length}` : undefined}>
                 {rows.map((row, index) => {
                   const line = row.newLine ?? row.oldLine;
                   const at = (comment: { path: string; edit: number; line: number }) =>
@@ -133,13 +133,13 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
                       {isEditing && (
                         <tr className="cm"><td className="n" /><td>
                           <div className="cbox">
-                            <textarea ref={box} value={text} rows={2} placeholder="Kommentar till agenten"
+                            <textarea ref={box} value={text} rows={2} placeholder="Comment for the agent"
                               onChange={(event) => setText(event.target.value)}
                               onKeyDown={(event) => {
                                 if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); save(); }
                                 if (event.key === "Escape") { event.preventDefault(); setEditing(null); }
                               }} />
-                            <span className="acts"><button type="button" onClick={() => setEditing(null)}>Avbryt</button><button type="button" className="b" onClick={save}>Kommentera ⏎</button></span>
+                            <span className="acts"><button type="button" onClick={() => setEditing(null)}>Cancel</button><button type="button" className="b" onClick={save}>Comment ⏎</button></span>
                           </div>
                         </td></tr>
                       )}
@@ -152,10 +152,10 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
         </table>
       </div>
       <div className="rfoot">
-        <span>{comments.length === 0 ? "Klicka på ett radnummer för att kommentera" : comments.length === 1 ? "1 kommentar" : `${comments.length} kommentarer`}</span>
+        <span>{comments.length === 0 ? "Click a line number to comment" : comments.length === 1 ? "1 comment" : `${comments.length} comments`}</span>
         <span className="sp" />
         <button className="pill" type="button" disabled={comments.length === 0} onClick={() => onSend(commentsMessage(comments, cwd))}>
-          Skicka till {agentName} <kbd>⌘⏎</kbd>
+          Send to {agentName} <kbd>⌘⏎</kbd>
         </button>
       </div>
     </aside>
@@ -182,7 +182,7 @@ function RowWithComments({ row, onComment, children, tokens }: { row: DiffRow; o
   return (
     <>
       <tr className={row.kind === "add" ? "a" : row.kind === "del" ? "d" : undefined}>
-        <td className={`n${onComment ? " can" : ""}`} onClick={onComment} title={onComment ? "Kommentera raden" : undefined}>{row.newLine ?? row.oldLine}</td>
+        <td className={`n${onComment ? " can" : ""}`} onClick={onComment} title={onComment ? "Comment on this line" : undefined}>{row.newLine ?? row.oldLine}</td>
         <td className="code">{tokens && tokens.length > 0 ? <Coloured tokens={tokens} /> : row.text || " "}</td>
       </tr>
       {children}
