@@ -546,9 +546,8 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
     return () => events.close();
   }, [session]);
 
-  /** The review opens in the view. The host can also open it as a pane beside this one
-   *  (/api/open-review, through app-control), but the app places a web page asked for as a split
-   *  in a new workspace tab and leaves it blank (2026-11-05); until that works, it stays here. */
+  /** In the app the review opens as a pane beside this one (/api/open-review, through the app's
+   *  app-control); elsewhere, or when the app cannot, it opens in the view. */
   const openReview = async (changes: FileChange[]) => {
     if (!OPEN_REVIEW_BESIDE) { setReview(changes); return; }
     try {
@@ -671,7 +670,8 @@ function ReviewPage({ id }: { id: string }) {
   );
 }
 
-const OPEN_REVIEW_BESIDE = new URLSearchParams(location.search).get("review") === "beside";
+/** The app shows the view with ?agents-next=acp-view; there a review gets a pane of its own. */
+const OPEN_REVIEW_BESIDE = new URLSearchParams(location.search).get("agents-next") === "acp-view";
 const reviewId = decodeURIComponent(location.pathname.match(/^\/review\/([^/]+)/)?.[1] ?? "") || null;
 
 function App() {
