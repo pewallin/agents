@@ -51,7 +51,8 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
   changes: FileChange[];
   cwd: string;
   agentName: string;
-  onClose: () => void;
+  /** Absent when the review is a pane of its own: the app closes it. */
+  onClose?: () => void;
   onSend: (text: string) => void;
 }) {
   const [fileIndex, setFileIndex] = useState(0);
@@ -68,7 +69,7 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
       if (event.key === "Enter" && event.metaKey && comments.length > 0 && !editing) {
         event.preventDefault();
         onSend(commentsMessage(comments, cwd));
-      } else if (event.key === "Escape" && !editing) {
+      } else if (event.key === "Escape" && !editing && onClose) {
         onClose();
       }
     };
@@ -87,7 +88,7 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
       <div className="rhead">
         <span className="rtitle">Ändringar</span>
         <span className="d">{changes.length === 1 ? "1 fil" : `${changes.length} filer`}, {agentName}</span>
-        <button className="rclose" type="button" onClick={onClose} aria-label="Stäng granskningen">✕</button>
+        {onClose && <button className="rclose" type="button" onClick={onClose} aria-label="Stäng granskningen">✕</button>}
       </div>
       <div className="rbar">
         {changes.map((item, index) => (

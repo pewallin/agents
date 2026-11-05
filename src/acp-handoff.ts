@@ -14,7 +14,7 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { acpHostMetadataPath, startAcpHost, type AcpHost } from "./acp-host.js";
-import type { AcpAgentEntry } from "./acp-host-cli.js";
+import { reportViewActivity, type AcpAgentEntry } from "./acp-host-cli.js";
 import { getStateDir } from "./paths.js";
 
 export interface HandoffSessionInput {
@@ -199,6 +199,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         cwd,
         agentCommand: input.host.agentCommand,
         warmSpare: true,
+        onActivity: reportViewActivity(agent.stateAgent, paneId),
         handoff: { inView: () => mode === "view", handOff, giveBack },
         onAgentLine: (line) => { if (mode === "view") transcript.agentLine(line); },
         onClientLine: (line) => { if (mode === "view") transcript.clientLine(line); },

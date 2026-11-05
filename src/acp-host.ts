@@ -14,6 +14,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { WebSocketServer, type WebSocket } from "ws";
+import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 
 export interface AcpHostMetadata {
   url: string;
@@ -45,6 +46,10 @@ export interface AcpHostOptions {
   /** Every line between a client and its adapter, for the pane's plain-text transcript. */
   onAgentLine?: (line: string) => void;
   onClientLine?: (line: string) => void;
+  /** Called when what the view's clients see changes: a permission waits, a prompt runs, or neither. */
+  onActivity?: (state: "needs-you" | "working" | "idle") => void;
+  /** Where the app's control socket is; defaults to the one agents-app-control uses. */
+  appControl?: AppControlTarget;
   /** Keep one agent process started ahead of the next client. */
   warmSpare?: boolean;
   port?: number;
@@ -166,6 +171,15 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const metadataPath = acpHostMetadataPath(options.runtimeTempDir, options.paneId);
   const children = new Set<ChildProcess>();
   const activity = new AcpActivity();
+  const reviews = new ReviewStore();
+  const events = new Set<ServerResponse>();
+  let lastActivity = activity.state;
+  const activityChanged = () => {
+    const state = activity.state;
+    if (state === lastActivity) return;
+    lastActivity = state;
+    options.onActivity?.(state);
+  };
   let nextClient = 1;
   let spare: ChildProcess | undefined;
   let closed = false;
@@ -200,6 +214,15 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       handleControl(request, response, token, options.handoff);
       return;
     }
+    if (handleBridge(request, response, {
+      token,
+      paneId: options.paneId,
+      origin: `http://127.0.0.1:${port}`,
+      reviews,
+      events,
+      appControl: options.appControl ?? appControlTarget(),
+      log,
+    })) return;
     handleHttp(request, response, {
       webRoot,
       token,
@@ -233,9 +256,9 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     wss.handleUpgrade(request, socket, head, (ws) => {
       const client = nextClient++;
       bridge(ws, takeAgent(), log, {
-        onAgentLine: (line) => { activity.agentLine(client, line); options.onAgentLine?.(line); },
-        onClientLine: (line) => { activity.clientLine(client, line); options.onClientLine?.(line); },
-        onClose: () => activity.clientGone(client),
+        onAgentLine: (line) => { activity.agentLine(client, line); activityChanged(); options.onAgentLine?.(line); },
+        onClientLine: (line) => { activity.clientLine(client, line); activityChanged(); options.onClientLine?.(line); },
+        onClose: () => { activity.clientGone(client); activityChanged(); },
       });
     });
   });
@@ -345,6 +368,118 @@ export function rankFiles(files: string[], query: string): string[] {
     if (score >= 0) scored.push([score * 10_000 + file.length, file]);
   }
   return scored.sort((a, b) => a[0] - b[0]).map(([, file]) => file);
+}
+
+function authorized(request: IncomingMessage, token: string, url: URL): boolean {
+  const header = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+  return tokensMatch(token, header) || tokensMatch(token, url.searchParams.get("token"));
+}
+
+function readJson(request: IncomingMessage, limit = 16 * 1024 * 1024): Promise<unknown> {
+  return new Promise((resolveBody, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) { request.destroy(); reject(new Error("too large")); return; }
+      chunks.push(chunk);
+    });
+    request.on("end", () => {
+      try { resolveBody(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch (error) { reject(error); }
+    });
+    request.on("error", reject);
+  });
+}
+
+function sendJson(response: ServerResponse, status: number, value: unknown): void {
+  response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(value));
+}
+
+/**
+ * The view's ways into the app and the pane's tmux session (src/acp-bridge.ts): reviews opened
+ * beside the pane and their comments relayed back, the session's panes and what they show.
+ * Answers true when it handled the request.
+ */
+function handleBridge(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: {
+    token: string;
+    paneId: string;
+    origin: string;
+    reviews: ReviewStore;
+    events: Set<ServerResponse>;
+    appControl: AppControlTarget;
+    log: (message: string) => void;
+  },
+): boolean {
+  const url = new URL(request.url ?? "/", context.origin);
+  const path = url.pathname;
+  const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
+    || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review";
+  if (!ours) return false;
+  if (!authorized(request, context.token, url)) {
+    response.writeHead(401, { "Cache-Control": "no-store" }).end();
+    return true;
+  }
+  const fail = (status: number) => (error: unknown) =>
+    sendJson(response, status, { message: error instanceof Error ? error.message : String(error) });
+
+  if (path === "/api/events" && request.method === "GET") {
+    response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+    response.write(": connected\n\n");
+    context.events.add(response);
+    const ping = setInterval(() => response.write(": ping\n\n"), 25_000);
+    request.on("close", () => { clearInterval(ping); context.events.delete(response); });
+    return true;
+  }
+  if (path === "/api/panes" && request.method === "GET") {
+    sessionPanes(context.paneId).then((panes) => sendJson(response, 200, { panes }), fail(503));
+    return true;
+  }
+  const paneMatch = path.match(/^\/api\/panes\/(%\d+)\/text$/);
+  if (paneMatch && request.method === "GET") {
+    paneText(paneMatch[1], Number(url.searchParams.get("lines") ?? 200)).then((text) => sendJson(response, 200, { text }), fail(404));
+    return true;
+  }
+  if (path === "/api/review" && request.method === "POST") {
+    readJson(request).then((payload) => sendJson(response, 200, { id: context.reviews.put(payload) }), fail(400));
+    return true;
+  }
+  const reviewMatch = path.match(/^\/api\/review\/([A-Za-z0-9_-]+)(\/send)?$/);
+  if (reviewMatch && request.method === "GET" && !reviewMatch[2]) {
+    const review = context.reviews.get(reviewMatch[1]);
+    if (review === undefined) sendJson(response, 404, { message: "no such review" });
+    else sendJson(response, 200, review);
+    return true;
+  }
+  if (reviewMatch && request.method === "POST" && reviewMatch[2]) {
+    readJson(request).then((body) => {
+      const text = String((body as { text?: unknown }).text ?? "").trim();
+      if (!text) { sendJson(response, 400, { message: "nothing to send" }); return; }
+      const event = `event: send\ndata: ${JSON.stringify({ review: reviewMatch[1], text })}\n\n`;
+      for (const listener of context.events) listener.write(event);
+      sendJson(response, context.events.size > 0 ? 200 : 409, { delivered: context.events.size });
+    }, fail(400));
+    return true;
+  }
+  if (path === "/api/open-review" && request.method === "POST") {
+    readJson(request).then((body) => {
+      const id = String((body as { id?: unknown }).id ?? "");
+      if (context.reviews.get(id) === undefined) { sendJson(response, 404, { message: "no such review" }); return; }
+      const page = `${context.origin}/review/${id}#token=${encodeURIComponent(context.token)}`;
+      return openPageBeside(context.appControl, context.paneId, page).then(
+        () => sendJson(response, 200, { opened: true }),
+        (error: unknown) => {
+          context.log(`could not open the review beside the pane: ${error instanceof Error ? error.message : String(error)}`);
+          fail(503)(error);
+        },
+      );
+    }, fail(400));
+    return true;
+  }
+  response.writeHead(405).end();
+  return true;
 }
 
 function handleControl(

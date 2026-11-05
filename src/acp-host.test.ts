@@ -195,4 +195,38 @@ describe("acp-host", () => {
     expect(rankFiles(["src/cli.ts", "docs/status.md", "src/status.ts", "src/statusline.ts"], "status"))
       .toEqual(["src/status.ts", "docs/status.md", "src/statusline.ts"]);
   });
+  it("keeps a review, relays its comments to the views listening, and says when the app cannot open it", async () => {
+    host = await startAcpHost({
+      paneId: "%44",
+      agent: { id: "test-acp", name: "Test" },
+      runtimeTempDir: join(dir, "rt"),
+      webRoot: join(dir, "web"),
+      cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", ECHO_AGENT], env: process.env },
+      appControl: { socketPath: join(dir, "no.sock"), tokenPath: join(dir, "no.token") },
+    });
+    const h = host;
+    const auth = { Authorization: `Bearer ${h.token}`, "Content-Type": "application/json" };
+    const created = await fetch(`${h.url}/api/review`, { method: "POST", headers: auth, body: JSON.stringify({ changes: [], agentName: "Test" }) });
+    const { id } = await created.json() as { id: string };
+    expect(await (await fetch(`${h.url}/api/review/${id}`, { headers: auth })).json()).toEqual({ changes: [], agentName: "Test" });
+    expect((await fetch(`${h.url}/api/review/${id}`)).status).toBe(401);
+
+    // No view listening yet: the comments have nowhere to go.
+    expect((await fetch(`${h.url}/api/review/${id}/send`, { method: "POST", headers: auth, body: JSON.stringify({ text: "Fix" }) })).status).toBe(409);
+
+    const controller = new AbortController();
+    const stream = await fetch(`${h.url}/api/events?token=${encodeURIComponent(h.token)}`, { signal: controller.signal });
+    const reader = stream.body!.getReader();
+    await reader.read();
+    const sent = await fetch(`${h.url}/api/review/${id}/send`, { method: "POST", headers: auth, body: JSON.stringify({ text: "Fix" }) });
+    expect(sent.status).toBe(200);
+    const chunk = new TextDecoder().decode((await reader.read()).value);
+    expect(chunk).toContain("event: send");
+    expect(chunk).toContain(`"review":"${id}"`);
+    controller.abort();
+
+    const opened = await fetch(`${h.url}/api/open-review`, { method: "POST", headers: auth, body: JSON.stringify({ id }) });
+    expect(opened.status).toBe(503);
+  });
 });

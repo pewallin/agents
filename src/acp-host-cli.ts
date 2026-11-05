@@ -18,6 +18,19 @@ import { delimiter, join } from "node:path";
 import { acpHostMetadataPath, startAcpHost } from "./acp-host.js";
 import { runHandoffSession } from "./acp-handoff.js";
 import { getResourceRoot, getSelfArgv, isCompiledBinary } from "./paths.js";
+import { reportState } from "./state.js";
+
+/** What the view's clients see, reported as the pane's agent state: the app's "needs you" dot
+ *  lights while a permission waits in the view, as it does for one in the terminal. */
+export function reportViewActivity(stateAgent: string, paneId: string) {
+  return (state: "needs-you" | "working" | "idle") => {
+    try {
+      reportState(stateAgent, paneId, state === "needs-you" ? "approval" : state, {});
+    } catch {
+      // The view works without the app's dot.
+    }
+  };
+}
 
 export const ACP_SESSION_COMMAND = "acp-session";
 export const CODEX_ACP_COMMAND = "codex-acp";
@@ -256,6 +269,7 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
     cwd,
     agentCommand,
     warmSpare: true,
+    onActivity: reportViewActivity(agent.stateAgent, paneId),
     log,
   });
   console.error(`acp-session ${agent.id} for ${paneId}: ${host.url} (metadata ${acpHostMetadataPath(runtimeTempDir, paneId)})`);

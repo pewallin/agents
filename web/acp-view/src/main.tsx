@@ -272,18 +272,36 @@ function Ask({ request, agentName, session, focused, cwd }: { request: Permissio
   );
 }
 
-interface FileHit { path: string }
+interface MentionHit { kind: "file" | "pane"; path: string; note?: string }
 
-function useFileSearch(query: string | null): FileHit[] {
-  const [hits, setHits] = useState<FileHit[]>([]);
+async function hostJson<T>(path: string): Promise<T> {
+  const response = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new Error(`host answered ${response.status}`);
+  return response.json() as Promise<T>;
+}
+
+/** What @ can add: the project's files, and the other panes of the pane's tmux session. */
+function useMentionSearch(query: string | null): MentionHit[] {
+  const [hits, setHits] = useState<MentionHit[]>([]);
+  const panes = useRef<Promise<Array<{ id: string; command: string; title: string }>> | null>(null);
   useEffect(() => {
-    if (query === null || !token) { setHits([]); return; }
+    if (query === null || !token) { setHits([]); panes.current = null; return; }
+    panes.current ??= hostJson<{ panes: Array<{ id: string; command: string; title: string }> }>("/api/panes")
+      .then((value) => value.panes, () => []);
     let cancelled = false;
     const timer = setTimeout(() => {
-      fetch(`/api/files?q=${encodeURIComponent(query)}`, { headers: { Authorization: `Bearer ${token}` } })
-        .then((response) => (response.ok ? response.json() : { files: [] }))
-        .then((value: { files: string[] }) => { if (!cancelled) setHits(value.files.map((path) => ({ path }))); })
-        .catch(() => { if (!cancelled) setHits([]); });
+      const lower = query.toLowerCase();
+      Promise.all([
+        hostJson<{ files: string[] }>(`/api/files?q=${encodeURIComponent(query)}`).then((value) => value.files, () => [] as string[]),
+        panes.current!,
+      ]).then(([files, paneList]) => {
+        if (cancelled) return;
+        const paneHits = paneList
+          .filter((pane) => !lower || `${pane.id} ${pane.command} ${pane.title}`.toLowerCase().includes(lower))
+          .slice(0, 4)
+          .map((pane): MentionHit => ({ kind: "pane", path: pane.id, note: pane.title && pane.title !== pane.command ? `${pane.command} · ${pane.title}` : pane.command }));
+        setHits([...files.slice(0, paneHits.length > 0 ? 6 : 8).map((path): MentionHit => ({ kind: "file", path })), ...paneHits]);
+      });
     }, 60);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [query]);
@@ -331,14 +349,20 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
     const last = [...s.items].reverse().find((item) => item.type === "user");
     return last?.at;
   });
-  const hits = useFileSearch(mention ? mention.query : null);
+  const hits = useMentionSearch(mention ? mention.query : null);
   const agentName = info.agent.name;
 
-  const blocksFor = useCallback((text: string): ContentBlock[] => {
+  // @path names a file, @%3 a pane: a file goes as a link, a pane as what it shows now.
+  const blocksFor = useCallback(async (text: string): Promise<ContentBlock[]> => {
     const blocks: ContentBlock[] = [{ type: "text", text }];
     for (const match of text.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
       const path = match[1];
-      blocks.push({ type: "resource_link", uri: `file://${info.cwd.replace(/\/$/, "")}/${path}`, name: path });
+      if (/^%\d+$/.test(path)) {
+        const shown = await hostJson<{ text: string }>(`/api/panes/${encodeURIComponent(path)}/text`).catch(() => null);
+        if (shown) blocks.push({ type: "resource", resource: { uri: `tmux://pane/${path}`, mimeType: "text/plain", text: shown.text } });
+      } else {
+        blocks.push({ type: "resource_link", uri: `file://${info.cwd.replace(/\/$/, "")}/${path}`, name: path });
+      }
     }
     return blocks;
   }, [info.cwd]);
@@ -348,7 +372,7 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
     if (prompting || working || queue.length === 0) return;
     const [next, ...rest] = queue;
     setQueue(rest);
-    void session.prompt(blocksFor(next));
+    void blocksFor(next).then((blocks) => session.prompt(blocks));
   }, [prompting, working, queue, session, blocksFor]);
 
   const submit = (how: "send" | "queue") => {
@@ -357,8 +381,7 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
     setDraft("");
     setMention(null);
     if (how === "queue" && (prompting || working)) { setQueue((items) => [...items, text]); return; }
-    if (prompting || working) { void session.steer(blocksFor(text)); return; }
-    void session.prompt(blocksFor(text));
+    void blocksFor(text).then((blocks) => (prompting || working ? session.steer(blocks) : session.prompt(blocks)));
   };
 
   const pick = (path: string) => {
@@ -383,12 +406,14 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
     <div className="dock">
       <div className="inner">
         {mention && hits.length > 0 && (
-          <div className="pop" role="listbox" aria-label="Filer">
-            <div className="gh">Filer</div>
-            {hits.slice(0, 8).map((hit, index) => (
-              <div key={hit.path} role="option" aria-selected={index === selectedHit} className={`it${index === selectedHit ? " sel" : ""}`}
-                onMouseDown={(event) => { event.preventDefault(); pick(hit.path); }} onMouseEnter={() => setSelectedHit(index)}>
-                <span className="p">{hit.path}</span>
+          <div className="pop" role="listbox" aria-label="Lägg till">
+            {hits.map((hit, index) => (
+              <div key={`${hit.kind}-${hit.path}`} style={{ display: "contents" }}>
+                {(index === 0 || hits[index - 1].kind !== hit.kind) && <div className="gh">{hit.kind === "file" ? "Filer" : "Paner"}</div>}
+                <div role="option" aria-selected={index === selectedHit} className={`it${index === selectedHit ? " sel" : ""}`}
+                  onMouseDown={(event) => { event.preventDefault(); pick(hit.path); }} onMouseEnter={() => setSelectedHit(index)}>
+                  <span className="p">{hit.path}</span>{hit.note && <small>{hit.note}</small>}
+                </div>
               </div>
             ))}
           </div>
@@ -407,7 +432,7 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
             className="input"
             value={draft}
             rows={1}
-            placeholder={busy ? `Styr ${agentName} medan den arbetar` : `Fråga ${agentName}, @ för filer`}
+            placeholder={busy ? `Styr ${agentName} medan den arbetar` : `Fråga ${agentName}, @ för filer och paner`}
             onChange={(event) => {
               setDraft(event.target.value);
               setMention(mentionAt(event.target.value, event.target.selectionStart ?? event.target.value.length));
@@ -419,7 +444,7 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
               if (mention && hits.length > 0) {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                   event.preventDefault();
-                  setSelectedHit((index) => (index + (event.key === "ArrowDown" ? 1 : hits.length - 1)) % Math.min(hits.length, 8));
+                  setSelectedHit((index) => (index + (event.key === "ArrowDown" ? 1 : hits.length - 1)) % hits.length);
                   return;
                 }
                 if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pick(hits[selectedHit].path); return; }
@@ -506,6 +531,44 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   const turns = useMemo(() => buildTurns({ items, toolCalls }), [items, toolCalls]);
   const now = useNow(working);
   const [review, setReview] = useState<FileChange[] | null>(null);
+  const myReviews = useRef(new Set<string>());
+
+  // Comments sent from a review this view opened beside the pane come back here as a message.
+  useEffect(() => {
+    if (!token) return;
+    const events = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+    events.addEventListener("send", (event) => {
+      const { review: id, text } = JSON.parse((event as MessageEvent<string>).data) as { review: string; text: string };
+      if (!myReviews.current.has(id)) return;
+      const busy = attention(useSession.getState()) === "working";
+      void (busy ? session.steer : session.prompt)([{ type: "text", text }]);
+    });
+    return () => events.close();
+  }, [session]);
+
+  /** The review opens as a pane beside this one when the app can place it, else in the view. */
+  const openReview = async (changes: FileChange[]) => {
+    try {
+      const created = await fetch("/api/review", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ changes, cwd: info.cwd, agentName: info.agent.name }),
+      });
+      if (created.ok) {
+        const { id } = await created.json() as { id: string };
+        myReviews.current.add(id);
+        const opened = await fetch("/api/open-review", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        if (opened.ok) return;
+      }
+    } catch {
+      // Falls back to the review in the view.
+    }
+    setReview(changes);
+  };
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
 
@@ -530,7 +593,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
             {turns.length === 0 && <div className="empty">Inget i sessionen än. Skriv till {info.agent.name} nedan.</div>}
             {turns.map((turn, index) => (
               <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working} cwd={info.cwd}
-                onReview={(t) => setReview(t.changes)} />
+                onReview={(t) => void openReview(t.changes)} />
             ))}
             {working && permissions.length === 0 && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
             {permissions.map((request, index) => (
@@ -578,6 +641,35 @@ function SessionView({ info }: { info: HostInfo }) {
   return <Conversation session={session} info={info} />;
 }
 
+/** A review opened as a pane of its own (/review/<id>): its comments go back to the view that
+ *  opened it, through the host. */
+function ReviewPage({ id }: { id: string }) {
+  const [review, setReview] = useState<{ changes: FileChange[]; cwd: string; agentName: string } | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "sent" | "missing">("loading");
+  useEffect(() => {
+    hostJson<{ changes: FileChange[]; cwd: string; agentName: string }>(`/api/review/${encodeURIComponent(id)}`)
+      .then((value) => { setReview(value); setState("ready"); document.title = `Ändringar – ${value.agentName}`; })
+      .catch(() => setState("missing"));
+  }, [id]);
+  if (state === "missing") return <Notice>Granskningen finns inte längre. Öppna den igen från agentens vy.</Notice>;
+  if (!review) return <Notice>Öppnar granskningen…</Notice>;
+  if (state === "sent") return <Notice>Kommentarerna är skickade till {review.agentName}. Panen kan stängas.</Notice>;
+  return (
+    <div className="view review-page">
+      <ReviewPane changes={review.changes} cwd={review.cwd} agentName={review.agentName}
+        onSend={(text) => {
+          void fetch(`/api/review/${encodeURIComponent(id)}/send`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          }).then((response) => setState(response.ok ? "sent" : "missing"));
+        }} />
+    </div>
+  );
+}
+
+const reviewId = decodeURIComponent(location.pathname.match(/^\/review\/([^/]+)/)?.[1] ?? "") || null;
+
 function App() {
   const [info, setInfo] = useState<HostInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -589,6 +681,7 @@ function App() {
       .catch((reason: Error) => setError(reason.message));
   }, []);
   if (!token) return <Notice>Sidan behöver panens token. Öppna den från Agents Next.</Notice>;
+  if (reviewId) return <ReviewPage id={reviewId} />;
   if (error) return <Notice>Panens ACP-värd svarar inte: {error}</Notice>;
   if (!info) return <Notice>Ansluter…</Notice>;
   return <SessionView info={info} />;
