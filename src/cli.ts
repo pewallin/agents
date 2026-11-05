@@ -92,6 +92,10 @@ if (firstArg === "codex-acp") {
 if (firstArg === "claude-acp") {
   await (await import("./acp-host-cli.js")).runClaudeAcpAgent();
 }
+if (firstArg === "acp-restart") {
+  const { runAcpRestart } = await import("./acp-restart.js");
+  process.exit(await runAcpRestart(args.slice(1)));
+}
 if (firstArg === "acp-session") {
   const { runAcpSessionCommand } = await import("./acp-host-cli.js");
   const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
