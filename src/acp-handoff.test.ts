@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -40,6 +40,25 @@ describe("acp hand-off", () => {
     printer.agentLine(update("tool_call", { toolCallId: "t", title: "Read README.md" }));
     printer.agentLine("not json");
     expect(out).toBe("\n\n› Hej\n\n• Hej själv\n  ⚙ Read README.md");
+  });
+});
+
+describe("a session Claude Code named but never wrote", () => {
+  it("is known by its file in Claude's projects", () => {
+    const dir = mkdtempSync(join(tmpdir(), "claude-config-"));
+    const before = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    try {
+      mkdirSync(join(dir, "projects", "-tmp-proj"), { recursive: true });
+      writeFileSync(join(dir, "projects", "-tmp-proj", "written.jsonl"), "{}\n");
+      const written = ACP_AGENTS["claude-acp"].sessionWritten!;
+      expect(written("written")).toBe(true);
+      expect(written("named-only")).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = before;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -297,6 +297,34 @@ describe("acp-host", () => {
     expect(await state.json()).toEqual({ state: "idle", agentState: null, mode: "live", inView: true, clients: 0 });
   });
 
+  it("tells the session the pane's agent has open, and starts its first turn for the view", async () => {
+    const started: string[] = [];
+    let current: { id: string; persisted: boolean; busy?: boolean } | undefined;
+    host = await startAcpHost({
+      paneId: "%42",
+      agent: { id: "test-acp", name: "Test" },
+      runtimeTempDir: join(dir, "rt"),
+      webRoot: join(dir, "web"),
+      cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", ECHO_AGENT], env: process.env },
+      currentSession: async () => current,
+      startFirstTurn: async (sessionId, text) => { started.push(`${sessionId}:${text}`); current = { id: sessionId, persisted: true, busy: true }; },
+    });
+    const h = host;
+    const auth = { Authorization: `Bearer ${h.token}` };
+    expect((await fetch(`${h.url}/api/session`)).status).toBe(401);
+    expect((await fetch(`${h.url}/api/session`, { headers: auth })).status).toBe(404);
+    current = { id: "t1", persisted: false };
+    expect(await (await fetch(`${h.url}/api/session`, { headers: auth })).json()).toEqual({ sessionId: "t1", persisted: false, busy: false });
+    const firstTurn = (body: unknown) => fetch(`${h.url}/api/session/first-turn`, {
+      method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    expect((await firstTurn({ sessionId: "t1", text: " " })).status).toBe(400);
+    expect((await firstTurn({ sessionId: "t1", text: "hello" })).status).toBe(200);
+    expect(started).toEqual(["t1:hello"]);
+    expect(await (await fetch(`${h.url}/api/session`, { headers: auth })).json()).toEqual({ sessionId: "t1", persisted: true, busy: true });
+  });
+
   it("follows the agent's state file and tells the views when it changes", async () => {
     const stateFile = join(dir, "codex-%42.json");
     writeFileSync(stateFile, JSON.stringify({ state: "idle", ts: 1 }));

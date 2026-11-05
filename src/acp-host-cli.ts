@@ -13,7 +13,7 @@
 //
 // They run before the rest of the CLI loads: a session's host stays up for the pane's lifetime,
 // and an adapter's stdout is its protocol channel, which nothing else may write to.
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { acpHostMetadataPath, startAcpHost } from "./acp-host.js";
@@ -64,6 +64,9 @@ export interface AcpAgentEntry {
   sessionLock?(sessionId: string): string;
   /** The agent's own logs, whose last lines go into the view's diagnostics. */
   logFiles?(): string[];
+  /** Hand-off agents that name a session before writing it: whether it has been written. A
+   *  session never written has nothing to load, so the view starts one of its own. */
+  sessionWritten?(sessionId: string): boolean;
 }
 
 function shellQuote(value: string): string {
@@ -192,6 +195,16 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     },
     resume: (tuiCommand, sessionId) =>
       resumeWith(tuiCommand, ["--resume", "-r", "--session-id"], ["--continue", "-c"], (id) => ["--resume", id])(sessionId),
+    // Claude Code reports its session as it starts, and writes it with the first prompt:
+    // ~/.claude/projects/<project>/<session>.jsonl.
+    sessionWritten: (sessionId) => {
+      const projects = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
+      try {
+        return readdirSync(projects).some((project) => existsSync(join(projects, project, `${sessionId}.jsonl`)));
+      } catch {
+        return true;
+      }
+    },
   },
   opencode: {
     id: "opencode",
@@ -313,7 +326,14 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
     console.error(`acp-session: ${problem}`);
     process.exit(problem?.startsWith("no ACP web view") ? 1 : 2);
   }
+  const appServerUrl = option(args, "--app-server");
   const host = await startAcpHost({
+    currentSession: agent.id === "codex-acp" && appServerUrl
+      ? async () => (await import("./codex-current-thread.js")).codexCurrentThread(appServerUrl)
+      : undefined,
+    startFirstTurn: agent.id === "codex-acp" && appServerUrl
+      ? async (sessionId, text) => (await import("./codex-current-thread.js")).codexStartFirstTurn(appServerUrl, sessionId, text)
+      : undefined,
     agentLogFiles: agent.logFiles?.(),
     agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
     paneId,

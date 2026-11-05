@@ -60,13 +60,23 @@ export interface AcpHostOptions {
   /** The pane's agent state file (state/<agent>-<pane>.json, the agent's hooks write it): the
    *  same truth the app shows, sent to the views, so a turn the TUI runs shows in them too. */
   agentStateFile?: string;
+  /** The session the pane's agent has open now, for a view that has no session id yet (Codex: the
+   *  thread its TUI has loaded, from the pane's app-server), and whether it is on disk yet. */
+  /** The session the pane's agent has open now, for the view's /thread/current: Codex's thread,
+   *  or a hand-off agent's. A null id is none yet: the view starts one. */
+  currentSession?: () => Promise<{ id: string | null; persisted: boolean; busy?: boolean } | undefined>;
+  /** Starts the first turn of a session that is not on disk yet (Codex: on the app-server), and
+   *  resolves once a view can load it. */
+  startFirstTurn?: (sessionId: string, text: string) => Promise<void>;
 }
 
 export interface AcpHandoffControl {
   /** Whether the view has the session now; before that no client may open the agent. */
   inView(): boolean;
   /** Takes the session over from the TUI: answers 409 with a reason while the agent works. */
-  handOff(sessionId: string): Promise<{ status: number; message?: string }>;
+  /** Gives the view the session (or "current": the one the TUI has, none if it has none yet). The
+   *  answer names the session the view opens; a null session is none: the view starts one. */
+  handOff(sessionId: string): Promise<{ status: number; message?: string; session?: string | null }>;
   giveBack(): Promise<void>;
 }
 
@@ -292,6 +302,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       reviews,
       events,
       appControl: options.appControl ?? appControlTarget(),
+      startFirstTurn: options.startFirstTurn,
       log,
     })) return;
     handleHttp(request, response, {
@@ -299,6 +310,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       token,
       cwd: options.cwd,
       agent: options.agent,
+      currentSession: options.currentSession,
       state: () => ({ state: activity.state, agentState: agentState ?? null, mode: options.handoff ? "handoff" : "live", inView: options.handoff?.inView() ?? true, clients: wss.clients.size }),
       diagnostics: () => ({
         agent: options.agent,
@@ -621,13 +633,15 @@ function handleBridge(
     reviews: ReviewStore;
     events: Set<ServerResponse>;
     appControl: AppControlTarget;
+    startFirstTurn?: (sessionId: string, text: string) => Promise<void>;
     log: (message: string) => void;
   },
 ): boolean {
   const url = new URL(request.url ?? "/", context.origin);
   const path = url.pathname;
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
-    || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review";
+    || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
+    || path === "/api/session/first-turn";
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
     response.writeHead(401, { "Cache-Control": "no-store" }).end();
@@ -636,6 +650,20 @@ function handleBridge(
   const fail = (status: number) => (error: unknown) =>
     sendJson(response, status, { message: error instanceof Error ? error.message : String(error) });
 
+  if (path === "/api/session/first-turn" && request.method === "POST") {
+    if (!context.startFirstTurn) { sendJson(response, 404, { message: "This agent's sessions start in the view." }); return true; }
+    readJson(request).then(async (body) => {
+      const { sessionId, text } = (body ?? {}) as { sessionId?: unknown; text?: unknown };
+      if (typeof sessionId !== "string" || typeof text !== "string" || !text.trim()) {
+        sendJson(response, 400, { message: "A session and a prompt are needed." });
+        return;
+      }
+      context.log(`first turn of ${sessionId} from a view`);
+      await context.startFirstTurn!(sessionId, text);
+      sendJson(response, 200, { sessionId });
+    }).catch(fail(502));
+    return true;
+  }
   if (path === "/api/events" && request.method === "GET") {
     response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
     response.write(": connected\n\n");
@@ -726,7 +754,7 @@ function handleControl(
       }
       const result = await handoff.handOff(sessionId);
       response.writeHead(result.status, { "Content-Type": "application/json", "Cache-Control": "no-store" })
-        .end(JSON.stringify({ message: result.message ?? "" }));
+        .end(JSON.stringify({ message: result.message ?? "", session: result.session ?? null }));
     } catch (error) {
       response.writeHead(500, { "Content-Type": "application/json" })
         .end(JSON.stringify({ message: error instanceof Error ? error.message : String(error) }));
@@ -737,7 +765,15 @@ function handleControl(
 function handleHttp(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { webRoot: string; token: string; cwd: string; agent: { id: string; name: string }; state: () => unknown; diagnostics: () => unknown },
+  context: {
+    webRoot: string;
+    token: string;
+    cwd: string;
+    agent: { id: string; name: string };
+    state: () => unknown;
+    diagnostics: () => unknown;
+    currentSession?: () => Promise<{ id: string | null; persisted: boolean; busy?: boolean } | undefined>;
+  },
 ): void {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -748,7 +784,7 @@ function handleHttp(
     response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }).end("ok");
     return;
   }
-  if (url.pathname === "/api/state" || url.pathname === "/api/files" || url.pathname === "/api/diagnostics") {
+  if (url.pathname === "/api/state" || url.pathname === "/api/files" || url.pathname === "/api/diagnostics" || url.pathname === "/api/session") {
     const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
     if (!tokensMatch(context.token, auth)) {
       response.writeHead(401, { "Cache-Control": "no-store" }).end();
@@ -756,6 +792,19 @@ function handleHttp(
     }
     if (url.pathname === "/api/state") {
       response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(context.state()));
+      return;
+    }
+    if (url.pathname === "/api/session") {
+      const send = (status: number, body: unknown) =>
+        response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(body));
+      if (!context.currentSession) {
+        send(404, { message: "This agent's session is known only once it reports one." });
+        return;
+      }
+      context.currentSession().then(
+        (current) => current ? send(200, { sessionId: current.id, persisted: current.persisted, busy: current.busy ?? false }) : send(404, { message: "The agent has no session open yet." }),
+        (error: unknown) => send(503, { message: error instanceof Error ? error.message : String(error) }),
+      );
       return;
     }
     if (url.pathname === "/api/diagnostics") {

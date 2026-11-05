@@ -748,7 +748,109 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   );
 }
 
-function SessionView({ info }: { info: HostInfo }) {
+/** The session the address names, or for /thread/current the one the pane's agent has open now:
+ *  Codex's thread is known from the pane's app-server before its first prompt, though no hook has
+ *  reported it yet. */
+function SessionGate({ info }: { info: HostInfo }) {
+  const [resolved, setResolved] = useState<{ id: string | null; persisted?: boolean; busy?: boolean; startsNew?: boolean; problem?: string } | null>(
+    sessionId === "current" ? null : { id: sessionId },
+  );
+  useEffect(() => {
+    if (sessionId !== "current") return;
+    hostJson<{ sessionId: string | null; persisted?: boolean; busy?: boolean }>("/api/session").then(
+      (value) => {
+        // A hand-off agent whose TUI had no session yet: the view starts one.
+        if (value.sessionId === null) { setResolved({ id: null, startsNew: true }); return; }
+        setResolved({ id: value.sessionId, persisted: value.persisted !== false, busy: value.busy === true });
+        // A reload opens the same thread, whatever the pane has open then.
+        history.replaceState(null, "", `/thread/${encodeURIComponent(value.sessionId)}${location.search}${location.hash}`);
+      },
+      (error: unknown) => setResolved({ id: null, problem: error instanceof Error ? error.message : String(error) }),
+    );
+  }, []);
+  // codex-acp does not follow a turn that is already running when it loads the thread.
+  const waiting = resolved?.id && resolved.persisted !== false && resolved.busy ? resolved.id : null;
+  useEffect(() => {
+    if (!waiting) return;
+    let stopped = false;
+    void untilIdle(waiting, () => stopped).then(() => { if (!stopped) setResolved({ id: waiting, persisted: true }); });
+    return () => { stopped = true; };
+  }, [waiting]);
+  if (!resolved) return <Notice>Opening the session…</Notice>;
+  if (resolved.startsNew) return <SessionView info={info} sessionId={null} />;
+  if (!resolved.id) return <Notice>The pane has no {info.agent.name} session yet{resolved.problem ? ` (${resolved.problem})` : ""}.</Notice>;
+  if (waiting) return <Notice>{info.agent.name} is working; the session shows when it is done.</Notice>;
+  if (resolved.persisted === false) {
+    return <FirstPrompt info={info} sessionId={resolved.id} onStarted={() => setResolved({ id: resolved.id, persisted: true })} />;
+  }
+  return <SessionView info={info} sessionId={resolved.id} />;
+}
+
+/** Waits until the pane's agent has no turn running on the session. */
+async function untilIdle(sessionId: string, stopped: () => boolean): Promise<void> {
+  while (!stopped()) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const current = await hostJson<{ sessionId: string; busy?: boolean }>("/api/session").catch(() => null);
+    if (current && (current.sessionId !== sessionId || !current.busy)) return;
+  }
+}
+
+/** A session with nothing in it yet (Codex writes a thread with its first turn): the first prompt
+ *  starts the turn through the host, and then the view loads the session and follows it live. */
+function FirstPrompt({ info, sessionId, onStarted }: { info: HostInfo; sessionId: string; onStarted: () => void }) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setProblem(null);
+    try {
+      const response = await fetch("/api/session/first-turn", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, text }),
+      });
+      if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { message?: string }).message ?? `the host answered ${response.status}`);
+      // The view follows turns that start once it has the session: it loads it when this one is done.
+      await untilIdle(sessionId, () => false);
+      onStarted();
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : String(error));
+      setSending(false);
+    }
+  };
+  return (
+    <div className="view" data-acp-ready="true" data-attention={sending ? "working" : "idle"}>
+      <div className="main">
+        <div className="scroll-wrap"><div className="scroll"><div className="col">
+          {sending && !problem && <div className="you">{draft}</div>}
+          <div className="empty">{problem ? `The first prompt did not start: ${problem}` : sending ? `${info.agent.name} is working on it; the session shows when it is done.` : `Nothing in the session yet. Write to ${info.agent.name} below.`}</div>
+        </div></div></div>
+        <div className="dock"><div className="inner">
+          <form className="box" onSubmit={(event) => { event.preventDefault(); void send(); }}>
+            <textarea className="input" value={draft} rows={1} autoFocus disabled={sending}
+              placeholder={`Ask ${info.agent.name}`}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
+              }} />
+            <div className="row">
+              <span className="sp" />
+              <button className={`go${draft.trim() && !sending ? "" : " off"}`} type="submit" aria-label="Send" disabled={!draft.trim() || sending}>
+                <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 11.5v-9M3 6.5l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              </button>
+            </div>
+          </form>
+        </div></div>
+      </div>
+    </div>
+  );
+}
+
+/** The session, loaded and followed live; with no session given, one the view starts. */
+function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | null }) {
   const dispatch = useSession((s) => s.dispatch);
   const [error, setError] = useState<{ title: string; detail: { message: string; data?: string } } | null>(null);
   const [reconnects, setReconnects] = useState(0);
@@ -759,7 +861,7 @@ function SessionView({ info }: { info: HostInfo }) {
   const [takeOvers, setTakeOvers] = useState(0);
   const takeOverHere = () => { setOpenElsewhere(false); setTakenOver(false); setTakeOvers((count) => count + 1); };
   const [loaded, setLoaded] = useState(false);
-  const session = useMemo(() => sessionId && token
+  const session = useMemo(() => token
     ? connectSession({
       url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`,
       sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, takeOver: takeOvers > 0,
@@ -773,7 +875,13 @@ function SessionView({ info }: { info: HostInfo }) {
     setError(null);
     setLoaded(false);
     session.load()
-      .then(() => { if (!cancelled) { mark("loaded"); setLoaded(true); } })
+      .then((loadedSession) => {
+        if (cancelled) return;
+        // A reload opens the session the view started.
+        if (!sessionId) history.replaceState(null, "", `/thread/${encodeURIComponent(loadedSession.sessionId)}${location.search}${location.hash}`);
+        mark("loaded");
+        setLoaded(true);
+      })
       .catch((reason: unknown) => {
         if (cancelled) return;
         if (reason instanceof CannotLoadSession) { setCannotLoad(reason); return; }
@@ -787,7 +895,6 @@ function SessionView({ info }: { info: HostInfo }) {
     return () => { cancelled = true; };
   }, [session, info.agent.name]);
 
-  if (!sessionId) return <Notice>The pane has no {info.agent.name} session yet.</Notice>;
   if (cannotLoad) {
     const version = cannotLoad.agentInfo?.version;
     // Copilot's changelog has ACP sessions resumed from 1.0.95 (0.0.406 cannot load one).
@@ -868,7 +975,7 @@ function App() {
   if (reviewId) return <ReviewPage id={reviewId} />;
   if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
   if (!info) return <Notice>Connecting…</Notice>;
-  return <SessionView info={info} />;
+  return <SessionGate info={info} />;
 }
 
 createRoot(document.getElementById("root")!).render(

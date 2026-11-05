@@ -3,10 +3,13 @@
 // with the pane's ACP host kept warm beside it. One of them has the session at a time:
 //
 //   view   POST /api/handoff {session} (the app's switch): refused while the agent works, else
-//          the TUI is stopped and the view loads the session. The pane shows a plain transcript
-//          of what happens in the view, so tmux on its own still shows the agent.
+//          the TUI is stopped and the view loads the session. A TUI with no session yet ("current",
+//          or one named but never written) leaves the view to start one in the pane's directory.
+//          The pane shows a plain transcript of what happens in the view, so tmux on its own still
+//          shows the agent.
 //   TUI    Enter in the pane, or POST /api/return: the view's clients end and the TUI goes on
-//          with the same session (the agent's resume option).
+//          with the same session (the agent's resume option): the one the view started, if it
+//          prompted in it, else a new one as the pane's command starts it.
 //
 // The agent's TUI ending on its own ends the pane's command, as it would without this.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -142,6 +145,10 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
 
   let mode: "tui" | "switching" | "view" = "tui";
   let sessionId: string | undefined;
+  /** The session a view started and prompted in, when the TUI had none to give. */
+  let startedSession: string | undefined;
+  /** The session the TUI went on with when the view gave it back: "current" is that one. */
+  let tuiSession: string | undefined;
   let tui: ChildProcess | undefined;
   let reader: Interface | undefined;
   let host: AcpHost | undefined;
@@ -174,7 +181,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   };
 
   const giveBack = async () => {
-    if (mode !== "view" || !sessionId || !agent.resume) return;
+    if (mode !== "view" || !agent.resume) return;
     mode = "switching";
     reader?.close();
     reader = undefined;
@@ -183,13 +190,18 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     process.stdout.write(`\n\nBack to ${agent.name} in the terminal…\n`);
     resetTerminal();
     mode = "tui";
-    startTui(agent.resume(tuiCommand, sessionId));
+    const id = sessionId ?? startedSession;
+    sessionId = undefined;
+    startedSession = undefined;
+    tuiSession = id;
+    startTui(id ? agent.resume(tuiCommand, id) : tuiCommand);
   };
 
-  const handOff = async (id: string): Promise<{ status: number; message?: string }> => {
+  const handOff = async (id: string): Promise<{ status: number; message?: string; session?: string | null }> => {
     if (mode === "view") {
-      return id === sessionId
-        ? { status: 200 }
+      const current = sessionId ?? startedSession ?? null;
+      return id === "current" || id === current
+        ? { status: 200, session: current }
         : { status: 409, message: `The view has another ${agent.name} session.` };
     }
     if (mode !== "tui") return { status: 409, message: `${agent.name} is switching; try again.` };
@@ -198,20 +210,22 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       return { status: 409, message: `${agent.name} is ${state === "working" ? "working" : "waiting for an answer"} in the terminal; switch when it is idle.` };
     }
     mode = "switching";
-    sessionId = id;
+    const asked = id === "current" ? tuiSession : id;
+    sessionId = !asked || agent.sessionWritten?.(asked) === false ? undefined : asked;
+    startedSession = undefined;
     await stopTui();
     // The agent may hold its session (a lock file) a moment after its TUI ends: the view's
     // session/load would find it still in use.
-    const lock = agent.sessionLock?.(id);
+    const lock = sessionId ? agent.sessionLock?.(sessionId) : undefined;
     if (lock) log(await waitForLockRelease(lock) ? `lock ${lock} released` : `lock ${lock} still held after 3 s`);
     resetTerminal();
-    process.stdout.write(`${agent.name} is in the ACP view (session ${id}).\nPress Enter here to go back to the terminal.\n`);
+    process.stdout.write(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go back to the terminal.\n`);
     mode = "view";
     process.stdin.resume();
     reader = createInterface({ input: process.stdin });
     reader.on("line", () => { void giveBack(); });
-    log(`handed session ${id} to the view`);
-    return { status: 200 };
+    log(sessionId ? `handed session ${sessionId} to the view` : `the view starts a session (the TUI had none: ${id})`);
+    return { status: 200, session: sessionId ?? null };
   };
 
   // Ctrl-C in the pane reaches this process too: it is the TUI's, or, in the view, a way back.
@@ -238,7 +252,16 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         onActivity: reportViewActivity(agent.stateAgent, paneId),
         handoff: { inView: () => mode === "view", handOff, giveBack },
         onAgentLine: (line) => { if (mode === "view") transcript.agentLine(line); },
-        onClientLine: (line) => { if (mode === "view") transcript.clientLine(line); },
+        onClientLine: (line) => {
+          if (mode !== "view") return;
+          transcript.clientLine(line);
+          if (!sessionId) {
+            const message = parse(line);
+            const prompted = message?.method === "session/prompt" ? message.params?.sessionId : undefined;
+            if (typeof prompted === "string") startedSession = prompted;
+          }
+        },
+        currentSession: async () => mode === "view" ? { id: sessionId ?? startedSession ?? null, persisted: true } : undefined,
         log,
       });
       log(`host ${host.url} for ${agent.name} in ${paneId}`);

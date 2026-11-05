@@ -13,7 +13,8 @@ import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-
 import type { SessionAction } from "./session-state";
 
 export interface AcpSession {
-  load(): Promise<LoadSessionResponse>;
+  /** Loads the session, or with no session given starts one in the pane's directory. */
+  load(): Promise<LoadSessionResponse & { sessionId: string }>;
   prompt(blocks: ContentBlock[]): Promise<void>;
   /** Adds to the turn in progress: Codex takes it into the running turn, other agents queue it. */
   steer(blocks: ContentBlock[]): Promise<void>;
@@ -61,7 +62,8 @@ function viewId(): string {
 
 export function connectSession(options: {
   url: string;
-  sessionId: string;
+  /** The session to load; null starts one (a hand-off agent whose TUI had none yet). */
+  sessionId: string | null;
   cwd: string;
   agentId: string;
   dispatch: (action: SessionAction) => void;
@@ -70,14 +72,15 @@ export function connectSession(options: {
   /** Another view took the session over: the host ends this one. */
   onTakenOver?: () => void;
 }): AcpSession {
-  const { sessionId, cwd, dispatch } = options;
+  const { cwd, dispatch } = options;
+  let sessionId = options.sessionId ?? "";
   const answers = new Map<string, (response: RequestPermissionResponse) => void>();
   let nextPermission = 1;
 
   const app = client({})
     .onNotification("session/update", ({ params }) => {
       const notification = params as SessionNotification;
-      if (notification.sessionId === sessionId) dispatch({ type: "update", update: notification.update, at: Date.now() });
+      if (notification.sessionId === sessionId || !sessionId) dispatch({ type: "update", update: notification.update, at: Date.now() });
     })
     // The host's own notice (not ACP): a custom method needs its own params parser.
     .onNotification("_agents/taken_over", (params: unknown) => params, () => { options.onTakenOver?.(); })
@@ -102,6 +105,13 @@ export function connectSession(options: {
     async load() {
       const initialized = await ready;
       // The view shows a session the pane already has; an agent that cannot load one has no view.
+      if (!sessionId) {
+        dispatch({ type: "loading" });
+        const started = await agent.request("session/new", { cwd, mcpServers: [] });
+        sessionId = started.sessionId;
+        dispatch({ type: "loaded", modes: started.modes, configOptions: started.configOptions });
+        return { ...started, sessionId };
+      }
       if (!initialized.agentCapabilities?.loadSession) throw new CannotLoadSession(initialized.agentInfo ?? undefined);
       dispatch({ type: "loading" });
       const response = await agent.request("session/load", { sessionId, cwd, mcpServers: [] }).catch((error: unknown) => {
@@ -109,7 +119,7 @@ export function connectSession(options: {
         throw error;
       });
       dispatch({ type: "loaded", modes: response.modes, configOptions: response.configOptions });
-      return response;
+      return { ...response, sessionId };
     },
     async prompt(blocks) {
       const text = blocks.map((block) => (block.type === "text" ? block.text : "")).join("");
