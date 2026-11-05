@@ -22,7 +22,18 @@ export interface AcpSession {
   setConfigOption(configId: string, value: string | boolean): Promise<void>;
   setMode(modeId: string): Promise<void>;
   closed: Promise<void>;
+  close(): void;
 }
+
+/** The session is open in another view; this one may take it over (`takeOver`). */
+export class OpenElsewhere extends Error {
+  constructor() {
+    super("The session is open in another view");
+  }
+}
+
+/** The host's answer to a load of a session another view has (acp-host's OPEN_ELSEWHERE_CODE). */
+const OPEN_ELSEWHERE_CODE = -32050;
 
 /** The agent cannot open an existing session (no `session/load`), so the view cannot show it. */
 export class CannotLoadSession extends Error {
@@ -37,7 +48,9 @@ export function connectSession(options: {
   cwd: string;
   agentId: string;
   dispatch: (action: SessionAction) => void;
-  /** Another view loaded the session: the host ends this one. */
+  /** Take the session over from another view that has it open. */
+  takeOver?: boolean;
+  /** Another view took the session over: the host ends this one. */
   onTakenOver?: () => void;
 }): AcpSession {
   const { sessionId, cwd, dispatch } = options;
@@ -57,7 +70,8 @@ export function connectSession(options: {
       return new Promise<RequestPermissionResponse>((resolve) => answers.set(id, resolve));
     });
 
-  const connection: ClientConnection = app.connect(createWebSocketStream(options.url));
+  const url = options.takeOver ? `${options.url}&takeover=1` : options.url;
+  const connection: ClientConnection = app.connect(createWebSocketStream(url));
   const agent = connection.agent;
   const ready = agent.request("initialize", {
     protocolVersion: PROTOCOL_VERSION,
@@ -71,7 +85,10 @@ export function connectSession(options: {
       // The view shows a session the pane already has; an agent that cannot load one has no view.
       if (!initialized.agentCapabilities?.loadSession) throw new CannotLoadSession();
       dispatch({ type: "loading" });
-      const response = await agent.request("session/load", { sessionId, cwd, mcpServers: [] });
+      const response = await agent.request("session/load", { sessionId, cwd, mcpServers: [] }).catch((error: unknown) => {
+        if ((error as { code?: unknown } | null)?.code === OPEN_ELSEWHERE_CODE) throw new OpenElsewhere();
+        throw error;
+      });
       dispatch({ type: "loaded", modes: response.modes, configOptions: response.configOptions });
       return response;
     },
@@ -114,5 +131,6 @@ export function connectSession(options: {
       dispatch({ type: "update", update: { sessionUpdate: "current_mode_update", currentModeId: modeId } });
     },
     closed: connection.closed,
+    close: () => connection.close(),
   };
 }

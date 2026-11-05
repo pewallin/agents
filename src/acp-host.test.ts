@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { AcpActivity, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, rankFiles, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
+import { AcpActivity, OPEN_ELSEWHERE_CODE, OPEN_ELSEWHERE_REASON, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, rankFiles, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
 
 // A stand-in agent: answers each JSON-RPC line with an echo of its method.
 const ECHO_AGENT = `
@@ -168,9 +168,9 @@ describe("acp-host", () => {
     first.close();
     second.close();
   });
-  it("gives a session to the view that loads it last: the other view is told and its agent ends", async () => {
+  it("tells a second view the session is open elsewhere, and gives it over only when asked", async () => {
     const h = await start();
-    const ask = (ws: WebSocket, id: number, method: string, params: unknown) => new Promise<{ result: { echo: string; pid: number } }>((resolve) => {
+    const ask = (ws: WebSocket, id: number, method: string, params: unknown) => new Promise<{ result?: { echo: string; pid: number }; error?: { code: number; data?: { reason?: string } } }>((resolve) => {
       const onMessage = (data: WebSocket.RawData) => {
         const message = JSON.parse(data.toString());
         if (message.id !== id) return;
@@ -180,31 +180,45 @@ describe("acp-host", () => {
       ws.on("message", onMessage);
       ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });
+    const opened = (ws: WebSocket) => new Promise((resolve) => ws.once("open", resolve));
     const older = connect(h);
     const other = connect(h);
-    await Promise.all([older, other].map((ws) => new Promise((resolve) => ws.once("open", resolve))));
-    const olderAgent = (await ask(older, 1, "session/load", { sessionId: "s1" })).result.pid;
+    await Promise.all([older, other].map(opened));
+    const olderAgent = (await ask(older, 1, "session/load", { sessionId: "s1" })).result!.pid;
     await ask(other, 1, "session/load", { sessionId: "s2" });
+
+    // A second view of s1 is refused, and the first keeps it.
+    const second = connect(h);
+    await opened(second);
+    const refused = await ask(second, 1, "session/load", { sessionId: "s1" });
+    expect(refused.error?.code).toBe(OPEN_ELSEWHERE_CODE);
+    expect(refused.error?.data?.reason).toBe(OPEN_ELSEWHERE_REASON);
+    expect(older.readyState).toBe(WebSocket.OPEN);
+    second.close();
+
+    // Asked to take it over, a view gets it: the first is told and its agent ends.
     const told = new Promise<string>((resolve) => older.on("message", (data) => {
       const message = JSON.parse(data.toString());
       if (message.method) resolve(message.method);
     }));
     const closed = new Promise<number>((resolve) => older.once("close", (code) => resolve(code)));
-    const newer = connect(h);
-    await new Promise((resolve) => newer.once("open", resolve));
-    await ask(newer, 1, "session/load", { sessionId: "s1" });
+    const taking = new WebSocket(`${h.url.replace("http", "ws")}/acp?token=${encodeURIComponent(h.token)}&takeover=1`, { headers: { Origin: h.url } });
+    await opened(taking);
+    expect((await ask(taking, 1, "session/load", { sessionId: "s1" })).result?.echo).toBe("session/load");
     expect(await told).toBe(TAKEN_OVER_METHOD);
     expect(await closed).toBe(TAKEN_OVER_CLOSE_CODE);
     await expect.poll(() => { try { process.kill(olderAgent, 0); return true; } catch { return false; } }).toBe(false);
     // A view of another session stays.
     expect(other.readyState).toBe(WebSocket.OPEN);
-    newer.close();
+    taking.close();
     other.close();
   });
 
-  it("knows a view's sessions: those it loads and those it makes", () => {
+  it("knows a view's sessions: those it is given and those it makes", () => {
     const sessions = new SessionTracker();
-    expect(sessions.clientLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "a" } }))).toBe("a");
+    expect(sessions.clientLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "a" } }))).toEqual({ id: 1, sessionId: "a" });
+    expect(sessions.has("a")).toBe(false);
+    sessions.open("a");
     expect(sessions.clientLine(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: "/" } }))).toBeUndefined();
     expect(sessions.has("b")).toBe(false);
     sessions.agentLine(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { sessionId: "b" } }));

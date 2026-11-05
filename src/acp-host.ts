@@ -234,15 +234,11 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   // One view per session: two adapters on one session answer each other's questions (codex-acp
-  // cancels an approval of a turn it did not start), so the view that loads it last has it.
+  // cancels an approval of a turn it did not start). A second view is told the session is open
+  // elsewhere; it takes it over only when asked to (?takeover=1), and the first view is told.
   const views = new Map<number, OpenView>();
-  const takeOverFrom = (client: number, sessionId: string) => {
-    for (const [other, view] of views) {
-      if (other === client || !view.sessions.has(sessionId)) continue;
-      log(`view ${client} takes session ${sessionId} over from view ${other}`);
-      view.takeOver?.();
-    }
-  };
+  const holders = (client: number, sessionId: string) =>
+    [...views].filter(([other, view]) => other !== client && view.sessions.has(sessionId));
   server.on("upgrade", (request, socket, head) => {
     const port = (server.address() as { port: number }).port;
     const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
@@ -263,6 +259,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       socket.destroy();
       return;
     }
+    const takesOver = url.searchParams.get("takeover") === "1";
     wss.handleUpgrade(request, socket, head, (ws) => {
       const client = nextClient++;
       const view: OpenView = { sessions: new SessionTracker() };
@@ -276,10 +273,26 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         },
         onClientLine: (line) => {
           const loading = view.sessions.clientLine(line);
-          if (loading) takeOverFrom(client, loading);
+          if (loading) {
+            const others = holders(client, loading.sessionId);
+            if (others.length > 0 && !takesOver) {
+              log(`view ${client} asked for session ${loading.sessionId}, open in another view`);
+              return JSON.stringify({
+                jsonrpc: "2.0",
+                id: loading.id,
+                error: { code: OPEN_ELSEWHERE_CODE, message: "The session is open in another view", data: { reason: OPEN_ELSEWHERE_REASON } },
+              });
+            }
+            for (const [other, held] of others) {
+              log(`view ${client} takes session ${loading.sessionId} over from view ${other}`);
+              held.takeOver?.();
+            }
+            view.sessions.open(loading.sessionId);
+          }
           activity.clientLine(client, line);
           activityChanged();
           options.onClientLine?.(line);
+          return undefined;
         },
         onClose: () => { views.delete(client); activity.clientGone(client); activityChanged(); },
       });
@@ -337,13 +350,14 @@ interface OpenView {
 
 /** The sessions a view has open: those it loads, and those it makes once the agent names them. */
 export class SessionTracker {
-  private readonly open = new Set<string>();
+  private readonly opened = new Set<string>();
   private readonly creating = new Set<string>();
 
-  /** A message from the view; returns the session it loads, if it loads one. */
-  clientLine(line: string): string | undefined {
+  /** A message from the view; returns the session it asks to load (with the request's id), if
+   *  it asks for one. The session is the view's once the host lets it have it (`open`). */
+  clientLine(line: string): { id: string | number; sessionId: string } | undefined {
     const message = parseJson(line);
-    if (!message || message.id === undefined || message.id === null) return undefined;
+    if (!message || (typeof message.id !== "string" && typeof message.id !== "number")) return undefined;
     if (message.method === "session/new") {
       this.creating.add(String(message.id));
       return undefined;
@@ -351,8 +365,11 @@ export class SessionTracker {
     if (message.method !== "session/load" && message.method !== "session/resume") return undefined;
     const sessionId = (message.params as { sessionId?: unknown } | undefined)?.sessionId;
     if (typeof sessionId !== "string" || !sessionId) return undefined;
-    this.open.add(sessionId);
-    return sessionId;
+    return { id: message.id, sessionId };
+  }
+
+  open(sessionId: string): void {
+    this.opened.add(sessionId);
   }
 
   agentLine(line: string): void {
@@ -361,11 +378,11 @@ export class SessionTracker {
     if (!message || message.method !== undefined || message.id === undefined || message.id === null) return;
     if (!this.creating.delete(String(message.id))) return;
     const sessionId = (message.result as { sessionId?: unknown } | undefined)?.sessionId;
-    if (typeof sessionId === "string" && sessionId) this.open.add(sessionId);
+    if (typeof sessionId === "string" && sessionId) this.opened.add(sessionId);
   }
 
   has(sessionId: string): boolean {
-    return this.open.has(sessionId);
+    return this.opened.has(sessionId);
   }
 }
 
@@ -378,6 +395,9 @@ function parseJson(line: string): { id?: unknown; method?: unknown; params?: unk
   }
 }
 
+/** The error a view's session/load gets when the session is open in another view. */
+export const OPEN_ELSEWHERE_CODE = -32050;
+export const OPEN_ELSEWHERE_REASON = "open-in-another-view";
 /** The notification a view gets when another view has taken its session over. */
 export const TAKEN_OVER_METHOD = "_agents/taken_over";
 /** The close code of a view whose session another view took over. */
@@ -389,7 +409,11 @@ function bridge(
   ws: WebSocket,
   child: ChildProcess,
   log: (message: string) => void,
-  taps: Pick<AcpHostOptions, "onAgentLine" | "onClientLine"> & { onClose?: () => void } = {},
+  taps: Pick<AcpHostOptions, "onAgentLine"> & {
+    /** Sees each message from the client; a reply it returns goes back instead of the message going on. */
+    onClientLine?: (line: string) => string | undefined;
+    onClose?: () => void;
+  } = {},
 ): { takeOver: () => void } {
   let finished = false;
   const finish = () => {
@@ -409,7 +433,11 @@ function bridge(
   ws.on("message", (data, isBinary) => {
     if (isBinary || finished) return;
     const text = data.toString();
-    taps.onClientLine?.(text);
+    const reply = taps.onClientLine?.(text);
+    if (reply !== undefined) {
+      if (ws.readyState === ws.OPEN) ws.send(reply);
+      return;
+    }
     child.stdin?.write(text.endsWith("\n") ? text : `${text}\n`);
   });
   ws.on("close", () => { taps.onClose?.(); finish(); });
