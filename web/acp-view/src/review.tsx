@@ -1,8 +1,9 @@
 // Review of a turn's changes beside the conversation: one file at a time, line by line. A click
 // on a line number leaves a comment there; the comments go to the agent as one message.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { diffLines } from "diff";
 import { shortPath, type FileChange } from "./turns";
+import { highlightLines, type Lines, type Token } from "./highlight";
 
 export interface DiffRow {
   kind: "same" | "add" | "del" | "gap";
@@ -62,6 +63,17 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
   const box = useRef<HTMLTextAreaElement>(null);
   const change = changes[Math.min(fileIndex, changes.length - 1)];
   const sections = useMemo(() => change.edits.map((edit) => diffRows(edit.oldText, edit.newText)), [change]);
+  // Colours arrive after the plain diff shows: [edit] → { old, new } lines.
+  const [colours, setColours] = useState<Array<{ old: Lines | null; next: Lines | null }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    setColours([]);
+    Promise.all(change.edits.map(async (edit) => ({
+      old: await highlightLines(edit.oldText ?? "", change.path).catch(() => null),
+      next: await highlightLines(edit.newText, change.path).catch(() => null),
+    }))).then((result) => { if (!cancelled) setColours(result); });
+    return () => { cancelled = true; };
+  }, [change]);
 
   useEffect(() => { box.current?.focus(); }, [editing]);
   useEffect(() => {
@@ -111,6 +123,9 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
                   const isEditing = editing !== null && at(editing);
                   return (
                     <RowWithComments key={index} row={row}
+                      tokens={row.kind === "del"
+                        ? colours[edit]?.old?.[(row.oldLine ?? 0) - 1]
+                        : colours[edit]?.next?.[(row.newLine ?? 0) - 1]}
                       onComment={line && row.kind !== "del" && row.kind !== "gap" ? () => { setEditing({ path: change.path, edit, line, code: row.text }); setText(""); } : undefined}>
                       {here.map((comment, n) => (
                         <tr className="cm" key={`c${n}`}><td className="n" /><td><div className="cbox done">{comment.text}</div></td></tr>
@@ -156,13 +171,19 @@ function SectionRows({ label, children }: { label?: string; children: ReactNode 
   );
 }
 
-function RowWithComments({ row, onComment, children }: { row: DiffRow; onComment?: () => void; children: ReactNode }) {
+function Coloured({ tokens }: { tokens: Token[] }) {
+  return <>{tokens.map((token, index) => (
+    <span key={index} style={{ "--c": token.color, "--cd": token.dark ?? token.color } as CSSProperties}>{token.content}</span>
+  ))}</>;
+}
+
+function RowWithComments({ row, onComment, children, tokens }: { row: DiffRow; onComment?: () => void; children: ReactNode; tokens?: Token[] }) {
   if (row.kind === "gap") return <tr className="h"><td className="n" /><td>⋯</td></tr>;
   return (
     <>
       <tr className={row.kind === "add" ? "a" : row.kind === "del" ? "d" : undefined}>
         <td className={`n${onComment ? " can" : ""}`} onClick={onComment} title={onComment ? "Kommentera raden" : undefined}>{row.newLine ?? row.oldLine}</td>
-        <td>{row.text || " "}</td>
+        <td className="code">{tokens && tokens.length > 0 ? <Coloured tokens={tokens} /> : row.text || " "}</td>
       </tr>
       {children}
     </>

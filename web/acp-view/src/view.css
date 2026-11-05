@@ -174,6 +174,8 @@ code { font: 12.5px var(--mono); background: var(--tint2); border-radius: 5px; p
 .dv td.n { width: 1%; text-align: right; color: var(--faint); user-select: none; padding: 0 8px; }
 .dv td.n.can { cursor: pointer; }
 .dv td.n.can:hover { color: var(--acc); }
+.dv td.code span { color: var(--c, inherit); }
+:root[data-theme="dark"] .dv td.code span { color: var(--cd, inherit); }
 .dv tr.a { background: var(--add); }
 .dv tr.d { background: var(--del); }
 .dv tr.h td { color: var(--faint); padding: 4px 10px; }

@@ -437,9 +437,11 @@ function handleBridge(
     sessionPanes(context.paneId).then((panes) => sendJson(response, 200, { panes }), fail(503));
     return true;
   }
-  const paneMatch = path.match(/^\/api\/panes\/(%\d+)\/text$/);
+  const paneMatch = path.match(/^\/api\/panes\/([^/]+)\/text$/);
   if (paneMatch && request.method === "GET") {
-    paneText(paneMatch[1], Number(url.searchParams.get("lines") ?? 200)).then((text) => sendJson(response, 200, { text }), fail(404));
+    let pane = "";
+    try { pane = decodeURIComponent(paneMatch[1]); } catch { /* not a pane */ }
+    paneText(pane, Number(url.searchParams.get("lines") ?? 200)).then((text) => sendJson(response, 200, { text }), fail(404));
     return true;
   }
   if (path === "/api/review" && request.method === "POST") {

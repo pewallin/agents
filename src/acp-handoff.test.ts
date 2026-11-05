@@ -42,3 +42,25 @@ describe("acp hand-off", () => {
     expect(out).toBe("\n\n› Hej\n\n• Hej själv\n  ⚙ Read README.md");
   });
 });
+
+describe("view activity in the app", () => {
+  it("reports a question waiting in the view as approval, so the app's needs-you dot lights", async () => {
+    const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { reportViewActivity } = await import("./acp-host-cli.js");
+    const dir = mkdtempSync(join(tmpdir(), "acp-activity-"));
+    const previous = process.env.AGENTS_STATE_DIR;
+    process.env.AGENTS_STATE_DIR = dir;
+    try {
+      const report = reportViewActivity("codex", "%7");
+      report("needs-you");
+      expect(JSON.parse(readFileSync(join(dir, "codex-%7.json"), "utf8")).state).toBe("approval");
+      report("working");
+      expect(JSON.parse(readFileSync(join(dir, "codex-%7.json"), "utf8")).state).toBe("working");
+    } finally {
+      if (previous === undefined) delete process.env.AGENTS_STATE_DIR; else process.env.AGENTS_STATE_DIR = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
