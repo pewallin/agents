@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { AcpActivity, rankFiles, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
+import { AcpActivity, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, rankFiles, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
 
 // A stand-in agent: answers each JSON-RPC line with an echo of its method.
 const ECHO_AGENT = `
@@ -168,6 +168,51 @@ describe("acp-host", () => {
     first.close();
     second.close();
   });
+  it("gives a session to the view that loads it last: the other view is told and its agent ends", async () => {
+    const h = await start();
+    const ask = (ws: WebSocket, id: number, method: string, params: unknown) => new Promise<{ result: { echo: string; pid: number } }>((resolve) => {
+      const onMessage = (data: WebSocket.RawData) => {
+        const message = JSON.parse(data.toString());
+        if (message.id !== id) return;
+        ws.off("message", onMessage);
+        resolve(message);
+      };
+      ws.on("message", onMessage);
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+    });
+    const older = connect(h);
+    const other = connect(h);
+    await Promise.all([older, other].map((ws) => new Promise((resolve) => ws.once("open", resolve))));
+    const olderAgent = (await ask(older, 1, "session/load", { sessionId: "s1" })).result.pid;
+    await ask(other, 1, "session/load", { sessionId: "s2" });
+    const told = new Promise<string>((resolve) => older.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method) resolve(message.method);
+    }));
+    const closed = new Promise<number>((resolve) => older.once("close", (code) => resolve(code)));
+    const newer = connect(h);
+    await new Promise((resolve) => newer.once("open", resolve));
+    await ask(newer, 1, "session/load", { sessionId: "s1" });
+    expect(await told).toBe(TAKEN_OVER_METHOD);
+    expect(await closed).toBe(TAKEN_OVER_CLOSE_CODE);
+    await expect.poll(() => { try { process.kill(olderAgent, 0); return true; } catch { return false; } }).toBe(false);
+    // A view of another session stays.
+    expect(other.readyState).toBe(WebSocket.OPEN);
+    newer.close();
+    other.close();
+  });
+
+  it("knows a view's sessions: those it loads and those it makes", () => {
+    const sessions = new SessionTracker();
+    expect(sessions.clientLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "a" } }))).toBe("a");
+    expect(sessions.clientLine(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: "/" } }))).toBeUndefined();
+    expect(sessions.has("b")).toBe(false);
+    sessions.agentLine(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { sessionId: "b" } }));
+    expect(sessions.has("a")).toBe(true);
+    expect(sessions.has("b")).toBe(true);
+    expect(sessions.clientLine(JSON.stringify({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: "a" } }))).toBeUndefined();
+  });
+
   it("tells the pane's state from the traffic: a prompt in flight works, a permission waiting needs you", () => {
     const activity = new AcpActivity();
     expect(activity.state).toBe("idle");

@@ -30,6 +30,8 @@ export function connectSession(options: {
   cwd: string;
   agentId: string;
   dispatch: (action: SessionAction) => void;
+  /** Another view loaded the session: the host ends this one. */
+  onTakenOver?: () => void;
 }): AcpSession {
   const { sessionId, cwd, dispatch } = options;
   const answers = new Map<string, (response: RequestPermissionResponse) => void>();
@@ -40,6 +42,7 @@ export function connectSession(options: {
       const notification = params as SessionNotification;
       if (notification.sessionId === sessionId) dispatch({ type: "update", update: notification.update, at: Date.now() });
     })
+    .onNotification("_agents/taken_over" as "session/update", () => { options.onTakenOver?.(); })
     .onRequest("session/request_permission", ({ params }) => {
       const id = `permission-${nextPermission++}`;
       dispatch({ type: "permissionRequested", request: { id, toolCall: params.toolCall, options: params.options } });

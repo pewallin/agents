@@ -618,9 +618,10 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
 function SessionView({ info }: { info: HostInfo }) {
   const dispatch = useSession((s) => s.dispatch);
   const [error, setError] = useState<string | null>(null);
+  const [takenOver, setTakenOver] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const session = useMemo(() => sessionId && token
-    ? connectSession({ url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`, sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch })
+    ? connectSession({ url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`, sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, onTakenOver: () => setTakenOver(true) })
     : null, [info.cwd, info.agent.id, dispatch]);
 
   useEffect(() => {
@@ -638,6 +639,13 @@ function SessionView({ info }: { info: HostInfo }) {
   }, [session, info.agent.name]);
 
   if (!sessionId) return <Notice>Panen har ingen {info.agent.name}-session än.</Notice>;
+  if (takenOver) {
+    return (
+      <Notice>
+        <div>Sessionen är öppen i en annan vy. <button type="button" className="link" onClick={() => location.reload()}>Öppna den här</button></div>
+      </Notice>
+    );
+  }
   if (error) return <Notice>Sessionen gick inte att öppna: {error}</Notice>;
   if (!session || !loaded) return <Notice>Öppnar sessionen…</Notice>;
   return <Conversation session={session} info={info} />;

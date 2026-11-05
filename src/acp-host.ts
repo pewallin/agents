@@ -233,6 +233,16 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
+  // One view per session: two adapters on one session answer each other's questions (codex-acp
+  // cancels an approval of a turn it did not start), so the view that loads it last has it.
+  const views = new Map<number, OpenView>();
+  const takeOverFrom = (client: number, sessionId: string) => {
+    for (const [other, view] of views) {
+      if (other === client || !view.sessions.has(sessionId)) continue;
+      log(`view ${client} takes session ${sessionId} over from view ${other}`);
+      view.takeOver?.();
+    }
+  };
   server.on("upgrade", (request, socket, head) => {
     const port = (server.address() as { port: number }).port;
     const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
@@ -255,11 +265,25 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     }
     wss.handleUpgrade(request, socket, head, (ws) => {
       const client = nextClient++;
-      bridge(ws, takeAgent(), log, {
-        onAgentLine: (line) => { activity.agentLine(client, line); activityChanged(); options.onAgentLine?.(line); },
-        onClientLine: (line) => { activity.clientLine(client, line); activityChanged(); options.onClientLine?.(line); },
-        onClose: () => { activity.clientGone(client); activityChanged(); },
+      const view: OpenView = { sessions: new SessionTracker() };
+      views.set(client, view);
+      const link = bridge(ws, takeAgent(), log, {
+        onAgentLine: (line) => {
+          view.sessions.agentLine(line);
+          activity.agentLine(client, line);
+          activityChanged();
+          options.onAgentLine?.(line);
+        },
+        onClientLine: (line) => {
+          const loading = view.sessions.clientLine(line);
+          if (loading) takeOverFrom(client, loading);
+          activity.clientLine(client, line);
+          activityChanged();
+          options.onClientLine?.(line);
+        },
+        onClose: () => { views.delete(client); activity.clientGone(client); activityChanged(); },
       });
+      view.takeOver = link.takeOver;
     });
   });
 
@@ -306,6 +330,59 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   };
 }
 
+interface OpenView {
+  sessions: SessionTracker;
+  takeOver?: () => void;
+}
+
+/** The sessions a view has open: those it loads, and those it makes once the agent names them. */
+export class SessionTracker {
+  private readonly open = new Set<string>();
+  private readonly creating = new Set<string>();
+
+  /** A message from the view; returns the session it loads, if it loads one. */
+  clientLine(line: string): string | undefined {
+    const message = parseJson(line);
+    if (!message || message.id === undefined || message.id === null) return undefined;
+    if (message.method === "session/new") {
+      this.creating.add(String(message.id));
+      return undefined;
+    }
+    if (message.method !== "session/load" && message.method !== "session/resume") return undefined;
+    const sessionId = (message.params as { sessionId?: unknown } | undefined)?.sessionId;
+    if (typeof sessionId !== "string" || !sessionId) return undefined;
+    this.open.add(sessionId);
+    return sessionId;
+  }
+
+  agentLine(line: string): void {
+    if (this.creating.size === 0) return;
+    const message = parseJson(line);
+    if (!message || message.method !== undefined || message.id === undefined || message.id === null) return;
+    if (!this.creating.delete(String(message.id))) return;
+    const sessionId = (message.result as { sessionId?: unknown } | undefined)?.sessionId;
+    if (typeof sessionId === "string" && sessionId) this.open.add(sessionId);
+  }
+
+  has(sessionId: string): boolean {
+    return this.open.has(sessionId);
+  }
+}
+
+function parseJson(line: string): { id?: unknown; method?: unknown; params?: unknown; result?: unknown } | undefined {
+  try {
+    const value = JSON.parse(line) as unknown;
+    return value && typeof value === "object" ? value as { id?: unknown; method?: unknown; params?: unknown; result?: unknown } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The notification a view gets when another view has taken its session over. */
+export const TAKEN_OVER_METHOD = "_agents/taken_over";
+/** The close code of a view whose session another view took over. */
+export const TAKEN_OVER_CLOSE_CODE = 4000;
+
 /** One WebSocket client to one agent process: a text frame is one JSON-RPC message, a stdout
  *  line is one frame back. */
 function bridge(
@@ -313,7 +390,7 @@ function bridge(
   child: ChildProcess,
   log: (message: string) => void,
   taps: Pick<AcpHostOptions, "onAgentLine" | "onClientLine"> & { onClose?: () => void } = {},
-): void {
+): { takeOver: () => void } {
   let finished = false;
   const finish = () => {
     if (finished) return;
@@ -341,6 +418,17 @@ function bridge(
     log(`agent ${child.pid} exited (${code ?? signal})`);
     finish();
   });
+  return {
+    // The adapter stops at once: until it is gone it would still answer the session's questions.
+    takeOver: () => {
+      if (finished) return;
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ jsonrpc: "2.0", method: TAKEN_OVER_METHOD, params: {} }));
+      finished = true;
+      child.stdin?.end();
+      child.kill("SIGTERM");
+      if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(TAKEN_OVER_CLOSE_CODE, "the session is open in another view");
+    },
+  };
 }
 
 /** The project's files for the view's @ menu: git's list where the folder is a repository. */

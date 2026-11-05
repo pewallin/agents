@@ -33,6 +33,7 @@ button { font: inherit; color: inherit; }
 .col { max-width: 700px; margin: 0 auto; padding: 28px 28px 24px; display: flex; flex-direction: column; gap: 18px; }
 .col > * { flex-shrink: 0; }
 .empty, .notice { color: var(--dim); }
+.notice button.link { font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: pointer; }
 .notice { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; }
 
 /* what you wrote */
