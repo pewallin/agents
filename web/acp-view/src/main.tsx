@@ -10,7 +10,7 @@ import { StrictMode, lazy, Suspense, useCallback, useEffect, useMemo, useRef, us
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
-import { connectSession, type AcpSession } from "./acp-connection";
+import { CannotLoadSession, connectSession, type AcpSession } from "./acp-connection";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, describeCall, duration, shortPath, toolOutput, type FileChange, type Step, type Turn } from "./turns";
 import { ReviewPane } from "./review";
@@ -619,6 +619,7 @@ function SessionView({ info }: { info: HostInfo }) {
   const dispatch = useSession((s) => s.dispatch);
   const [error, setError] = useState<string | null>(null);
   const [takenOver, setTakenOver] = useState(false);
+  const [cannotLoad, setCannotLoad] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const session = useMemo(() => sessionId && token
     ? connectSession({ url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`, sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, onTakenOver: () => setTakenOver(true) })
@@ -631,6 +632,7 @@ function SessionView({ info }: { info: HostInfo }) {
       .then(() => { if (!cancelled) { mark("loaded"); setLoaded(true); } })
       .catch((reason: unknown) => {
         if (cancelled) return;
+        if (reason instanceof CannotLoadSession) { setCannotLoad(true); return; }
         const detail = reason && typeof reason === "object" && "message" in reason ? String((reason as { message: unknown }).message) : String(reason);
         setError(detail);
       });
@@ -639,6 +641,16 @@ function SessionView({ info }: { info: HostInfo }) {
   }, [session, info.agent.name]);
 
   if (!sessionId) return <Notice>Panen har ingen {info.agent.name}-session än.</Notice>;
+  if (cannotLoad) {
+    return (
+      <Notice>
+        <div>
+          {info.agent.name} kan inte visa en pågående session i ACP-vyn: agenten kan inte öppna en befintlig session (ACP <code>session/load</code>).
+          <br />Fortsätt i terminalen, eller uppdatera {info.agent.name} till en version som kan det.
+        </div>
+      </Notice>
+    );
+  }
   if (takenOver) {
     return (
       <Notice>

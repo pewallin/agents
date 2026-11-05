@@ -157,10 +157,10 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
     endpoint = waitForListeningEndpoint(server, plan.logPath, startupTimeoutMs);
   } catch (error) {
     // The agent matters more than its web view: Codex starts without an app-server, as it would
-    // have without this command, and only Codex Web is unavailable in this pane.
+    // have without this command, and only the ACP view is unavailable in this pane.
     server.terminate();
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Codex Web is unavailable in this pane: ${message}. Starting Codex without it.`);
+    console.error(`The ACP view is unavailable in this pane: ${message}. Starting Codex without it.`);
     const result = execFileInheritUntilExit(plan.plainTui.executable, plan.plainTui.args, input.environment);
     if (result.error) throw result.error;
     return {

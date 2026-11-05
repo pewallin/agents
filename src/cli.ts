@@ -76,9 +76,9 @@ if (process.argv.includes("--tmux")) {
 const args = process.argv.slice(2);
 const firstArg = args[0] || "";
 
-// codex-web launches CODEX_CLI_PATH with config flags followed by `app-server`.
-// In the pane-local configuration, agents bridges that stdio process to the
-// pane's already-running WebSocket app-server.
+// codex-acp runs CODEX_PATH (this CLI in a Codex pane) with config flags followed by
+// `app-server`. In the pane-local configuration, agents bridges that stdio process to the
+// pane's already-running WebSocket app-server, so the ACP view shares the TUI's thread.
 if (shouldRunCodexAppServerProxy(args, process.env)) {
   process.exit(await runCodexAppServerWebSocketProxy());
 }

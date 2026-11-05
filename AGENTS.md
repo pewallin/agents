@@ -37,7 +37,7 @@ src/
   multiplexer.ts    — Multiplexer interface + auto-detection (tmux vs zellij)
   mux-tmux.ts       — tmux Multiplexer backend
   mux-zellij.ts     — zellij Multiplexer backend (talks to bridge plugin via pipe)
-  codex-session.ts  — a Codex pane's own app-server (Codex Web, ACP view); starts its acp-session
+  codex-session.ts  — a Codex pane's own app-server, shared live with its ACP view; starts its acp-session
   acp-host.ts       — an agent pane's ACP view host: static web client, one adapter per client
   acp-host-cli.ts   — `acp-session --agent <ACP registry id>` and its agent table (adapter, resume
                       command); the bundled `codex-acp` and `claude-acp` adapter commands

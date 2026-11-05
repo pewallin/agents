@@ -220,7 +220,7 @@ function isCodexExecutable(executable?: string): boolean {
 
 /**
  * Codex is started through `codex-session`, which gives the pane its own app-server: without
- * one Codex Web has nothing to connect to in a pane whose session was resumed.
+ * one the ACP view has nothing to share in a pane whose session was resumed.
  */
 export function renderResumeRespawnCommand(argv: string[], options: ResumeRespawnOptions = {}): string {
   const agentCommand = renderShellCommand(argv);

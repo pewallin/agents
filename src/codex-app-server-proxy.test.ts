@@ -18,7 +18,7 @@ describe("resolveCodexAppServerProxyEndpoint", () => {
 });
 
 describe("shouldRunCodexAppServerProxy", () => {
-  it("accepts the config flags that codex-web places before app-server", () => {
+  it("accepts the config flags that codex-acp places before app-server", () => {
     const environment = { AGENTS_CODEX_APP_SERVER_URL: "ws://127.0.0.1:43123" };
 
     expect(shouldRunCodexAppServerProxy(["app-server"], environment)).toBe(true);

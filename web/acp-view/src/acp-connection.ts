@@ -24,6 +24,13 @@ export interface AcpSession {
   closed: Promise<void>;
 }
 
+/** The agent cannot open an existing session (no `session/load`), so the view cannot show it. */
+export class CannotLoadSession extends Error {
+  constructor() {
+    super("The agent cannot load a session");
+  }
+}
+
 export function connectSession(options: {
   url: string;
   sessionId: string;
@@ -42,7 +49,8 @@ export function connectSession(options: {
       const notification = params as SessionNotification;
       if (notification.sessionId === sessionId) dispatch({ type: "update", update: notification.update, at: Date.now() });
     })
-    .onNotification("_agents/taken_over" as "session/update", () => { options.onTakenOver?.(); })
+    // The host's own notice (not ACP): a custom method needs its own params parser.
+    .onNotification("_agents/taken_over", (params: unknown) => params, () => { options.onTakenOver?.(); })
     .onRequest("session/request_permission", ({ params }) => {
       const id = `permission-${nextPermission++}`;
       dispatch({ type: "permissionRequested", request: { id, toolCall: params.toolCall, options: params.options } });
@@ -59,7 +67,9 @@ export function connectSession(options: {
 
   return {
     async load() {
-      await ready;
+      const initialized = await ready;
+      // The view shows a session the pane already has; an agent that cannot load one has no view.
+      if (!initialized.agentCapabilities?.loadSession) throw new CannotLoadSession();
       dispatch({ type: "loading" });
       const response = await agent.request("session/load", { sessionId, cwd, mcpServers: [] });
       dispatch({ type: "loaded", modes: response.modes, configOptions: response.configOptions });
