@@ -7,7 +7,7 @@
 // Only this machine reaches it (127.0.0.1), and only a page with the pane's token can open the
 // agent: the WebSocket needs the token, an Origin of this server and a Host of this server. The
 // token is in the pane's metadata file (0600), which is how the app finds the host's address.
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -57,6 +57,53 @@ export interface AcpHandoffControl {
   /** Takes the session over from the TUI: answers 409 with a reason while the agent works. */
   handOff(sessionId: string): Promise<{ status: number; message?: string }>;
   giveBack(): Promise<void>;
+}
+
+/**
+ * What the pane's agent is doing as its view clients see it: a prompt in flight is work, a
+ * permission request waiting on an answer needs the person. Read from the traffic the host
+ * carries, so the app can ask (`GET /api/state`) without speaking ACP.
+ */
+export class AcpActivity {
+  private readonly prompts = new Set<string>();
+  private readonly asks = new Set<string>();
+
+  clientLine(client: number, line: string): void {
+    const message = parseMessage(line);
+    if (!message) return;
+    if (message.method === "session/prompt" && message.id !== undefined) this.prompts.add(`${client}:${message.id}`);
+    else if (message.method === undefined && message.id !== undefined) this.asks.delete(`${client}:${message.id}`);
+  }
+
+  agentLine(client: number, line: string): void {
+    const message = parseMessage(line);
+    if (!message || message.id === undefined) return;
+    if (message.method === "session/request_permission") this.asks.add(`${client}:${message.id}`);
+    else if (message.method === undefined) this.prompts.delete(`${client}:${message.id}`);
+  }
+
+  clientGone(client: number): void {
+    for (const set of [this.prompts, this.asks]) {
+      for (const key of [...set]) if (key.startsWith(`${client}:`)) set.delete(key);
+    }
+  }
+
+  get state(): "needs-you" | "working" | "idle" {
+    if (this.asks.size > 0) return "needs-you";
+    return this.prompts.size > 0 ? "working" : "idle";
+  }
+}
+
+function parseMessage(line: string): { id?: string; method?: string } | undefined {
+  try {
+    const value = JSON.parse(line) as { id?: unknown; method?: unknown };
+    return {
+      id: value.id === undefined || value.id === null ? undefined : String(value.id),
+      method: typeof value.method === "string" ? value.method : undefined,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export interface AcpHost {
@@ -118,6 +165,8 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const webRoot = resolve(options.webRoot);
   const metadataPath = acpHostMetadataPath(options.runtimeTempDir, options.paneId);
   const children = new Set<ChildProcess>();
+  const activity = new AcpActivity();
+  let nextClient = 1;
   let spare: ChildProcess | undefined;
   let closed = false;
 
@@ -151,7 +200,13 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       handleControl(request, response, token, options.handoff);
       return;
     }
-    handleHttp(request, response, { webRoot, token, cwd: options.cwd, agent: options.agent });
+    handleHttp(request, response, {
+      webRoot,
+      token,
+      cwd: options.cwd,
+      agent: options.agent,
+      state: () => ({ state: activity.state, mode: options.handoff ? "handoff" : "live", inView: options.handoff?.inView() ?? true, clients: wss.clients.size }),
+    });
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
@@ -175,7 +230,14 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(request, socket, head, (ws) => bridge(ws, takeAgent(), log, options));
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      const client = nextClient++;
+      bridge(ws, takeAgent(), log, {
+        onAgentLine: (line) => { activity.agentLine(client, line); options.onAgentLine?.(line); },
+        onClientLine: (line) => { activity.clientLine(client, line); options.onClientLine?.(line); },
+        onClose: () => activity.clientGone(client),
+      });
+    });
   });
 
   await new Promise<void>((resolveListen, reject) => {
@@ -227,7 +289,7 @@ function bridge(
   ws: WebSocket,
   child: ChildProcess,
   log: (message: string) => void,
-  taps: Pick<AcpHostOptions, "onAgentLine" | "onClientLine"> = {},
+  taps: Pick<AcpHostOptions, "onAgentLine" | "onClientLine"> & { onClose?: () => void } = {},
 ): void {
   let finished = false;
   const finish = () => {
@@ -250,12 +312,39 @@ function bridge(
     taps.onClientLine?.(text);
     child.stdin?.write(text.endsWith("\n") ? text : `${text}\n`);
   });
-  ws.on("close", finish);
+  ws.on("close", () => { taps.onClose?.(); finish(); });
   ws.on("error", (error) => log(`client error: ${error.message}`));
   child.once("exit", (code, signal) => {
     log(`agent ${child.pid} exited (${code ?? signal})`);
     finish();
   });
+}
+
+/** The project's files for the view's @ menu: git's list where the folder is a repository. */
+const fileLists = new Map<string, { at: number; files: Promise<string[]> }>();
+function projectFiles(cwd: string): Promise<string[]> {
+  const cached = fileLists.get(cwd);
+  if (cached && Date.now() - cached.at < 10_000) return cached.files;
+  const files = new Promise<string[]>((resolveFiles) => {
+    execFile("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd, maxBuffer: 32 * 1024 * 1024, timeout: 5_000 }, (error, stdout) => {
+      resolveFiles(error ? [] : stdout.split("\n").filter(Boolean));
+    });
+  });
+  fileLists.set(cwd, { at: Date.now(), files });
+  return files;
+}
+
+/** Files whose name starts with the query first, then those whose path holds it. */
+export function rankFiles(files: string[], query: string): string[] {
+  if (!query) return files.slice(0, 50);
+  const scored: Array<[number, string]> = [];
+  for (const file of files) {
+    const lower = file.toLowerCase();
+    const name = lower.slice(lower.lastIndexOf("/") + 1);
+    const score = name.startsWith(query) ? 0 : name.includes(query) ? 1 : lower.includes(query) ? 2 : -1;
+    if (score >= 0) scored.push([score * 10_000 + file.length, file]);
+  }
+  return scored.sort((a, b) => a[0] - b[0]).map(([, file]) => file);
 }
 
 function handleControl(
@@ -300,7 +389,7 @@ function handleControl(
 function handleHttp(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { webRoot: string; token: string; cwd: string; agent: { id: string; name: string } },
+  context: { webRoot: string; token: string; cwd: string; agent: { id: string; name: string }; state: () => unknown },
 ): void {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -309,6 +398,23 @@ function handleHttp(
   }
   if (url.pathname === "/healthz") {
     response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }).end("ok");
+    return;
+  }
+  if (url.pathname === "/api/state" || url.pathname === "/api/files") {
+    const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+    if (!tokensMatch(context.token, auth)) {
+      response.writeHead(401, { "Cache-Control": "no-store" }).end();
+      return;
+    }
+    if (url.pathname === "/api/state") {
+      response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(context.state()));
+      return;
+    }
+    void projectFiles(context.cwd).then((files) => {
+      const query = (url.searchParams.get("q") ?? "").toLowerCase();
+      response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" })
+        .end(JSON.stringify({ files: rankFiles(files, query).slice(0, 20) }));
+    });
     return;
   }
   if (url.pathname === "/api/info") {

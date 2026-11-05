@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
+import { AcpActivity, rankFiles, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
 
 // A stand-in agent: answers each JSON-RPC line with an echo of its method.
 const ECHO_AGENT = `
@@ -167,5 +167,32 @@ describe("acp-host", () => {
     expect(a.result.pid).not.toBe(b.result.pid);
     first.close();
     second.close();
+  });
+  it("tells the pane's state from the traffic: a prompt in flight works, a permission waiting needs you", () => {
+    const activity = new AcpActivity();
+    expect(activity.state).toBe("idle");
+    activity.clientLine(1, JSON.stringify({ jsonrpc: "2.0", id: 7, method: "session/prompt", params: {} }));
+    expect(activity.state).toBe("working");
+    activity.agentLine(1, JSON.stringify({ jsonrpc: "2.0", id: 0, method: "session/request_permission", params: {} }));
+    expect(activity.state).toBe("needs-you");
+    activity.clientLine(1, JSON.stringify({ jsonrpc: "2.0", id: 0, result: { outcome: { outcome: "cancelled" } } }));
+    expect(activity.state).toBe("working");
+    activity.agentLine(1, JSON.stringify({ jsonrpc: "2.0", id: 7, result: { stopReason: "end_turn" } }));
+    expect(activity.state).toBe("idle");
+    activity.clientLine(2, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/prompt", params: {} }));
+    activity.clientGone(2);
+    expect(activity.state).toBe("idle");
+  });
+
+  it("answers its state to a holder of the token", async () => {
+    const h = await start();
+    expect((await fetch(`${h.url}/api/state`)).status).toBe(401);
+    const state = await fetch(`${h.url}/api/state`, { headers: { Authorization: `Bearer ${h.token}` } });
+    expect(await state.json()).toEqual({ state: "idle", mode: "live", inView: true, clients: 0 });
+  });
+
+  it("ranks files for the @ menu: names that start with the query first", () => {
+    expect(rankFiles(["src/cli.ts", "docs/status.md", "src/status.ts", "src/statusline.ts"], "status"))
+      .toEqual(["src/status.ts", "docs/status.md", "src/statusline.ts"]);
   });
 });
