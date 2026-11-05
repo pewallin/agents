@@ -12,7 +12,7 @@
 //          prompted in it, else a new one as the pane's command starts it.
 //
 // The agent's TUI ending on its own ends the pane's command, as it would without this.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
@@ -32,9 +32,16 @@ export interface HandoffSessionInput {
   /** The app opens the pane in its ACP view: the agent starts there, its TUI only on the way
    *  back, on the session the view started. */
   startInView?: boolean;
+  /** A spawned worker's brief: in the view, the first prompt of the host's session. */
+  firstPrompt?: string;
+  /** The TUI command with the brief, for a worker that starts in the terminal after all. */
+  firstTuiCommand?: string;
 }
 
 const BUSY_STATES = new Set(["working", "approval", "question"]);
+
+/** The pane option of a pane whose host holds its agent's session (agents-app-control prompts it). */
+export const HOSTED_OPTION = "@agents_acp_hosted";
 
 /** The agent's last reported state in this pane, from its status hooks. */
 export function reportedAgentState(stateAgent: string, paneId: string, stateDir = getStateDir()): string | undefined {
@@ -201,8 +208,24 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     startedSession = undefined;
     tuiSession = id;
     tuiSessionUnknown = false;
-    startTui(id ? agent.resume(tuiCommand, id) : tuiCommand);
+    setHosted(false);
+    // A session the view never prompted in was never written: nothing to resume.
+    const resumable = id && agent.sessionWritten?.(id) !== false;
+    startTui(resumable ? agent.resume(tuiCommand, id) : tuiCommand);
   };
+
+  /** Marks the pane as one whose host holds the agent's session: lines for the agent go to the
+   *  host as prompts (agents-app-control), not typed into the pane. */
+  const setHosted = (on: boolean) => {
+    try {
+      execFileSync("tmux", on
+        ? ["set-option", "-p", "-t", paneId, HOSTED_OPTION, "1"]
+        : ["set-option", "-p", "-u", "-t", paneId, HOSTED_OPTION], { timeout: 3_000, stdio: "ignore" });
+    } catch {
+      // Without tmux the pane has no lines to take.
+    }
+  };
+  let hostedStarting = false;
 
   const handOff = async (id: string): Promise<{ status: number; message?: string; session?: string | null }> => {
     if (mode === "view") {
@@ -276,7 +299,8 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
             if (typeof prompted === "string") startedSession = prompted;
           }
         },
-        currentSession: async () => mode === "view" ? { id: sessionId ?? startedSession ?? null, persisted: true } : undefined,
+        // While the host starts its own session the view waits for it (404, asked again).
+        currentSession: async () => mode === "view" && !hostedStarting ? { id: sessionId ?? startedSession ?? null, persisted: true } : undefined,
         log,
       });
       log(`host ${host.url} for ${agent.name} in ${paneId}`);
@@ -287,13 +311,32 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   // A command that picks a session without naming it starts in the terminal: the view would not
   // know which one to open.
   if (input.startInView && host && !tuiSessionUnknown) {
-    sessionId = tuiSession;
-    log(`${agent.name} starts in the view${sessionId ? ` on session ${sessionId}` : ""}`);
+    // The host holds the session: the view attaches to it, and the brief and later lines for the
+    // agent are its prompts.
+    log(`${agent.name} starts in the view${tuiSession ? ` on session ${tuiSession}` : ""}`);
     // The app knows the pane's agent from its state before any TUI or hook reports it.
     reportViewActivity(agent.stateAgent, paneId)("idle");
+    mode = "view";
+    hostedStarting = true;
+    try {
+      sessionId = await host.startHostedSession(tuiSession);
+      setHosted(true);
+    } catch (error) {
+      log(`the host's session did not start: ${error instanceof Error ? error.message : String(error)}`);
+      host.closeClients();
+    } finally {
+      hostedStarting = false;
+    }
     inView();
+    if (sessionId && input.firstPrompt) {
+      // The app shows the view while the agent waits: a hand-off agent at work cannot be
+      // switched to. Without a view the brief goes all the same, a little later.
+      const attached = await host.viewAttached(30_000);
+      log(`the brief goes to session ${sessionId}${attached ? "" : " (no view attached)"}`);
+      void host.hostedPrompt(input.firstPrompt).catch((error: unknown) => log(`the brief did not reach ${agent.name}: ${error instanceof Error ? error.message : String(error)}`));
+    }
   } else {
-    startTui(tuiCommand);
+    startTui(input.firstTuiCommand ?? tuiCommand);
   }
   return await new Promise<never>(() => {});
 }

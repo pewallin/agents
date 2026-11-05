@@ -14,7 +14,7 @@
 // They run before the rest of the CLI loads: a session's host stays up for the pane's lifetime,
 // and an adapter's stdout is its protocol channel, which nothing else may write to.
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { acpHostMetadataPath, startAcpHost } from "./acp-host.js";
@@ -351,6 +351,17 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
   if (tuiCommand) {
     // The TUI runs whatever happens to the view: a host that cannot start only costs the view.
     const host = problem || !agentCommand ? undefined : { webRoot, agentCommand };
+    // A spawned worker's brief, given apart from its TUI command so the view can send it.
+    const promptFile = option(args, "--first-prompt-file");
+    let firstPrompt: string | undefined;
+    if (promptFile) {
+      try {
+        firstPrompt = readFileSync(promptFile, "utf8");
+        rmSync(promptFile, { force: true });
+      } catch (error) {
+        console.error(`acp-session: the brief at ${promptFile} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     return await runHandoffSession({
       agent,
       paneId,
@@ -360,6 +371,8 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
       host,
       problem,
       startInView: host !== undefined && opensInView(paneId),
+      firstPrompt,
+      firstTuiCommand: option(args, "--first-tui"),
     });
   }
 
@@ -411,4 +424,46 @@ export async function runClaudeAcpAgent(): Promise<never> {
   process.argv = [process.argv[0], process.argv[1]];
   await import("@agentclientprotocol/claude-agent-acp/dist/index.js");
   return await new Promise<never>(() => {});
+}
+
+/**
+ * `agents acp-prompt --pane %N` with the text on stdin: a line for the pane's agent when the
+ * pane's host holds its session (a hand-off agent that started in its ACP view): the host
+ * prompts the agent with it, as typing it into the TUI would. Prints one JSON line; exit 0 when
+ * the host took it, 3 when the host holds no session (type it into the pane instead).
+ */
+export async function runAcpPrompt(args: string[], runtimeTempDir: string): Promise<number> {
+  const paneId = option(args, "--pane") ?? process.env.TMUX_PANE ?? "";
+  const say = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  if (!/^%\d+$/.test(paneId)) {
+    say({ ok: false, reason: "acp-prompt needs --pane %N" });
+    return 2;
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const text = Buffer.concat(chunks).toString("utf8");
+  const { readAcpHostMetadata } = await import("./acp-host.js");
+  const host = readAcpHostMetadata(acpHostMetadataPath(runtimeTempDir, paneId));
+  if (!host) {
+    say({ ok: false, hosted: false, reason: `pane ${paneId} has no ACP host` });
+    return 3;
+  }
+  try {
+    const response = await fetch(`${host.url}/api/prompt`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${host.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = await response.json().catch(() => ({})) as { message?: string; sessionId?: string };
+    if (response.status === 202) {
+      say({ ok: true, hosted: true, sessionId: body.sessionId });
+      return 0;
+    }
+    say({ ok: false, hosted: response.status !== 409 ? undefined : false, reason: body.message ?? `the host answered ${response.status}` });
+    return response.status === 409 ? 3 : 1;
+  } catch (error) {
+    say({ ok: false, reason: `the host did not answer: ${error instanceof Error ? error.message : String(error)}` });
+    return 1;
+  }
 }

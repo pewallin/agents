@@ -96,6 +96,11 @@ if (firstArg === "acp-restart") {
   const { runAcpRestart } = await import("./acp-restart.js");
   process.exit(await runAcpRestart(args.slice(1)));
 }
+if (firstArg === "acp-prompt") {
+  const { runAcpPrompt } = await import("./acp-host-cli.js");
+  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
+  process.exit(await runAcpPrompt(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp")));
+}
 if (firstArg === "acp-session") {
   const { runAcpSessionCommand } = await import("./acp-host-cli.js");
   const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");

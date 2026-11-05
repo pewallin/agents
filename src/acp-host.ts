@@ -15,6 +15,7 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { getBuildInfo } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
+import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 
 export interface AcpHostMetadata {
@@ -134,6 +135,13 @@ export interface AcpHost {
   /** Ends every client and its adapter process; the host and its warm spare stay. */
   closeClients(): void;
   close(): Promise<void>;
+  /** Starts a session the host holds itself (acp-hosted-session.ts): a view of the pane then
+   *  attaches to it, and prompts (POST /api/prompt) go to it. Resolves with its id. */
+  startHostedSession(existing?: string): Promise<string>;
+  /** Prompts the host's own session; resolves when the turn ends. */
+  hostedPrompt(text: string): Promise<void>;
+  /** Resolves when a view attaches to the host's session, or after `timeoutMs`. */
+  viewAttached(timeoutMs: number): Promise<boolean>;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -264,6 +272,14 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   let nextClient = 1;
   let spare: ChildProcess | undefined;
   let closed = false;
+  let hosted: HostedSession | undefined;
+  let hostedView: { ws: WebSocket; viewId?: string } | undefined;
+  const attachWaiters = new Set<() => void>();
+  const hostedPrompt = async (text: string) => {
+    if (!hosted?.alive) throw new Error("the host holds no session");
+    const stopReason = await hosted.prompt(text);
+    log(`hosted turn ended (${stopReason ?? "no reason"})`);
+  };
 
   const startAgent = (): ChildProcess => {
     const child = spawn(options.agentCommand.command, options.agentCommand.args, {
@@ -277,11 +293,11 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     child.stderr?.on("data", (data: Buffer) => log(`agent ${child.pid}: ${data.toString().trimEnd()}`));
     return child;
   };
-  const takeAgent = (): ChildProcess => {
+  const takeAgent = (keepSpare = true): ChildProcess => {
     const ready = spare && spare.exitCode === null && spare.signalCode === null ? spare : undefined;
     spare = undefined;
     const child = ready ?? startAgent();
-    if (options.warmSpare && !closed) setImmediate(() => { if (!closed && !spare) spare = startAgent(); });
+    if (keepSpare && options.warmSpare && !closed) setImmediate(() => { if (!closed && !spare) spare = startAgent(); });
     return child;
   };
 
@@ -293,6 +309,22 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     }
     if (request.method === "POST" && (request.url === "/api/handoff" || request.url === "/api/return")) {
       handleControl(request, response, token, options.handoff);
+      return;
+    }
+    // A line for the agent, as typed into its TUI: the host's own session takes it as a prompt.
+    if (request.method === "POST" && request.url === "/api/prompt") {
+      const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+      if (!tokensMatch(token, auth)) {
+        response.writeHead(401, { "Cache-Control": "no-store" }).end();
+        return;
+      }
+      readJson(request).then((body) => {
+        const text = (body as { text?: unknown } | undefined)?.text;
+        if (typeof text !== "string" || !text.trim()) { sendJson(response, 400, { message: "A prompt is needed." }); return; }
+        if (!hosted?.alive || !hosted.sessionId) { sendJson(response, 409, { message: "The host holds no session of the agent to prompt." }); return; }
+        void hostedPrompt(text).catch((error: unknown) => log(`hosted prompt failed: ${error instanceof Error ? error.message : String(error)}`));
+        sendJson(response, 202, { sessionId: hosted.sessionId });
+      }, () => sendJson(response, 400, { message: "The body is not JSON." }));
       return;
     }
     if (handleBridge(request, response, {
@@ -355,6 +387,35 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     const takesOver = url.searchParams.get("takeover") === "1";
     // A view's own id, the same across reloads of its page: a view that loads again is not another.
     const viewId = url.searchParams.get("view") ?? undefined;
+    if (hosted?.alive) {
+      const session = hosted;
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        const client = nextClient++;
+        log(`view ${client} attached to the host's session`);
+        for (const waiter of [...attachWaiters]) waiter();
+        const previous = hostedView;
+        hostedView = { ws, viewId };
+        const attached: HostedView = session.attach(
+          (line) => { if (ws.readyState === ws.OPEN) ws.send(line); },
+          () => {
+            if (!previous || previous.ws.readyState !== previous.ws.OPEN) return;
+            // The same view loading again is not told; another is told its session went elsewhere.
+            if (previous.viewId === undefined || previous.viewId !== viewId) {
+              previous.ws.send(JSON.stringify({ jsonrpc: "2.0", method: TAKEN_OVER_METHOD, params: {} }));
+            }
+            previous.ws.close(TAKEN_OVER_CLOSE_CODE, "the session is open in another view");
+          },
+        );
+        ws.on("message", (data, isBinary) => { if (!isBinary) attached.fromView(data.toString()); });
+        ws.on("close", (code) => {
+          log(`view ${client} closed (${code})`);
+          attached.detach();
+          if (hostedView?.ws === ws) hostedView = undefined;
+        });
+        ws.on("error", (error) => log(`client error: ${error.message}`));
+      });
+      return;
+    }
     wss.handleUpgrade(request, socket, head, (ws) => {
       const client = nextClient++;
       const view: OpenView = { sessions: new SessionTracker(), viewId };
@@ -421,6 +482,10 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   log(`listening on ${url}`);
 
   const closeClients = () => {
+    const hadHosted = hosted !== undefined;
+    hosted = undefined;
+    hostedView = undefined;
+    if (hadHosted && options.warmSpare && !closed && !spare) setTimeout(() => { if (!closed && !spare) spare = startAgent(); }, 3_000);
     for (const client of wss.clients) client.close(1001, "the session went back to the terminal");
     for (const child of children) {
       if (child === spare) continue;
@@ -434,6 +499,40 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     token,
     metadataPath,
     closeClients,
+    hostedPrompt,
+    viewAttached(timeoutMs) {
+      if (hostedView) return Promise.resolve(true);
+      return new Promise((resolveAttached) => {
+        const done = (attached: boolean) => { attachWaiters.delete(onAttach); clearTimeout(timer); resolveAttached(attached); };
+        const onAttach = () => done(true);
+        const timer = setTimeout(() => done(false), timeoutMs);
+        attachWaiters.add(onAttach);
+      });
+    },
+    async startHostedSession(existing?: string) {
+      // No spare beside it: the views attach to this one, and two of some agents starting at
+      // once fight over their store (OpenCode: "database is locked").
+      const child = takeAgent(false);
+      log(`the host starts a session of its own, agent ${child.pid}`);
+      const session = new HostedSession(child, {
+        onAgentLine: (line) => {
+          diagnostics.message(0, "agent→host", line);
+          activity.agentLine(0, line);
+          activityChanged();
+          options.onAgentLine?.(line);
+        },
+        onClientLine: (line) => {
+          diagnostics.message(0, "host→agent", line);
+          activity.clientLine(0, line);
+          activityChanged();
+          options.onClientLine?.(line);
+        },
+        log,
+      });
+      child.once("exit", (code, signal) => log(`agent ${child.pid} exited (${code ?? signal})`));
+      hosted = session;
+      return await session.start(options.cwd, existing);
+    },
     async close() {
       if (closed) return;
       closed = true;
