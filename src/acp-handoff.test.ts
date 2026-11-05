@@ -43,6 +43,18 @@ describe("acp hand-off", () => {
   });
 });
 
+describe("the session a TUI command picks", () => {
+  it("is the id it names, unknown when it names none, and none for a new session", () => {
+    const claude = ACP_AGENTS["claude-acp"].pickedSession!;
+    expect(claude("claude --model opus")).toBeUndefined();
+    expect(claude("claude --resume abc-1")).toBe("abc-1");
+    expect(claude("claude --session-id=abc-2 --model opus")).toBe("abc-2");
+    expect(claude("claude --continue")).toBe("unknown");
+    expect(claude("claude --resume")).toBe("unknown");
+    expect(ACP_AGENTS.opencode.pickedSession!("opencode --fork ses_1")).toBe("unknown");
+  });
+});
+
 describe("a session Claude Code named but never wrote", () => {
   it("is known by its file in Claude's projects", () => {
     const dir = mkdtempSync(join(tmpdir(), "claude-config-"));

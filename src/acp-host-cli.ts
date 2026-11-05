@@ -61,6 +61,9 @@ export interface AcpAgentEntry {
    * (its options stay, a resume it carried is replaced). Absent for a live agent (Codex).
    */
   resume?(tuiCommand: string, sessionId: string): string;
+  /** Hand-off agents: the session the TUI command picks: its id, "unknown" for one it picks
+   *  without naming it (--continue), none for a new one. */
+  pickedSession?(tuiCommand: string): string | "unknown" | undefined;
   /** Hand-off agents: the file the agent holds while a process has the session open. */
   sessionLock?(sessionId: string): string;
   /** The agent's own logs, whose last lines go into the view's diagnostics. */
@@ -94,6 +97,34 @@ function resumeWith(
     kept.push(word);
   }
   return (sessionId) => [...kept, ...add(sessionId).map(shellQuote)].join(" ");
+}
+
+/** A hand-off agent's options that pick a session: those with a session id, those without one,
+ *  and how its TUI resumes one. */
+function sessionOptions(
+  withValue: string[],
+  flags: string[],
+  add: (sessionId: string) => string[],
+): Pick<AcpAgentEntry, "resume" | "pickedSession"> {
+  return {
+    resume: (tuiCommand, sessionId) => resumeWith(tuiCommand, withValue, flags, add)(sessionId),
+    pickedSession: (tuiCommand) => {
+      const words = tuiCommand.trim().split(/\s+/).filter(Boolean);
+      for (let index = 0; index < words.length; index += 1) {
+        const word = words[index];
+        // A fork is a new session from another: which one only the agent knows.
+        if (word === "--fork" || word.startsWith("--fork=")) return "unknown";
+        const inline = withValue.find((option) => word.startsWith(`${option}=`));
+        if (inline) return word.slice(inline.length + 1).replace(/^['"]|['"]$/g, "") || "unknown";
+        if (withValue.includes(word)) {
+          const next = words[index + 1];
+          return next && !next.startsWith("-") ? next.replace(/^['"]|['"]$/g, "") : "unknown";
+        }
+        if (flags.includes(word)) return "unknown";
+      }
+      return undefined;
+    },
+  };
 }
 
 /** The executable of the pane's command when it is the agent's, else the agent's name on PATH. */
@@ -194,8 +225,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
       if (!resolved) throw new Error("claude-acp needs Claude Code installed (`claude` on PATH)");
       return bundledAdapter(CLAUDE_ACP_COMMAND, { CLAUDE_CODE_EXECUTABLE: resolved });
     },
-    resume: (tuiCommand, sessionId) =>
-      resumeWith(tuiCommand, ["--resume", "-r", "--session-id"], ["--continue", "-c"], (id) => ["--resume", id])(sessionId),
+    ...sessionOptions(["--resume", "-r", "--session-id"], ["--continue", "-c"], (id) => ["--resume", id]),
     // Claude Code reports its session as it starts, and writes it with the first prompt:
     // ~/.claude/projects/<project>/<session>.jsonl.
     sessionWritten: (sessionId) => {
@@ -213,8 +243,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     stateAgent: "opencode",
     tested: true,
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "opencode"), args: ["acp"], env: { ...process.env } }),
-    resume: (tuiCommand, sessionId) =>
-      resumeWith(tuiCommand, ["--session", "-s"], ["--continue", "-c", "--fork"], (id) => ["--session", id])(sessionId),
+    ...sessionOptions(["--session", "-s"], ["--continue", "-c", "--fork"], (id) => ["--session", id]),
   },
   "pi-acp": {
     id: "pi-acp",
@@ -228,8 +257,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
         ? { command: installed, args: [], env: { ...process.env } }
         : { command: "npx", args: ["-y", "pi-acp@0.0.34"], env: { ...process.env } };
     },
-    resume: (tuiCommand, sessionId) =>
-      resumeWith(tuiCommand, ["--session", "--session-id", "--fork"], ["--continue", "-c", "--resume", "-r"], (id) => ["--session", id])(sessionId),
+    ...sessionOptions(["--session", "--session-id", "--fork"], ["--continue", "-c", "--resume", "-r"], (id) => ["--session", id]),
   },
   "github-copilot-cli": {
     id: "github-copilot-cli",
@@ -239,8 +267,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     // Copilot 0.0.406 answers initialize without loadSession, so it cannot take a session over;
     // the view says so. Its changelog has ACP sessions resumed from 1.0.95.
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "copilot"), args: copilotAcpArgs(tuiCommand), env: { ...process.env } }),
-    resume: (tuiCommand, sessionId) =>
-      resumeWith(tuiCommand, ["--resume"], ["--continue"], (id) => ["--resume", id])(sessionId),
+    ...sessionOptions(["--resume"], ["--continue"], (id) => ["--resume", id]),
   },
   kiro: {
     id: "kiro",
@@ -248,8 +275,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     stateAgent: "kiro",
     tested: false,
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "kiro-cli"), args: kiroAcpArgs(tuiCommand), env: { ...process.env } }),
-    resume: (tuiCommand, sessionId) =>
-      resumeWith(tuiCommand, ["--resume-id"], ["--resume"], (id) => ["--resume-id", id])(sessionId),
+    ...sessionOptions(["--resume-id"], ["--resume"], (id) => ["--resume-id", id]),
     // Kiro keeps <session>.lock beside a session while a process has it open (its TUI or an ACP
     // agent), and logs to $TMPDIR/kiro-log/kiro-chat.log (kiro.dev/docs/cli/acp).
     sessionLock: (sessionId) => join(homedir(), ".kiro", "sessions", "cli", `${sessionId}.lock`),

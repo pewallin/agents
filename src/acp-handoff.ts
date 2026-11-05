@@ -150,8 +150,11 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   let sessionId: string | undefined;
   /** The session a view started and prompted in, when the TUI had none to give. */
   let startedSession: string | undefined;
-  /** The session the TUI went on with when the view gave it back: "current" is that one. */
-  let tuiSession: string | undefined;
+  /** The session the TUI has, as far as its command says: "current" is that one. Unknown for a
+   *  command that picks one without naming it (--continue): then only the app's id will do. */
+  const picked = agent.pickedSession?.(tuiCommand);
+  let tuiSession: string | undefined = picked === "unknown" ? undefined : picked;
+  let tuiSessionUnknown = picked === "unknown";
   let tui: ChildProcess | undefined;
   let reader: Interface | undefined;
   let host: AcpHost | undefined;
@@ -197,6 +200,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     sessionId = undefined;
     startedSession = undefined;
     tuiSession = id;
+    tuiSessionUnknown = false;
     startTui(id ? agent.resume(tuiCommand, id) : tuiCommand);
   };
 
@@ -211,6 +215,9 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     const state = reportedAgentState(agent.stateAgent, paneId);
     if (state && BUSY_STATES.has(state)) {
       return { status: 409, message: `${agent.name} is ${state === "working" ? "working" : "waiting for an answer"} in the terminal; switch when it is idle.` };
+    }
+    if (id === "current" && tuiSessionUnknown) {
+      return { status: 409, message: `${agent.name} has not said which session it has open; switch once it has run a turn.` };
     }
     mode = "switching";
     const asked = id === "current" ? tuiSession : id;
@@ -277,8 +284,11 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       log(`host did not start: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  if (input.startInView && host) {
-    log(`${agent.name} starts in the view`);
+  // A command that picks a session without naming it starts in the terminal: the view would not
+  // know which one to open.
+  if (input.startInView && host && !tuiSessionUnknown) {
+    sessionId = tuiSession;
+    log(`${agent.name} starts in the view${sessionId ? ` on session ${sessionId}` : ""}`);
     // The app knows the pane's agent from its state before any TUI or hook reports it.
     reportViewActivity(agent.stateAgent, paneId)("idle");
     inView();
