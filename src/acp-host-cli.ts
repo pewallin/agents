@@ -13,6 +13,7 @@
 //
 // They run before the rest of the CLI loads: a session's host stays up for the pane's lifetime,
 // and an adapter's stdout is its protocol channel, which nothing else may write to.
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -280,6 +281,18 @@ function selfExecutable(runtimeTempDir: string): string {
   return wrapper;
 }
 
+/** The pane option the app sets on an agent pane it opens in its ACP view (Settings > Agents >
+ *  Open agents in): a hand-off agent then starts in the view, its TUI on the way back. */
+export const OPEN_IN_OPTION = "@agents_open_in";
+
+function opensInView(paneId: string): boolean {
+  try {
+    return execFileSync("tmux", ["show-options", "-p", "-v", "-t", paneId, OPEN_IN_OPTION], { encoding: "utf8", timeout: 3_000 }).trim() === "acp-view";
+  } catch {
+    return false;
+  }
+}
+
 export async function runAcpSessionCommand(args: string[], runtimeTempDir: string): Promise<never> {
   const agentId = option(args, "--agent") ?? "";
   const agent = ACP_AGENTS[agentId];
@@ -311,14 +324,16 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
 
   if (tuiCommand) {
     // The TUI runs whatever happens to the view: a host that cannot start only costs the view.
+    const host = problem || !agentCommand ? undefined : { webRoot, agentCommand };
     return await runHandoffSession({
       agent,
       paneId,
       cwd,
       tuiCommand,
       runtimeTempDir,
-      host: problem || !agentCommand ? undefined : { webRoot, agentCommand },
+      host,
       problem,
+      startInView: host !== undefined && opensInView(paneId),
     });
   }
 

@@ -757,7 +757,18 @@ function SessionGate({ info }: { info: HostInfo }) {
   );
   useEffect(() => {
     if (sessionId !== "current") return;
-    hostJson<{ sessionId: string | null; persisted?: boolean; busy?: boolean }>("/api/session").then(
+    // An agent just started opens its session a moment after its host is up.
+    const current = async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await hostJson<{ sessionId: string | null; persisted?: boolean; busy?: boolean }>("/api/session");
+        } catch (error) {
+          if (attempt >= 60) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+    };
+    current().then(
       (value) => {
         // A hand-off agent whose TUI had no session yet: the view starts one.
         if (value.sessionId === null) { setResolved({ id: null, startsNew: true }); return; }

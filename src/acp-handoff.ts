@@ -29,6 +29,9 @@ export interface HandoffSessionInput {
   host?: { webRoot: string; agentCommand: { command: string; args: string[]; env: NodeJS.ProcessEnv } };
   /** Why there is no host, shown nowhere but the log: the TUI runs regardless. */
   problem?: string;
+  /** The app opens the pane in its ACP view: the agent starts there, its TUI only on the way
+   *  back, on the session the view started. */
+  startInView?: boolean;
 }
 
 const BUSY_STATES = new Set(["working", "approval", "question"]);
@@ -219,13 +222,18 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     const lock = sessionId ? agent.sessionLock?.(sessionId) : undefined;
     if (lock) log(await waitForLockRelease(lock) ? `lock ${lock} released` : `lock ${lock} still held after 3 s`);
     resetTerminal();
-    process.stdout.write(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go back to the terminal.\n`);
+    inView();
+    log(sessionId ? `handed session ${sessionId} to the view` : `the view starts a session (the TUI had none: ${id})`);
+    return { status: 200, session: sessionId ?? null };
+  };
+
+  /** The view has the session: the pane shows what happens there, and Enter goes back. */
+  const inView = () => {
+    process.stdout.write(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go on in the terminal.\n`);
     mode = "view";
     process.stdin.resume();
     reader = createInterface({ input: process.stdin });
     reader.on("line", () => { void giveBack(); });
-    log(sessionId ? `handed session ${sessionId} to the view` : `the view starts a session (the TUI had none: ${id})`);
-    return { status: 200, session: sessionId ?? null };
   };
 
   // Ctrl-C in the pane reaches this process too: it is the TUI's, or, in the view, a way back.
@@ -269,6 +277,13 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       log(`host did not start: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  startTui(tuiCommand);
+  if (input.startInView && host) {
+    log(`${agent.name} starts in the view`);
+    // The app knows the pane's agent from its state before any TUI or hook reports it.
+    reportViewActivity(agent.stateAgent, paneId)("idle");
+    inView();
+  } else {
+    startTui(tuiCommand);
+  }
   return await new Promise<never>(() => {});
 }
