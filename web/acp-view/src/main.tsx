@@ -15,6 +15,7 @@ import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, describeCall, duration, oneLine, shortPath, toolOutput, type FileChange, type Step, type Turn } from "./turns";
 import { ReviewPane } from "./review";
+import { quoted } from "./compose";
 import "./view.css";
 
 // Markdown (Streamdown) and code highlighting load after the first paint.
@@ -54,7 +55,11 @@ const sessionId = decodeURIComponent(location.pathname.match(/^\/thread\/([^/]+)
 const token = readToken();
 const themeParam = new URLSearchParams(location.search).get("theme");
 const darkQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
+/** In Agents Next the app sets the look (data-theme and the rest, see view.css) before the page
+ *  loads and on every change; in a browser the page follows the system. */
+const IN_APP = () => document.documentElement.dataset.agentsNext === "native";
 const applyTheme = () => {
+  if (IN_APP()) return;
   document.documentElement.dataset.theme = themeParam === "dark" || themeParam === "light"
     ? themeParam
     : darkQuery?.matches ? "dark" : "light";
@@ -528,8 +533,34 @@ function Ring({ percent }: { percent: number }) {
 type SelectChoice = { value?: string; name: string; options?: Array<{ value: string; name: string }> };
 const SHOWN_CATEGORIES = new Set(["mode", "model", "thought_level"]);
 
-function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now: number }) {
+function Dock({ session, info, now, onHeight }: { session: AcpSession; info: HostInfo; now: number; onHeight: (height: number) => void }) {
   const [draft, setDraft] = useState("");
+  const [flying, setFlying] = useState(false);
+  const dock = useRef<HTMLDivElement>(null);
+  // The conversation leaves room under its end for the field floating over it.
+  useLayoutEffect(() => {
+    const element = dock.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => onHeight(element.offsetHeight));
+    observer.observe(element);
+    onHeight(element.offsetHeight);
+    return () => observer.disconnect();
+  }, [onHeight]);
+  // Quote in Reply, from the app's context menu: the selection goes into the field as a quote.
+  useEffect(() => {
+    const onQuote = (event: Event) => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text ?? "";
+      setDraft((current) => quoted(text, current));
+      requestAnimationFrame(() => {
+        const element = input.current;
+        if (!element) return;
+        element.focus();
+        element.setSelectionRange(element.value.length, element.value.length);
+      });
+    };
+    window.addEventListener("agents-next-quote", onQuote);
+    return () => window.removeEventListener("agents-next-quote", onQuote);
+  }, []);
   const [queue, setQueue] = useState<string[]>([]);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [selectedHit, setSelectedHit] = useState(0);
@@ -585,6 +616,8 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
     if (!text) return;
     setDraft("");
     setMention(null);
+    setFlying(true);
+    setTimeout(() => setFlying(false), 360);
     if (how === "queue" && (prompting || working)) { setQueue((items) => [...items, text]); return; }
     void blocksFor(text).then((blocks) => (prompting || working ? session.steer(blocks) : session.prompt(blocks)));
   };
@@ -608,8 +641,9 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
   const busy = prompting || working;
 
   return (
-    <div className="dock">
+    <div className="dock" ref={dock}>
       <div className="inner">
+        <PlanLine />
         {mention && hits.length > 0 && (
           <div className="pop" role="listbox" aria-label="Add">
             {hits.map((hit, index) => (
@@ -696,17 +730,24 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
             })}
             <span className="sp" />
             {percent !== undefined && <Ring percent={percent} />}
-            {busy
-              ? <button className="go" type="button" aria-label="Stop" onClick={() => void session.cancel()}>
+            {busy && !draft.trim()
+              ? <button className="go stop" type="button" aria-label="Stop" onClick={() => void session.cancel()}>
                   <svg viewBox="0 0 14 14" aria-hidden="true"><rect x="3.8" y="3.8" width="6.4" height="6.4" rx="1.3" fill="currentColor" /></svg>
                 </button>
-              : <button className={`go${draft.trim() ? "" : " off"}`} type="submit" aria-label="Send" disabled={!draft.trim()}>
-                  <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 11.5v-9M3 6.5l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                </button>}
+              : <SendButton ready={Boolean(draft.trim())} flying={flying} label={busy ? "Steer" : "Send"} />}
           </div>
         </form>
       </div>
     </div>
+  );
+}
+
+/** Send, in ink: grey until there is something to send; the arrow flies off when it sends. */
+function SendButton({ ready, flying, label }: { ready: boolean; flying: boolean; label: string }) {
+  return (
+    <button className={`go${ready ? "" : " off"}${flying ? " fly" : ""}`} type="submit" aria-label={label} disabled={!ready && !flying}>
+      <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 11.5v-9M3 6.5l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    </button>
   );
 }
 
@@ -786,6 +827,12 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   };
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const main = useRef<HTMLDivElement>(null);
+  const onDockHeight = useCallback((height: number) => {
+    main.current?.style.setProperty("--dock-space", `${Math.round(height + 18)}px`);
+    const element = scroller.current;
+    if (element && pinned.current) element.scrollTop = element.scrollHeight;
+  }, []);
 
   useEffect(() => {
     document.title = title ? `${title} – ${info.agent.name}` : info.agent.name;
@@ -799,10 +846,10 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   const lastTurn = turns.at(-1);
   return (
     <div className={`view${review ? " reviewing" : ""}`} data-acp-ready="true" data-attention={state}>
-      <div className="main">
+      <div className="main" ref={main}>
         <div className="scroll-wrap">
         <ScrollThumb target={scroller} />
-        <div className="scroll" ref={scroller} onScroll={(event) => {
+        <div className="scroll under-dock" ref={scroller} onScroll={(event) => {
           const element = event.currentTarget;
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
         }}>
@@ -819,8 +866,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           </div>
         </div>
         </div>
-        <PlanLine />
-        <Dock session={session} info={info} now={now} />
+        <Dock session={session} info={info} now={now} onHeight={onDockHeight} />
       </div>
       {review && (
         <ReviewPane changes={review} cwd={info.cwd} agentName={info.agent.name}

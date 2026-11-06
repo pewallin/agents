@@ -1,8 +1,10 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <!-- First, before anything loads: the first frame has the theme's background, never white. -->
-    <style>html { color-scheme: light dark; background: #fcfcfd; } @media (prefers-color-scheme: dark) { html { background: #1c1c1f; } }</style>
+    <!-- First, before anything loads: in a browser the first frame has the theme's background,
+         never white; in Agents Next (data-agents-next, set before this is parsed) none, since the
+         app draws the pane's backdrop behind the page. -->
+    <style>html { color-scheme: light dark; } html:not([data-agents-next]) { background: #fcfcfd; } @media (prefers-color-scheme: dark) { html:not([data-agents-next]) { background: #1c1c1f; } }</style>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
