@@ -6,14 +6,14 @@
 //
 // The look: a reading column, the agent's text straight on the page, its work as quiet gray lines
 // that open on demand, one floating field to write in.
-import { StrictMode, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { StrictMode, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession } from "./acp-connection";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
-import { buildTurns, changesOf, describeCall, duration, shortPath, toolOutput, type FileChange, type Step, type Turn } from "./turns";
+import { buildTurns, changesOf, describeCall, duration, oneLine, shortPath, toolOutput, type FileChange, type Step, type Turn } from "./turns";
 import { ReviewPane } from "./review";
 import "./view.css";
 
@@ -230,15 +230,19 @@ function ToolLine({ call, cwd }: { call: ToolCall; cwd: string }) {
   } else if (call.startedAt !== undefined && call.endedAt !== undefined && call.kind === "execute") {
     meta = duration(call.endedAt - call.startedAt).replace(/^0 s$/, "< 1 s");
   }
-  const canOpen = Boolean(output);
+  // The row shows one line of the command or title; a longer one opens in full.
+  const line = oneLine(target.replace(/`([^`]*)`/g, "$1"));
+  const whole = line !== target.trim() ? target : null;
+  const canOpen = Boolean(output) || whole !== null;
   return (
     <>
       <div className={`ln${canOpen ? " can-open" : ""}`} onClick={() => canOpen && setOpen(!open)} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
         onKeyDown={(event) => { if (canOpen && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setOpen(!open); } }}>
         {verb && <span className="v">{verb}</span>}
-        <span className="t">{target}</span>
+        <span className="t" title={whole ? undefined : line}>{line}</span>
         {meta !== null && <span className="m">{meta}</span>}
       </div>
+      {open && whole && <pre className="out cmd">{whole}</pre>}
       {open && output && <pre className="out">{output.length > 6000 ? `${output.slice(0, 6000)}\n…` : output}</pre>}
     </>
   );
@@ -249,8 +253,15 @@ function changesForCall(call: ToolCall): FileChange[] {
 }
 
 function StepLine({ step, cwd }: { step: Step; cwd: string }) {
-  if (step.type === "thought") return <div className="think">{step.text}</div>;
-  if (step.type === "remark") return <div className="remark">{step.text}</div>;
+  // Thinking and what the agent says along the way are markdown, as its answers are: Codex's
+  // reasoning headers (**Checking row counts**) are a quiet bold line, `code` is code.
+  if (step.type === "thought" || step.type === "remark") {
+    return (
+      <div className={step.type === "thought" ? "think" : "remark"}>
+        <Suspense fallback={<p>{step.text}</p>}><Markdown text={step.text} streaming={false} /></Suspense>
+      </div>
+    );
+  }
   return <ToolLine call={step.call} cwd={cwd} />;
 }
 
@@ -298,7 +309,12 @@ const FOLDED_MAX_PX = 400;
 
 /** A message you sent. A long one folds to its first lines, fading into the bubble, as in Claude;
  *  Show more opens it. */
-function YouMessage({ text, pending }: { text: string; pending?: boolean }) {
+/** A time as the view shows it: HH:MM, local. */
+function clockTime(at: number): string {
+  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function YouMessage({ text, pending, at }: { text: string; pending?: boolean; at?: number }) {
   const body = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(false);
   const [open, setOpen] = useState(false);
@@ -320,7 +336,10 @@ function YouMessage({ text, pending }: { text: string; pending?: boolean }) {
   }, [text]);
   const folded = folds && !open;
   return (
+    // The time shows on hover, as in Claude; a message replayed from the session's history has
+    // none (the agent does not say when it was sent), so it shows none rather than a wrong one.
     <div className={`you${pending ? " pending" : ""}${folds ? " folds" : ""}${folded ? " folded" : ""}`}>
+      {at !== undefined && <span className="when you-when">{clockTime(at)}</span>}
       <div ref={body} className="you-body" style={folded ? { maxHeight: limit } : undefined}>{text}</div>
       {folds && (
         <button type="button" className="you-more" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -338,7 +357,7 @@ function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: bo
     <>
       {turn.user && (turn.user.external
         ? <div className="you external">Sent from the terminal</div>
-        : <YouMessage text={turn.user.text} pending={turn.user.local} />)}
+        : <YouMessage text={turn.user.text} pending={turn.user.local} at={turn.user.at} />)}
       <Activity turn={turn} working={streaming && turn.answer.length === 0} stopped={stopped} cwd={cwd} />
       {turn.answer.length > 0 && (
         <div className="say">
@@ -350,6 +369,8 @@ function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: bo
         </div>
       )}
       {!streaming && <EditsLine changes={turn.changes} cwd={cwd} onReview={() => onReview(turn)} />}
+      {/* When the turn ended, quietly, for a turn the view saw happen. */}
+      {!streaming && turn.endedAt !== undefined && turn.answer.length > 0 && <div className="when turn-when">{clockTime(turn.endedAt)}</div>}
     </>
   );
 }
@@ -513,6 +534,16 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [selectedHit, setSelectedHit] = useState(0);
   const input = useRef<HTMLTextAreaElement>(null);
+  // The box fits its text after every change: typing, a paste, a cut or undo, and the clear after
+  // sending. Up to 40% of the view, then it scrolls inside; empty, it is one line again.
+  useLayoutEffect(() => {
+    const element = input.current;
+    if (!element) return;
+    element.style.height = "auto";
+    const limit = Math.max(80, Math.round(window.innerHeight * 0.4));
+    element.style.height = `${Math.min(element.scrollHeight, limit)}px`;
+    element.style.overflowY = element.scrollHeight > limit ? "auto" : "hidden";
+  }, [draft]);
   const prompting = useSession((s) => s.prompting);
   const working = useSession((s) => attention(s) === "working");
   const asking = useSession((s) => s.permissions.length > 0);
@@ -611,8 +642,6 @@ function Dock({ session, info, now }: { session: AcpSession; info: HostInfo; now
               setDraft(event.target.value);
               setMention(mentionAt(event.target.value, event.target.selectionStart ?? event.target.value.length));
               setSelectedHit(0);
-              event.target.style.height = "auto";
-              event.target.style.height = `${Math.min(event.target.scrollHeight, 240)}px`;
             }}
             onKeyDown={(event) => {
               if (mention && hits.length > 0) {

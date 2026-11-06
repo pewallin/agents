@@ -1,9 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { emptySession, reduce, type SessionAction } from "./session-state";
-import { buildTurns, changesOf, countLines, describeCall, duration, shortPath } from "./turns";
+import { buildTurns, changesOf, countLines, describeCall, duration, oneLine, shortPath } from "./turns";
 import { commentsMessage, diffRows } from "./review";
 
 const text = (t: string) => ({ type: "text" as const, text: t });
+
+describe("the activity trail", () => {
+  it("leaves out blank thinking and keeps one blank line between paragraphs", () => {
+    const actions: SessionAction[] = [
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Count rows"), messageId: "u1" } },
+      { type: "update", update: { sessionUpdate: "agent_thought_chunk", content: text("**Checking row counts**\n\n\n\nThen sum them.") } },
+      { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "ls", kind: "execute", status: "completed", rawInput: { command: "ls" } } },
+      { type: "update", update: { sessionUpdate: "agent_thought_chunk", content: text("   \n ") } },
+      { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t2", title: "wc", kind: "execute", status: "completed", rawInput: { command: "wc -l" } } },
+      { type: "update", update: { sessionUpdate: "agent_message_chunk", content: text("12 rows.") } },
+    ];
+    const state = actions.reduce(reduce, emptySession());
+    const [turn] = buildTurns(state);
+    expect(turn.steps.map((step) => step.type)).toEqual(["thought", "tool", "tool"]);
+    expect(turn.steps[0]).toMatchObject({ text: "**Checking row counts**\n\nThen sum them." });
+  });
+
+  it("shows a long command on one line, cut at a character with an ellipsis", () => {
+    const command = "python3 - <<'PY'\nimport os\nprint('👩‍👩‍👧‍👦' * 3)\nPY";
+    expect(oneLine(command, 400)).toBe("python3 - <<'PY' import os print('👩‍👩‍👧‍👦' * 3) PY");
+    const cut = oneLine("x".repeat(20) + "👩‍👩‍👧‍👦" + "y".repeat(20), 21);
+    expect(cut).toBe(`${"x".repeat(20)}👩‍👩‍👧‍👦…`);
+  });
+});
 
 describe("turns", () => {
   it("splits the session at what you wrote; remarks before more work join the steps, the last words are the answer", () => {

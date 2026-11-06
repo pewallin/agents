@@ -88,10 +88,11 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
       continue;
     }
     // Text before more work was said along the way: it joins the steps.
-    for (const remark of current.tail) current.turn.steps.push({ type: "remark", id: remark.id, text: remark.text });
+    // Blank text (a thinking chunk of whitespace, a stray empty paragraph) makes no step.
+    for (const remark of current.tail) if (remark.text.trim()) current.turn.steps.push({ type: "remark", id: remark.id, text: remark.text.trim() });
     current.tail = [];
     if (item.type === "thought") {
-      current.turn.steps.push({ type: "thought", id: item.id, text: item.text });
+      if (item.text.trim()) current.turn.steps.push({ type: "thought", id: item.id, text: item.text.trim().replace(/\n{3,}/g, "\n\n") });
       touch(item.at);
     } else {
       const call = state.toolCalls[item.id];
@@ -137,6 +138,15 @@ function stripVerb(title: string): string {
 }
 
 /** A path as people read it in a line: relative where it is under the working directory. */
+/** One line of a command or title for a tool's row: whitespace runs as one space, cut at a
+ *  character (never inside one) with an ellipsis. */
+export function oneLine(text: string, limit = 160): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : undefined;
+  const characters = segmenter ? [...segmenter.segment(flat)].map((part) => part.segment) : [...flat];
+  return characters.length > limit ? `${characters.slice(0, limit).join("").trimEnd()}…` : flat;
+}
+
 export function shortPath(path: string, cwd?: string): string {
   if (cwd && path.startsWith(cwd.endsWith("/") ? cwd : `${cwd}/`)) return path.slice(cwd.length).replace(/^\//, "");
   const parts = path.split("/");
