@@ -16,7 +16,7 @@ import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_pr
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
-import { acpHostMetadataPath, startAcpHost, type AcpHost } from "./acp-host.js";
+import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
 import { reportViewActivity, type AcpAgentEntry } from "./acp-host-cli.js";
 import { getStateDir } from "./paths.js";
 
@@ -53,11 +53,45 @@ export function reportedAgentState(stateAgent: string, paneId: string, stateDir 
   }
 }
 
-/** Prints what happens in the view as plain text: the prompts, the agent's answers, its tools. */
+/** Text from an agent as plain text for a terminal: no escape sequences, no control
+ *  characters but newline and tab. A pane's terminal parses every byte written to it; an
+ *  agent's text (a quoted log, a tool's output, a stray OSC) is not ours to send it. */
+export function plainText(text: string): string {
+  return text
+    // CSI, OSC, DCS/SOS/PM/APC strings and any other escape, 7-bit and 8-bit.
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]?/g, "")
+    .replace(/\x1b[\]PX^_][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
+    .replace(/[\x9b][0-?]*[ -/]*[@-~]?/g, "")
+    .replace(/[\x9d\x90\x98\x9e\x9f][\s\S]*?(?:\x07|\x9c|$)/g, "")
+    .replace(/\x1b[\s\S]?/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "")
+    // Lone surrogates make no character.
+    .replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "");
+}
+
+/** How many lines of a loaded session's history the pane shows; the view has all of it. */
+export const REPLAYED_LINES = 200;
+
+/**
+ * Prints what happens in the view as plain text: the prompts, the agent's answers, its tools.
+ * Everything it writes is plain text (plainText), wrapped at `width` columns by itself, and
+ * written in small pieces a moment apart: a terminal never gets a long line or a large burst.
+ * A loaded session's history is shown as its last REPLAYED_LINES lines.
+ */
 export class TranscriptPrinter {
   private role: "you" | "agent" | "tool" | undefined;
+  private column = 0;
+  private replay: string[] | undefined;
+  private queue = "";
+  private flushing = false;
 
-  constructor(private readonly write: (text: string) => void) {}
+  constructor(
+    private readonly write: (text: string) => void,
+    private readonly width: () => number = () => Math.max(20, Math.min(process.stdout.columns || 100, 240)),
+    private readonly pause: (next: () => void) => void = (next) => { setTimeout(next, 4); },
+    private readonly chunk = 2048,
+  ) {}
 
   agentLine(line: string): void {
     const update = parse(line)?.params?.update as Record<string, unknown> | undefined;
@@ -67,18 +101,19 @@ export class TranscriptPrinter {
       const text = textOf(update.content);
       if (!text) return;
       this.start(kind === "user_message_chunk" ? "you" : "agent");
-      this.write(text);
+      this.text(text);
     } else if (kind === "tool_call" && typeof update.title === "string") {
       this.role = "tool";
-      this.write(`\n  ⚙ ${update.title}`);
-    } else if (kind === "session_info_update" && typeof update.title === "string" && update.title.trim()) {
+      this.text(`\n  ⚙ ${update.title.replace(/\s+/g, " ")}`);
+    } else if (kind === "session_info_update" && typeof update.title === "string" && update.title.trim() && !this.replay) {
       this.title(update.title);
     }
   }
 
   /** The pane's title, as the agent's TUI sets it: tmux and the app show it for the pane. */
   title(text: string): void {
-    this.write(`\x1b]2;${text.replace(/[\x00-\x1f\x7f]/g, " ").trim()}\x07`);
+    const plain = plainText(text).replace(/\s+/g, " ").trim().slice(0, 120);
+    if (plain) this.out(`\x1b]2;${plain}\x07`);
   }
 
   clientLine(line: string): void {
@@ -88,14 +123,103 @@ export class TranscriptPrinter {
     const text = prompt.map(textOf).filter(Boolean).join("\n");
     if (!text) return;
     this.start("you");
-    this.write(text);
+    this.text(text);
+  }
+
+  /** Our own text for the pane (a notice, a terminal reset), in order with the transcript. */
+  say(text: string): void {
+    this.out(text);
+  }
+
+  /** Drops the history held back since `beginReplay`. */
+  dropReplay(): void {
+    this.replay = undefined;
+  }
+
+  /** What follows is a loaded session's history: held back, and shown by `endReplay`. */
+  beginReplay(): void {
+    this.replay = [];
+  }
+
+  /** Shows the end of the history held back since `beginReplay`. */
+  endReplay(): void {
+    const held = this.replay?.join("") ?? "";
+    this.replay = undefined;
+    const lines = held.replace(/^\n+|\n+$/g, "").split("\n");
+    const earlier = lines.length - REPLAYED_LINES;
+    const shown = earlier > 0 ? lines.slice(earlier) : lines;
+    if (earlier > 0) this.out(`(${earlier} earlier lines are in the ACP view)\n`);
+    if (shown.join("").trim()) this.out(`${shown.join("\n")}\n`);
+    this.role = undefined;
+    this.column = 0;
+  }
+
+  /** Flushes what is still queued; resolves once it is written. */
+  async drained(): Promise<void> {
+    while (this.queue || this.flushing) await new Promise((resolve) => this.pause(() => resolve(undefined)));
   }
 
   private start(role: "you" | "agent"): void {
     if (this.role === role) return;
     this.role = role;
-    this.write(role === "you" ? "\n\n› " : "\n\n• ");
+    this.text(role === "you" ? "\n\n› " : "\n\n• ");
   }
+
+  /** Agent text, made plain and wrapped at the pane's width. */
+  private text(text: string): void {
+    const width = this.width();
+    let out = "";
+    for (const character of plainText(text)) {
+      if (character === "\n") {
+        out += character;
+        this.column = 0;
+        continue;
+      }
+      const columns = character === "\t" ? 8 - (this.column % 8) : characterWidth(character);
+      if (this.column + columns > width) {
+        out += "\n";
+        this.column = 0;
+      }
+      out += character;
+      this.column += columns;
+    }
+    if (this.replay) this.replay.push(out);
+    else this.out(out);
+  }
+
+  private out(text: string): void {
+    if (!text) return;
+    this.queue += text;
+    if (!this.flushing) this.flush();
+  }
+
+  private flush(): void {
+    if (!this.queue) {
+      this.flushing = false;
+      return;
+    }
+    this.flushing = true;
+    // Never split a character's surrogate pair between two writes.
+    let size = Math.min(this.chunk, this.queue.length);
+    if (size < this.queue.length && /[\ud800-\udbff]/.test(this.queue[size - 1])) size -= 1;
+    const piece = this.queue.slice(0, size);
+    this.queue = this.queue.slice(size);
+    this.write(piece);
+    if (this.queue) this.pause(() => this.flush());
+    else this.flushing = false;
+  }
+}
+
+/** Columns a character takes in a terminal: two for wide ones (CJK, most emoji), else one. */
+function characterWidth(character: string): number {
+  const code = character.codePointAt(0) ?? 0;
+  if (code >= 0x300 && code <= 0x36f) return 0;
+  if (
+    (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3)
+    || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe30 && code <= 0xfe4f) || (code >= 0xff00 && code <= 0xff60)
+    || (code >= 0xffe0 && code <= 0xffe6) || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd)
+  ) return 2;
+  return 1;
 }
 
 function parse(line: string): { method?: string; params?: Record<string, unknown> } | undefined {
@@ -143,9 +267,18 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/** Whether a process is an `acp-session` (a pid can be another process's by now). */
+function isAcpSessionProcess(pid: number): boolean {
+  try {
+    return / acp-session( |$)/.test(execFileSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8", timeout: 3_000 }));
+  } catch {
+    return false;
+  }
+}
+
 /** Leaves the terminal as a shell has it after a full-screen program that was stopped. */
-function resetTerminal(): void {
-  process.stdout.write("\x1b[0m\x1b[?25h\x1b[?1049l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b>\x1b[2J\x1b[H");
+function resetTerminal(transcript: TranscriptPrinter): void {
+  transcript.say("\x1b[0m\x1b[?25h\x1b[?1049l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b>\x1b[2J\x1b[H");
   if (process.stdin.isTTY) spawnSync("stty", ["sane"], { stdio: "inherit" });
 }
 
@@ -209,8 +342,10 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     reader = undefined;
     process.stdin.pause();
     host?.closeClients();
-    process.stdout.write(`\n\nBack to ${agent.name} in the terminal…\n`);
-    resetTerminal();
+    transcript.say(`\n\nBack to ${agent.name} in the terminal…\n`);
+    resetTerminal(transcript);
+    // All of the transcript is written before the TUI writes to the pane: one writer at a time.
+    await transcript.drained();
     mode = "tui";
     const id = sessionId ?? startedSession;
     sessionId = undefined;
@@ -260,7 +395,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     // session/load would find it still in use.
     const lock = sessionId ? agent.sessionLock?.(sessionId) : undefined;
     if (lock) log(await waitForLockRelease(lock) ? `lock ${lock} released` : `lock ${lock} still held after 3 s`);
-    resetTerminal();
+    resetTerminal(transcript);
     // The host holds the session while the view has it: the view attaches to it, and lines for
     // the agent (its coordinator's, its watches') reach it as prompts through the host.
     const hostedId = await hostSession(sessionId);
@@ -268,6 +403,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       const back = sessionId;
       mode = "tui";
       sessionId = undefined;
+      await transcript.drained();
       startTui(back ? agent.resume!(tuiCommand, back) : tuiCommand);
       return { status: 502, message: `${agent.name} could not open its session in the view; it goes on in the terminal.` };
     }
@@ -282,12 +418,15 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     if (!host) return undefined;
     mode = "view";
     hostedStarting = true;
+    // A loaded session replays its history: the pane shows its end once the view has it (inView).
+    if (existing) transcript.beginReplay();
     try {
       const id = await host.startHostedSession(existing);
       setHosted(true);
       return id;
     } catch (error) {
       log(`the host's session did not start: ${error instanceof Error ? error.message : String(error)}`);
+      transcript.dropReplay();
       host.closeClients();
       return undefined;
     } finally {
@@ -298,7 +437,8 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   /** The view has the session: the pane shows what happens there, and Enter goes back. */
   const inView = () => {
     transcript.title(agent.name);
-    process.stdout.write(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go on in the terminal.\n`);
+    transcript.say(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go on in the terminal.\n`);
+    transcript.endReplay();
     mode = "view";
     process.stdin.resume();
     reader = createInterface({ input: process.stdin });
@@ -314,7 +454,14 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     });
   }
 
-  if (input.host) {
+  // A pane whose terminal went away (the pane closed) takes no more writes: that ends nothing.
+  process.stdout.on("error", (error) => log(`the pane took no more output: ${error.message}`));
+  // One host per pane: another that still runs for it keeps it, and this agent runs in its terminal.
+  const other = readAcpHostMetadata(acpHostMetadataPath(runtimeTempDir, paneId));
+  const otherRuns = other !== undefined && other.processId !== process.pid && processAlive(other.processId)
+    && isAcpSessionProcess(other.processId);
+  if (otherRuns) log(`host ${other.processId} still serves ${paneId}: no second host`);
+  if (input.host && !otherRuns) {
     try {
       host = await startAcpHost({
         paneId,

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ACP_AGENTS } from "./acp-host-cli.js";
-import { reportedAgentState, TranscriptPrinter } from "./acp-handoff.js";
+import { plainText, REPLAYED_LINES, reportedAgentState, TranscriptPrinter } from "./acp-handoff.js";
 
 describe("acp hand-off", () => {
   it("resumes each agent's TUI on the session, keeping the pane's own options", () => {
@@ -43,6 +43,61 @@ describe("acp hand-off", () => {
     out = "";
     printer.agentLine(update("session_info_update", { title: "Fix the\nlogin" }));
     expect(out).toBe("\x1b]2;Fix the login\x07");
+  });
+});
+
+describe("what the pane's transcript writes", () => {
+  const update = (sessionUpdate: string, extra: object) =>
+    JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s", update: { sessionUpdate, ...extra } } });
+  const say = (text: string) => update("agent_message_chunk", { content: { type: "text", text } });
+
+  it("is plain text: no escape sequences or control characters from an agent", () => {
+    expect(plainText("a\x1b[31mred\x1b[0m b")).toBe("ared b");
+    expect(plainText("\x1b]8;;https://x.test\x07link\x1b]8;;\x1b\\ ok")).toBe("link ok");
+    expect(plainText("\x1bPq#0;2;0;0;0#0~~~\x1b\\sixel")).toBe("sixel");
+    expect(plainText("\x9b31mc1\x9d0;t\x07x")).toBe("c1x");
+    expect(plainText("bell\x07 nul\x00 cr\r\nline\ttab\x7f")).toBe("bell nul cr\nline\ttab");
+    expect(plainText("emoji 🎉 wide 漢字 \ud800 lone")).toBe("emoji 🎉 wide 漢字  lone");
+    expect(plainText("cut off \x1b[")).toBe("cut off ");
+  });
+
+  it("wraps long lines itself, counting wide characters as two columns", () => {
+    let out = "";
+    const printer = new TranscriptPrinter((text) => { out += text; }, () => 10, (next) => next());
+    printer.agentLine(say("0123456789abcdef"));
+    printer.agentLine(say("\n漢字漢字漢字"));
+    expect(out).toBe("\n\n• 01234567\n89abcdef\n漢字漢字漢\n字");
+    expect(out.split("\n").every((line) => line.length <= 10)).toBe(true);
+  });
+
+  it("writes a large answer in small pieces, a pause apart", async () => {
+    const pieces: string[] = [];
+    const pauses: Array<() => void> = [];
+    const printer = new TranscriptPrinter((text) => { pieces.push(text); }, () => 80, (next) => { pauses.push(next); }, 1024);
+    printer.agentLine(say("x".repeat(5000)));
+    // Only the first piece goes at once; the rest wait for their pauses.
+    expect(pieces.join("").length).toBeLessThanOrEqual(1024 + 4);
+    while (pauses.length) pauses.shift()!();
+    expect(pieces.length).toBeGreaterThan(5);
+    expect(pieces.every((piece) => piece.length <= 1024)).toBe(true);
+    expect(pieces.join("").replace(/\n|• /g, "")).toBe("x".repeat(5000));
+  });
+
+  it("shows only the end of a loaded session's history, and says the view has the rest", () => {
+    let out = "";
+    const printer = new TranscriptPrinter((text) => { out += text; }, () => 200, (next) => next(), 1 << 20);
+    printer.beginReplay();
+    for (let index = 0; index < 300; index += 1) printer.agentLine(say(`line ${index}\n`));
+    printer.agentLine(update("session_info_update", { title: "old title" }));
+    expect(out).toBe("");
+    printer.say("Copilot is in the ACP view.\n");
+    printer.endReplay();
+    const lines = out.trimEnd().split("\n");
+    expect(lines[0]).toBe("Copilot is in the ACP view.");
+    expect(lines[1]).toMatch(/^\(\d+ earlier lines are in the ACP view\)$/);
+    expect(lines.length).toBe(REPLAYED_LINES + 2);
+    expect(lines.at(-1)).toBe("line 299");
+    expect(out).not.toContain("old title");
   });
 });
 
