@@ -88,6 +88,18 @@ describe("acp-host", () => {
     expect(status).toBe(403);
   });
 
+  it("answers a loopback address on another port, as a tunnel from the phone arrives", async () => {
+    const h = await start();
+    const port = new URL(h.url).port;
+    const { request } = await import("node:http");
+    const status = (host: string) => new Promise<number>((resolve) => {
+      request({ host: "127.0.0.1", port, path: "/", headers: { Host: host } }, (res) => resolve(res.statusCode ?? 0)).end();
+    });
+    expect(await status("127.0.0.1:61234")).toBe(200);
+    expect(await status("localhost:61234")).toBe(200);
+    expect(await status("127.0.0.1.evil.example:61234")).toBe(403);
+  });
+
   it("tells the pane's working directory only to a holder of the token", async () => {
     const h = await start();
     expect((await fetch(`${h.url}/api/info`)).status).toBe(401);

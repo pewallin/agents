@@ -288,6 +288,9 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 @media (max-width: 520px) {
   .col { padding: 20px 16px var(--dock-space, 150px); }
   .dock { padding: 0 10px 10px; }
+  /* On a phone the field's options wrap; the send button stays at the end of the row. */
+  .box .row { flex-wrap: wrap; row-gap: 2px; }
+  .box .row .sp { flex: 1 0 0; }
 }
 
 /* What went wrong, with the agent's own words and the diagnostics to send on. */

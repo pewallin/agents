@@ -184,12 +184,15 @@ function tokensMatch(expected: string, given: string | null | undefined): boolea
 }
 
 /** The host names this server answers to; anything else (DNS rebinding) is refused. */
-function allowedHosts(port: number): Set<string> {
-  return new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+/** The host answers only loopback addresses (no other name, so no DNS rebinding), on any port:
+ *  the phone reaches it through an SSH tunnel whose local port is another. The pane's token is
+ *  what lets a client in. */
+export function isLoopbackHost(host: string | undefined): boolean {
+  return /^(127\.0\.0\.1|localhost):\d{1,5}$/.test(host ?? "");
 }
 
-function allowedOrigins(port: number): Set<string> {
-  return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
+export function isLoopbackOrigin(origin: string | undefined): boolean {
+  return /^http:\/\/(127\.0\.0\.1|localhost):\d{1,5}$/.test(origin ?? "");
 }
 
 /** The last lines of a log file, or why there are none. */
@@ -316,7 +319,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
 
   const server: Server = createServer((request, response) => {
     const port = (server.address() as { port: number }).port;
-    if (!allowedHosts(port).has(request.headers.host ?? "")) {
+    if (!isLoopbackHost(request.headers.host)) {
       response.writeHead(403).end("forbidden host");
       return;
     }
@@ -384,8 +387,9 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     const origin = request.headers.origin ?? "";
     if (
       url.pathname !== "/acp"
-      || !allowedHosts(port).has(request.headers.host ?? "")
-      || !allowedOrigins(port).has(origin)
+      || !isLoopbackHost(request.headers.host)
+      // The page's own origin: the address it was loaded from, whichever port that is.
+      || !isLoopbackOrigin(origin) || origin !== `http://${request.headers.host}`
       || !tokensMatch(token, url.searchParams.get("token"))
     ) {
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
