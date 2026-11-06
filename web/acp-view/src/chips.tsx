@@ -22,7 +22,9 @@ export interface ChipHost {
   hostJson: <T>(path: string, body?: unknown) => Promise<T>;
   /** A URL of the host's own that a plain <img> may load (the token rides in the query). */
   rawURL: (path: string) => string;
-  open: (target: ChipTarget, options: { alternate: boolean; change?: FileChange }) => void;
+  /** `alternate`: ⌥ was held (the editor, the default browser); `command`: ⌘ was, which does
+   *  what a ⌘-click on the same link does in a terminal. */
+  open: (target: ChipTarget, options: { alternate: boolean; command?: boolean; change?: FileChange }) => void;
 }
 
 export const ChipHostContext = createContext<ChipHost | null>(null);
@@ -161,7 +163,7 @@ export function Chip({ target, label }: { target: ChipTarget; label?: ReactNode 
     event.preventDefault();
     event.stopPropagation();
     peek?.hide(true);
-    host?.open(target, { alternate: event.altKey, change });
+    host?.open(target, { alternate: event.altKey, command: event.metaKey, change });
   };
   const state = target.kind === "pane" ? target.state : undefined;
   return (

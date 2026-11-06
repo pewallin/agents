@@ -551,6 +551,11 @@ async function hostJson<T>(path: string, body?: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// The app's context menu opens a link beside the pane through the view's host (Open Beside).
+(window as unknown as { __agentsNextOpenBeside: (url: string) => void }).__agentsNextOpenBeside = (url) => {
+  void hostJson("/api/open-page", { url }).catch(() => window.open(url, "_blank"));
+};
+
 /** Sends a message to Agents Next, if the view is in it. */
 function postToApp(handler: "agentsNextACPLink" | "agentsNextACPQuickLook", body: Record<string, unknown>): boolean {
   const handlers = (window as unknown as { webkit?: { messageHandlers?: Record<string, { postMessage: (body: unknown) => void } | undefined> } }).webkit?.messageHandlers;
@@ -1041,7 +1046,16 @@ function useGitTurns(working: boolean, turnCount: number): Record<number, { from
 /** What a click on a chip does. In Agents Next: a file opens beside the pane (⌥ in the editor),
  *  a changed file opens this turn's diff beside it, a pane shows, an image opens in Quick Look, a
  *  link, a bead or a commit opens in a pane beside (a link with ⌥ in the default browser). */
-function openChip(target: ChipTarget, options: { alternate: boolean; change?: FileChange }, openReview: (changes: FileChange[]) => void) {
+function openChip(target: ChipTarget, options: { alternate: boolean; command?: boolean; change?: FileChange }, openReview: (changes: FileChange[]) => void) {
+  // ⌘-click does what it does on the same link in a terminal: a web page in the default browser,
+  // a file beside the pane, a pane shown.
+  if (options.command) {
+    if (target.kind === "url") { window.open(target.url, "_blank"); return; }
+    if (target.kind === "file" || target.kind === "dir" || target.kind === "image") {
+      postToApp("agentsNextACPLink", { href: `${target.path}${"line" in target && target.line ? `:${target.line}` : ""}` });
+      return;
+    }
+  }
   switch (target.kind) {
     case "file":
     case "dir":

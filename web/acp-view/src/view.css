@@ -21,7 +21,9 @@
   --hair: rgba(0, 0, 0, .09); --edge: rgba(0, 0, 0, .10);
   --tint: rgba(0, 0, 0, .05); --tint2: rgba(0, 0, 0, .09);
   --acc: var(--app-accent, #0a6cff);
-  --you: color-mix(in srgb, var(--acc) 8%, transparent);
+  /* The pane's own colour, when it has one, tints the bubbles; else the accent does. */
+  --hue: var(--app-tint, var(--acc));
+  --you: color-mix(in srgb, var(--hue) 10%, transparent);
   --codebg: rgba(0, 0, 0, .035); --field: rgba(255, 255, 255, .86); --pop: rgba(244, 244, 246, .92);
   --ink-on: #ffffff;
   --add: rgba(26, 127, 55, .10); --del: rgba(207, 34, 46, .09);
@@ -37,7 +39,7 @@
   --hair: rgba(255, 255, 255, .08); --edge: rgba(255, 255, 255, .07);
   --tint: rgba(255, 255, 255, .07); --tint2: rgba(255, 255, 255, .12);
   --acc: var(--app-accent, #4c9bff);
-  --you: color-mix(in srgb, var(--acc) 13%, transparent);
+  --you: color-mix(in srgb, var(--hue) 16%, transparent);
   --codebg: rgba(0, 0, 0, .22); --field: rgba(44, 44, 48, .88); --pop: rgba(40, 40, 44, .92);
   --ink-on: #2a2a2d;
   --add: rgba(86, 211, 100, .12); --del: rgba(255, 123, 114, .12);
@@ -50,7 +52,7 @@
   --fg: var(--app-text, #f2f2f5); --fg2: #d0d0d8; --dim: #b3b3bd; --faint: #7f7f8c;
   --hair: rgba(255, 255, 255, .10); --edge: rgba(255, 255, 255, .12);
   --tint: rgba(255, 255, 255, .09); --tint2: rgba(255, 255, 255, .16);
-  --you: color-mix(in srgb, var(--acc) 16%, transparent);
+  --you: color-mix(in srgb, var(--hue) 20%, transparent);
   --codebg: rgba(255, 255, 255, .06); --field: rgba(30, 30, 38, .62); --pop: rgba(36, 36, 44, .82);
   --ink-on: #22222a;
 }
@@ -83,7 +85,10 @@ button, summary, .status, .row, .edits, .when, .chev { -webkit-user-select: none
   transition: opacity .35s ease, width .15s ease; z-index: 2; cursor: default; }
 .thumb.on, .thumb:hover, .thumb.drag { opacity: .85; transition: opacity .1s ease, width .15s ease; }
 .thumb:hover, .thumb.drag { width: 9px; }
-.col { max-width: 720px; margin: 0 auto; padding: 22px 26px var(--dock-space, 150px); display: flex; flex-direction: column; gap: 14px; }
+/* The column grows with the type (about 900 px at 13 px) so wide panes use it: code, tables,
+   the steps and your messages take its whole width, while running text stops at about 100
+   characters a line, which still reads well. */
+.col { max-width: calc(var(--fs) * 70); margin: 0 auto; padding: 22px 26px var(--dock-space, 150px); display: flex; flex-direction: column; gap: 14px; }
 .col > * { flex-shrink: 0; }
 .empty, .notice { color: var(--dim); }
 .notice button.link { font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: default; }
@@ -105,6 +110,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 /* what the agent said */
 .say { display: flex; flex-direction: column; gap: 10px; overflow-wrap: anywhere; }
 .say p, .say ul, .say ol, .say h1, .say h2, .say h3, .say h4, .say blockquote, .say table { margin: 0; }
+.say p, .say li, .say blockquote, .note, .say h1, .say h2, .say h3, .say h4 { max-width: 100ch; }
 .say > div > * + * { margin-top: 10px; }
 .say ul, .say ol { padding-left: 20px; display: flex; flex-direction: column; gap: 3px; }
 .say li::marker { color: var(--faint); }
@@ -193,7 +199,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .ask .sub { font-size: calc(var(--fs) - 1.5px); color: var(--dim); margin-top: -5px; }
 .choices { display: flex; flex-direction: column; gap: 1px; margin: 0 -8px; }
 .choice { all: unset; cursor: default; display: flex; gap: 10px; align-items: baseline; padding: 5px 8px; border-radius: 8px; color: var(--fg2); }
-.choice:hover, .choice.sel { background: var(--tint2); color: var(--fg); }
+.choice:hover, .choice.sel { background: color-mix(in srgb, var(--hue) 14%, var(--tint2)); color: var(--fg); }
 .choice .k2 { font: calc(var(--fs-mono) - .5px) var(--mono); color: var(--faint); width: 10px; flex: none; }
 .plist { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; color: var(--fg); }
 .plist li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
@@ -204,7 +210,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 /* the field: floating */
 /* The field floats over the end of the conversation, which scrolls on under it. */
 .dock { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 18px 14px; pointer-events: none; z-index: 3; }
-.dock .inner { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; position: relative; pointer-events: auto; }
+.dock .inner { max-width: calc(var(--fs) * 66); margin: 0 auto; display: flex; flex-direction: column; gap: 6px; position: relative; pointer-events: auto; }
 .status { display: flex; align-items: center; gap: 10px; padding: 0 8px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
 .status .sp { flex: 1; }
 .status kbd { font: calc(var(--fs-mono) - 1px) var(--mono); color: var(--faint); }
@@ -336,7 +342,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .peek-code { font: calc(var(--fs-mono) - 1px)/1.55 var(--mono); background: var(--codebg); border-radius: 6px; padding: 4px 0; overflow: hidden; }
 .peek-code > div { padding: 0 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; color: var(--fg2); }
 .peek-code .no { display: inline-block; min-width: 3ch; margin-right: 10px; text-align: right; color: var(--faint); }
-.peek-code .hl { background: color-mix(in srgb, var(--acc) 14%, transparent); color: var(--fg); }
+.peek-code .hl { background: color-mix(in srgb, var(--hue) 16%, transparent); color: var(--fg); }
 .peek-code.diff .a { background: var(--add); color: var(--fg); }
 .peek-code.diff .d { background: var(--del); color: var(--fg); }
 .peek-code.diff .a .no { color: var(--green); }
@@ -379,7 +385,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 :root[data-theme="dark"] .code .cline span { color: var(--cd, var(--c, inherit)); }
 
 /* notes */
-.note { display: flex; gap: 9px; padding: 9px 12px; border-radius: 9px; background: color-mix(in srgb, var(--acc) 9%, transparent); font-size: calc(var(--fs) - .5px); }
+.note { display: flex; gap: 9px; padding: 9px 12px; border-radius: 9px; background: color-mix(in srgb, var(--hue) 10%, transparent); font-size: calc(var(--fs) - .5px); }
 .note > svg { width: 15px; height: 15px; color: var(--acc); flex: none; margin-top: 2px; }
 .note.warning, .note.caution { background: color-mix(in srgb, var(--orange) 10%, transparent); }
 .note.warning > svg, .note.caution > svg { color: var(--orange); }

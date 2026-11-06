@@ -65,14 +65,14 @@ export function appControlRequest(
   });
 }
 
-/** Opens a web page in a split beside the pane. */
+/** Opens a web page beside the pane: a tab in the slot right of it, or a split on the right. */
 export async function openPageBeside(target: AppControlTarget, paneId: string, url: string): Promise<void> {
   await appControlRequest(target, "control.invoke", {
     id: "workspace.open-web-page",
     pane: `local:${paneId}`,
     url,
-    placement: "split",
-    axis: "horizontal",
+    // As Codex opens things: a tab in the slot right of the pane, or a split on the right.
+    placement: "beside",
   });
 }
 
