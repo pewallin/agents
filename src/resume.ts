@@ -9,6 +9,7 @@ import { setTmuxPaneCommandMetadata } from "./tmux-pane-metadata.js";
 import { getSelfArgv } from "./paths.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
+import { handOffAgentId } from "./acp-restart.js";
 
 export type AgentSessionResumeCode =
   | "agent-not-idle"
@@ -219,14 +220,19 @@ function isCodexExecutable(executable?: string): boolean {
 }
 
 /**
- * Codex is started through `codex-session`, which gives the pane its own app-server: without
- * one the ACP view has nothing to share in a pane whose session was resumed.
+ * A resumed agent runs under the wrapper that serves its ACP view, as one the app starts does:
+ * Codex through `codex-session`, which gives the pane its own app-server, and every other agent
+ * with an ACP view through `acp-session --tui`, which hands its session to the view and back.
+ * Without it the pane has no view (tmux restore, a resume from the session history).
  */
 export function renderResumeRespawnCommand(argv: string[], options: ResumeRespawnOptions = {}): string {
   const agentCommand = renderShellCommand(argv);
+  const handOff = handOffAgentId(argv[0]);
   const command = options.agentsArgv?.length && isCodexExecutable(argv[0])
     ? renderShellCommand([...options.agentsArgv, "codex-session", "--command", agentCommand])
-    : agentCommand;
+    : options.agentsArgv?.length && handOff
+      ? renderShellCommand([...options.agentsArgv, "acp-session", "--agent", handOff, "--tui", agentCommand])
+      : agentCommand;
   return [
     `agents_prepend_path_dir() { [ -d "$1" ] || return 0; case ":$PATH:" in *":$1:"*) ;; *) PATH="$1\${PATH:+:$PATH}" ;; esac; }`,
     `agents_prepend_path_dir /opt/homebrew/bin`,

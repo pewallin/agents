@@ -21,6 +21,14 @@ const AGENTS: Record<string, { stateAgent: string; registryId: string; live: boo
   "kiro-cli": { stateAgent: "kiro", registryId: "kiro", live: false },
 };
 
+/** The ACP registry id an agent's executable hands its session over with (`acp-session --agent`),
+ *  for every agent with an ACP view but Codex, which shares its session live. */
+export function handOffAgentId(executable: string | undefined): string | undefined {
+  const name = basename(executable ?? "").toLowerCase();
+  const agent = AGENTS[name];
+  return agent && !agent.live ? agent.registryId : undefined;
+}
+
 const SHELLS = new Set(["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "-zsh", "-bash", "-sh", "-fish"]);
 const RUNTIMES = new Set(["node", "bun", "deno"]);
 const BUSY = new Set(["working", "approval", "question", "compacting"]);

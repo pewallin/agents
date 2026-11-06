@@ -1189,11 +1189,29 @@ describe("resume helpers", () => {
     expect(command).toContain(
       "exec /opt/node/bin/node /agents/dist/cli.js codex-session --command 'codex --dangerously-bypass-approvals-and-sandbox resume thread-123'",
     );
-    // Other agents, and a caller that cannot name this CLI, start as before.
-    expect(renderResumeRespawnCommand(["claude", "--resume", "session-1"], { agentsArgv }))
-      .toContain("exec claude --resume session-1");
+    // A caller that cannot name this CLI starts the agent as it is.
     expect(renderResumeRespawnCommand(["codex", "resume", "thread-123"], {}))
       .toContain("exec codex resume thread-123");
+  });
+
+  // tmux restore and a resume from the session history started these without their wrapper: the
+  // pane had no ACP view and only Restart in ACP Mode (a Kiro coordinator, 2026-11-06).
+  it("resumes every other agent with an ACP view under acp-session --tui", () => {
+    const agentsArgv = ["/opt/node/bin/node", "/agents/dist/cli.js"];
+    const cases: Array<[string[], string]> = [
+      [["claude", "--resume", "session-1"], "claude-acp"],
+      [["/opt/homebrew/bin/kiro-cli", "chat", "-a", "--v3", "--resume-id", "k1"], "kiro"],
+      [["opencode", "--session", "ses_1"], "opencode"],
+      [["pi", "--session", "p1"], "pi-acp"],
+      [["copilot", "--resume", "c1"], "github-copilot-cli"],
+    ];
+    for (const [argv, agent] of cases) {
+      const command = renderResumeRespawnCommand(argv, { agentsArgv });
+      expect(command).toContain(`exec /opt/node/bin/node /agents/dist/cli.js acp-session --agent ${agent} --tui `);
+      expect(command).toContain(argv.slice(1).join(" "));
+    }
+    // An agent without an ACP view starts as it is.
+    expect(renderResumeRespawnCommand(["gemini", "--resume", "g1"], { agentsArgv })).toContain("exec gemini --resume g1");
   });
 
   it("seeds resumed sessions as idle so stale working state cannot cross respawn boundaries", () => {
