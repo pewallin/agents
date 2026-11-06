@@ -13,7 +13,8 @@ import type { ContentBlock } from "@agentclientprotocol/sdk";
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession } from "./acp-connection";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
-import { buildTurns, changesOf, describeCall, duration, oneLine, shortPath, toolOutput, type FileChange, type Step, type Turn } from "./turns";
+import { buildTurns, changesOf, describeCall, duration, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
+import { Chip, ChipHostContext, fileTarget, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { quoted } from "./compose";
 import "./view.css";
@@ -302,7 +303,10 @@ function EditsLine({ changes, onReview, cwd }: { changes: FileChange[]; onReview
     <div className="edits">
       <span>{changes.length === 1 ? `1 file changed` : `${changes.length} files changed`}</span>
       <span className="n"><span className="add">+{added}</span> <span className="del">−{removed}</span></span>
-      <span className="files">{changes.slice(0, 4).map((change) => <span key={change.path} title={change.path}>{shortPath(change.path, cwd)}</span>)}</span>
+      <span className="files">
+        {changes.slice(0, 4).map((change) => <Chip key={change.path} target={fileTarget(change.path, shortPath(change.path, cwd))} />)}
+        {changes.length > 4 && <span className="more">+{changes.length - 4}</span>}
+      </span>
       <button className="tbtn" type="button" onClick={onReview}>Review</button>
     </div>
   );
@@ -358,8 +362,9 @@ function YouMessage({ text, pending, at }: { text: string; pending?: boolean; at
 function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void }) {
   const streaming = last && working;
   const stopped = useSession((s) => s.stoppedTurns?.includes(turn.id) ?? false);
+  const answerText = useMemo(() => turn.answer.map((item) => item.text).join("\n"), [turn.answer]);
   return (
-    <>
+    <TurnChangesContext.Provider value={turn.changes}>
       {turn.user && (turn.user.external
         ? <div className="you external">Sent from the terminal</div>
         : <YouMessage text={turn.user.text} pending={turn.user.local} at={turn.user.at} />)}
@@ -368,15 +373,21 @@ function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: bo
         <div className="say">
           {turn.answer.map((item, index) => (
             <Suspense key={item.id} fallback={<p className="plain">{item.text}</p>}>
-              <Markdown text={item.text} streaming={streaming && index === turn.answer.length - 1} />
+              {item.text && <Markdown text={item.text} streaming={streaming && index === turn.answer.length - 1} />}
+              {item.images && item.images.length > 0 && (
+                <div className="sent-images">
+                  {item.images.map((image, imageIndex) => <img key={imageIndex} alt="" src={`data:${image.mimeType};base64,${image.data}`} />)}
+                </div>
+              )}
             </Suspense>
           ))}
         </div>
       )}
+      {!streaming && answerText && <ResultStrip answer={answerText} changes={turn.changes} version={String(turn.endedAt ?? "")} />}
       {!streaming && <EditsLine changes={turn.changes} cwd={cwd} onReview={() => onReview(turn)} />}
       {/* When the turn ended, quietly, for a turn the view saw happen. */}
       {!streaming && turn.endedAt !== undefined && turn.answer.length > 0 && <div className="when turn-when">{clockTime(turn.endedAt)}</div>}
-    </>
+    </TurnChangesContext.Provider>
   );
 }
 
@@ -474,10 +485,21 @@ function Ask({ request, agentName, session, focused, cwd }: { request: Permissio
 
 interface MentionHit { kind: "file" | "pane"; path: string; note?: string }
 
-async function hostJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+async function hostJson<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(path, body === undefined
+    ? { headers: { Authorization: `Bearer ${token}` } }
+    : { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error(`host answered ${response.status}`);
   return response.json() as Promise<T>;
+}
+
+/** Sends a message to Agents Next, if the view is in it. */
+function postToApp(handler: "agentsNextACPLink" | "agentsNextACPQuickLook", body: Record<string, unknown>): boolean {
+  const handlers = (window as unknown as { webkit?: { messageHandlers?: Record<string, { postMessage: (body: unknown) => void } | undefined> } }).webkit?.messageHandlers;
+  const target = handlers?.[handler];
+  if (!target) return false;
+  target.postMessage(body);
+  return true;
 }
 
 /** What @ can add: the project's files, and the other panes of the pane's tmux session. */
@@ -772,7 +794,12 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   const permissions = useSession((s) => s.permissions);
   const state = useSession((s) => attention(s));
   const working = state === "working";
-  const turns = useMemo(() => buildTurns({ items, toolCalls }), [items, toolCalls]);
+  const builtTurns = useMemo(() => buildTurns({ items, toolCalls }), [items, toolCalls]);
+  const gitTurns = useGitTurns(working, builtTurns.length);
+  const turns = useMemo(() => builtTurns.map((turn, index) => {
+    const git = gitTurns[index];
+    return git ? { ...turn, changes: mergeChanges(turn.changes, git.files, { from: git.from, to: git.to }) } : turn;
+  }), [builtTurns, gitTurns]);
   const now = useNow(working);
   const [review, setReview] = useState<FileChange[] | null>(null);
   const myReviews = useRef(new Set<string>());
@@ -802,7 +829,15 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
 
   /** In the app the review opens as a pane beside this one (/api/open-review, through the app's
    *  app-control); elsewhere, or when the app cannot, it opens in the view. */
-  const openReview = async (changes: FileChange[]) => {
+  const openReview = async (given: FileChange[]) => {
+    // Files only git saw: their text before and after comes from the turn's snapshots.
+    const changes = await Promise.all(given.map(async (change) => {
+      if (change.edits.length > 0 || !change.snapshot) return change;
+      const versions = await hostJson<{ oldText: string | null; newText: string }>(
+        `/api/git/versions?from=${change.snapshot.from}&to=${change.snapshot.to}&path=${encodeURIComponent(change.path)}`,
+      ).catch(() => null);
+      return versions ? { ...change, edits: [versions] } : change;
+    }));
     if (!OPEN_REVIEW_BESIDE) { setReview(changes); return; }
     try {
       const created = await fetch("/api/review", {
@@ -825,6 +860,15 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
     }
     setReview(changes);
   };
+  const openReviewRef = useRef(openReview);
+  openReviewRef.current = openReview;
+  const chipHost = useMemo<ChipHost>(() => ({
+    cwd: info.cwd,
+    inApp: OPEN_REVIEW_BESIDE,
+    hostJson,
+    rawURL: (path) => `${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token ?? "")}`,
+    open: (target, options) => openChip(target, options, (changes) => void openReviewRef.current(changes)),
+  }), [info.cwd]);
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const main = useRef<HTMLDivElement>(null);
@@ -845,6 +889,8 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
 
   const lastTurn = turns.at(-1);
   return (
+    <ChipHostContext.Provider value={chipHost}>
+    <PeekLayer>
     <div className={`view${review ? " reviewing" : ""}`} data-acp-ready="true" data-attention={state}>
       <div className="main" ref={main}>
         <div className="scroll-wrap">
@@ -874,7 +920,67 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           onSend={(text) => { setReview(null); void (working ? session.steer : session.prompt)([{ type: "text", text }]); }} />
       )}
     </div>
+    </PeekLayer>
+    </ChipHostContext.Provider>
   );
+}
+
+/** Each turn's changes as git sees them: a snapshot of the working tree when the agent starts
+ *  working, compared with the tree when it stops (the host writes both with a temporary index).
+ *  Keyed by the turn's place in the conversation. Outside a git repository there are none. */
+function useGitTurns(working: boolean, turnCount: number): Record<number, { from: string; to: string; files: GitChange[] }> {
+  const [byTurn, setByTurn] = useState<Record<number, { from: string; to: string; files: GitChange[] }>>({});
+  const start = useRef<Promise<string | null> | null>(null);
+  const count = useRef(turnCount);
+  count.current = turnCount;
+  useEffect(() => {
+    if (!token) return;
+    if (working && !start.current) {
+      start.current = hostJson<{ tree: string | null }>("/api/git/snapshot", {}).then((value) => value.tree, () => null);
+    } else if (!working && start.current) {
+      const pending = start.current;
+      start.current = null;
+      void pending.then(async (from) => {
+        if (!from) return;
+        const changes = await hostJson<{ tree: string; files: Array<GitChange & { binary: boolean }> }>(`/api/git/changes?tree=${from}`).catch(() => null);
+        if (!changes) return;
+        // The turn that just ended is the last one now.
+        const index = count.current - 1;
+        setByTurn((current) => ({ ...current, [index]: { from, to: changes.tree, files: changes.files } }));
+      });
+    }
+  }, [working]);
+  return byTurn;
+}
+
+/** What a click on a chip does. In Agents Next: a file opens beside the pane (⌥ in the editor),
+ *  a changed file opens this turn's diff beside it, a pane shows, an image opens in Quick Look, a
+ *  link, a bead or a commit opens in a pane beside (a link with ⌥ in the default browser). */
+function openChip(target: ChipTarget, options: { alternate: boolean; change?: FileChange }, openReview: (changes: FileChange[]) => void) {
+  switch (target.kind) {
+    case "file":
+    case "dir":
+      if (options.change && !options.alternate) { openReview([options.change]); return; }
+      postToApp("agentsNextACPLink", { href: `${target.path}${target.line ? `:${target.line}` : ""}`, alternate: options.alternate });
+      return;
+    case "image":
+      if (!postToApp("agentsNextACPQuickLook", { path: target.path })) window.open(`/api/raw?path=${encodeURIComponent(target.path)}&token=${encodeURIComponent(token ?? "")}`, "_blank");
+      return;
+    case "pane":
+      postToApp("agentsNextACPLink", { href: target.id });
+      return;
+    case "url":
+      if (options.alternate || !OPEN_REVIEW_BESIDE) { window.open(target.url, "_blank"); return; }
+      hostJson("/api/open-page", { url: target.url }).catch(() => window.open(target.url, "_blank"));
+      return;
+    case "bead":
+      if (!OPEN_REVIEW_BESIDE) { window.open(`/bead/${encodeURIComponent(target.id)}#token=${encodeURIComponent(token ?? "")}`, "_blank"); return; }
+      void hostJson("/api/open-page", { url: `/bead/${encodeURIComponent(target.id)}` }).catch(() => {});
+      return;
+    case "commit":
+      void hostJson<{ changes: FileChange[] }>(`/api/commit/${target.sha}/changes`).then((value) => openReview(value.changes), () => {});
+      return;
+  }
 }
 
 /** The session the address names, or for /thread/current the one the pane's agent has open now:
@@ -1100,6 +1206,28 @@ function ReviewPage({ id }: { id: string }) {
 /** The app shows the view with ?agents-next=acp-view; there a review gets a pane of its own. */
 const OPEN_REVIEW_BESIDE = new URLSearchParams(location.search).get("agents-next") === "acp-view";
 const reviewId = decodeURIComponent(location.pathname.match(/^\/review\/([^/]+)/)?.[1] ?? "") || null;
+const beadId = decodeURIComponent(location.pathname.match(/^\/bead\/([^/]+)/)?.[1] ?? "") || null;
+
+interface BeadDetail { id: string; title: string; status: string; priority?: number; type?: string; description?: string; notes?: string; updated?: string }
+
+/** A bead the agent named, opened as a page beside its pane (/bead/<id>). */
+function BeadPage({ id }: { id: string }) {
+  const [bead, setBead] = useState<BeadDetail | null | undefined>(undefined);
+  useEffect(() => {
+    hostJson<BeadDetail>(`/api/bead/${encodeURIComponent(id)}`).then((value) => { setBead(value); document.title = `${value.id} – ${value.title}`; }, () => setBead(null));
+  }, [id]);
+  if (bead === undefined) return <Notice>Opening {id}…</Notice>;
+  if (bead === null) return <Notice>There is no bead {id} in this project.</Notice>;
+  const meta = [bead.type, bead.status.replace(/_/g, " "), bead.priority !== undefined ? `P${bead.priority}` : null, bead.updated ? `updated ${new Date(bead.updated).toLocaleString()}` : null].filter(Boolean).join(" · ");
+  return (
+    <div className="view bead-page"><div className="main"><div className="scroll"><div className="col">
+      <div className="bead-head"><span className="mono">{bead.id}</span><span className="dim">{meta}</span></div>
+      <h1>{bead.title}</h1>
+      {bead.description && <div className="say"><Suspense fallback={<p className="plain">{bead.description}</p>}><Markdown text={bead.description} streaming={false} /></Suspense></div>}
+      {bead.notes && (<><h2>Notes</h2><div className="say"><Suspense fallback={<p className="plain">{bead.notes}</p>}><Markdown text={bead.notes} streaming={false} /></Suspense></div></>)}
+    </div></div></div></div>
+  );
+}
 
 function App() {
   const [info, setInfo] = useState<HostInfo | null>(null);
@@ -1113,6 +1241,7 @@ function App() {
   }, []);
   if (!token) return <Notice>The page needs the pane's token. Open it from Agents Next.</Notice>;
   if (reviewId) return <ReviewPage id={reviewId} />;
+  if (beadId) return <BeadPage id={beadId} />;
   if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
   if (!info) return <Notice>Connecting…</Notice>;
   return <SessionGate info={info} />;

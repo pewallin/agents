@@ -13,10 +13,11 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, re
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
-import { getBuildInfo } from "./paths.js";
+import { getBuildInfo, getStateDir } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
+import { changesSince, commitChanges, commitInfo, IMAGE_EXTENSIONS, inside, linkInfo, paneStates, peekFile, readBeads, resolveNames, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
 
 export interface AcpHostMetadata {
   url: string;
@@ -346,6 +347,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       reviews,
       events,
       appControl: options.appControl ?? appControlTarget(),
+      cwd: options.cwd,
       startFirstTurn: options.startFirstTurn,
       log,
     })) return;
@@ -755,6 +757,8 @@ function handleBridge(
     reviews: ReviewStore;
     events: Set<ServerResponse>;
     appControl: AppControlTarget;
+    /** The pane's directory: chips and peeks read only inside it. */
+    cwd: string;
     startFirstTurn?: (sessionId: string, text: string) => Promise<void>;
     log: (message: string) => void;
   },
@@ -763,7 +767,7 @@ function handleBridge(
   const path = url.pathname;
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
     || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
-    || path === "/api/session/first-turn";
+    || path === "/api/session/first-turn" || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
     response.writeHead(401, { "Cache-Control": "no-store" }).end();
@@ -795,7 +799,11 @@ function handleBridge(
     return true;
   }
   if (path === "/api/panes" && request.method === "GET") {
-    sessionPanes(context.paneId).then((panes) => sendJson(response, 200, { panes }), fail(503));
+    sessionPanes(context.paneId).then((panes) => {
+      // With what each pane's agent is doing, for the dot on a pane's chip.
+      const states = paneStates(getStateDir(), panes.map((pane) => pane.id));
+      sendJson(response, 200, { panes: panes.map((pane) => ({ ...pane, ...(states[pane.id] ? { state: states[pane.id] } : {}) })) });
+    }, fail(503));
     return true;
   }
   const paneMatch = path.match(/^\/api\/panes\/([^/]+)\/text$/);
@@ -826,6 +834,7 @@ function handleBridge(
     }, fail(400));
     return true;
   }
+  if (handlePeek(request, response, url, context, fail)) return true;
   if (path === "/api/open-review" && request.method === "POST") {
     readJson(request).then((body) => {
       const id = String((body as { id?: unknown }).id ?? "");
@@ -843,6 +852,100 @@ function handleBridge(
   }
   response.writeHead(405).end();
   return true;
+}
+
+/** What the view's chips and peeks ask the host (src/acp-peek.ts). */
+const PEEK_PATHS = ["/api/resolve", "/api/peek", "/api/raw", "/api/git", "/api/commit", "/api/bead", "/api/link", "/api/open-page"];
+
+const RAW_TYPES: Record<string, string> = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+  ".svg": "image/svg+xml", ".bmp": "image/bmp", ".ico": "image/x-icon", ".tif": "image/tiff", ".tiff": "image/tiff", ".heic": "image/heic",
+};
+
+function handlePeek(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  context: { cwd: string; token: string; paneId: string; origin: string; appControl: AppControlTarget; log: (message: string) => void },
+  fail: (status: number) => (error: unknown) => void,
+): boolean {
+  const path = url.pathname;
+  const cwd = context.cwd;
+  const param = (name: string) => url.searchParams.get(name) ?? "";
+  if (path === "/api/resolve" && request.method === "POST") {
+    readJson(request, 256 * 1024).then(async (body) => {
+      const names = (body as { names?: unknown })?.names;
+      if (!Array.isArray(names)) { sendJson(response, 400, { message: "names are needed" }); return; }
+      sendJson(response, 200, { resolved: await resolveNames(names.filter((name): name is string => typeof name === "string"), { cwd, files: () => projectFiles(cwd) }) });
+    }).catch(fail(400));
+    return true;
+  }
+  if (path === "/api/peek/file" && request.method === "GET") {
+    const line = Number(param("line")) || undefined;
+    const peek = peekFile(cwd, param("path"), line);
+    if (peek) sendJson(response, 200, peek);
+    else sendJson(response, 404, { message: "no such text file in the pane's directory" });
+    return true;
+  }
+  if (path === "/api/raw" && request.method === "GET") {
+    const file = inside(cwd, param("path"));
+    const type = file ? RAW_TYPES[extname(file).toLowerCase()] : undefined;
+    const stat = file ? statSync(file, { throwIfNoEntry: false }) : undefined;
+    if (!file || !type || !IMAGE_EXTENSIONS.has(extname(file).toLowerCase()) || !stat?.isFile() || stat.size > 32 * 1024 * 1024) {
+      response.writeHead(404, { "Cache-Control": "no-store" }).end();
+      return true;
+    }
+    response.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'" });
+    response.end(readFileSync(file));
+    return true;
+  }
+  if (path === "/api/git/snapshot" && request.method === "POST") {
+    snapshotTree(cwd).then((tree) => sendJson(response, 200, { tree }), fail(500));
+    return true;
+  }
+  if (path === "/api/git/changes" && request.method === "GET") {
+    changesSince(cwd, param("tree")).then((changes) => sendJson(response, changes ? 200 : 404, changes ?? { message: "no snapshot to compare with" }), fail(500));
+    return true;
+  }
+  if (path === "/api/git/diff" && request.method === "GET") {
+    treeDiff(cwd, param("from"), param("to"), param("path")).then((diff) => sendJson(response, 200, { diff }), fail(500));
+    return true;
+  }
+  if (path === "/api/git/versions" && request.method === "GET") {
+    versionsBetween(cwd, param("from"), param("to"), param("path")).then((versions) => sendJson(response, versions ? 200 : 404, versions ?? {}), fail(500));
+    return true;
+  }
+  const commit = path.match(/^\/api\/commit\/([0-9a-f]{7,40})(\/changes)?$/);
+  if (commit && request.method === "GET") {
+    (commit[2] ? commitChanges(cwd, commit[1]).then((changes) => ({ changes })) : commitInfo(cwd, commit[1]))
+      .then((value) => sendJson(response, value ? 200 : 404, value ?? { message: "no such commit" }), fail(404));
+    return true;
+  }
+  const bead = path.match(/^\/api\/bead\/([A-Za-z0-9._-]+)$/);
+  if (bead && request.method === "GET") {
+    const found = readBeads(cwd).get(bead[1]);
+    sendJson(response, found ? 200 : 404, found ?? { message: "no such bead" });
+    return true;
+  }
+  if (path === "/api/link" && request.method === "GET") {
+    linkInfo(param("url")).then((info) => sendJson(response, 200, info), fail(500));
+    return true;
+  }
+  if (path === "/api/open-page" && request.method === "POST") {
+    readJson(request).then(async (body) => {
+      const target = String((body as { url?: unknown })?.url ?? "");
+      // A web page, or one of the host's own pages for the pane (a bead), with the pane's token.
+      const own = target.startsWith("/bead/") ? `${context.origin}${target}#token=${encodeURIComponent(context.token)}` : null;
+      if (!own && !/^https?:\/\//i.test(target)) { sendJson(response, 400, { message: "a web address is needed" }); return; }
+      await openPageBeside(context.appControl, context.paneId, own ?? target);
+      sendJson(response, 200, { opened: true });
+    }).catch((error: unknown) => {
+      context.log(`could not open a page beside the pane: ${error instanceof Error ? error.message : String(error)}`);
+      fail(503)(error);
+    });
+    return true;
+  }
+  return false;
 }
 
 function handleControl(
@@ -966,7 +1069,8 @@ function handleHttp(
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     ...(isAsset ? {} : {
-      "Content-Security-Policy": "default-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
+      // Thumbnails come from Agents Next (QLThumbnailGenerator) through its own scheme.
+      "Content-Security-Policy": "default-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' data: agents-next-thumbnail:; frame-ancestors 'none'",
     }),
   });
   response.end(request.method === "HEAD" ? undefined : readFileSync(filePath));

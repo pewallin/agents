@@ -36,7 +36,9 @@ export type Item =
   | { type: "user"; id: string; text: string; images: number; local?: boolean; at?: number;
       /** A turn another client started (the pane's TUI): Codex does not pass its prompt on. */
       external?: boolean }
-  | { type: "agent"; id: string; text: string; at?: number }
+  | { type: "agent"; id: string; text: string; at?: number;
+      /** Pictures the agent sent (ACP image blocks), shown under its text. */
+      images?: Array<{ mimeType: string; data: string }> }
   | { type: "thought"; id: string; text: string; at?: number }
   | { type: "tool"; id: string; at?: number };
 
@@ -109,7 +111,10 @@ export type SessionAction =
   | { type: "reset" };
 
 function textOf(block: ContentBlock): string {
-  return block.type === "text" ? block.text : "";
+  if (block.type === "text") return block.text;
+  // A file or page the agent points at becomes a link in its text, which the view shows as a chip.
+  if (block.type === "resource_link") return ` [${(block.title ?? block.name ?? block.uri).replace(/[[\]]/g, "")}](${block.uri}) `;
+  return "";
 }
 
 /** Adds a chunk to the open message of its kind, or opens one. A chunk with another message id,
@@ -124,6 +129,7 @@ function appendChunk(
   const text = textOf(block);
   const image = block.type === "image" ? 1 : 0;
   if (!text && !image) return state;
+  if (kind === "agent" && block.type === "image") return appendAgentImage(state, block, messageId, at);
   const items = state.items;
   const last = items.at(-1);
 
@@ -150,6 +156,16 @@ function appendChunk(
     ? { type: "user", id, text, images: image, at }
     : { type: kind, id, text, at };
   return { ...state, items: [...items, item], nextLocalId: state.nextLocalId + 1 };
+}
+
+function appendAgentImage(state: SessionState, block: Extract<ContentBlock, { type: "image" }>, messageId: string | null | undefined, at: number | undefined): SessionState {
+  const picture = { mimeType: block.mimeType, data: block.data };
+  const last = state.items.at(-1);
+  if (last && last.type === "agent" && (!messageId || last.id === messageId)) {
+    return { ...state, items: [...state.items.slice(0, -1), { ...last, images: [...(last.images ?? []), picture] }] };
+  }
+  const id = messageId ?? `agent-${state.nextLocalId}`;
+  return { ...state, items: [...state.items, { type: "agent", id, text: "", at, images: [picture] }], nextLocalId: state.nextLocalId + 1 };
 }
 
 function mergeToolCall(previous: ToolCall | undefined, update: ToolCallUpdate & { title?: string | null }, at: number | undefined): ToolCall {

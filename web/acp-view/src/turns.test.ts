@@ -86,3 +86,31 @@ describe("review", () => {
       .toBe("Comments on the changes:\n- src/a.ts, at `return rows;`: Använd formatJson");
   });
 });
+
+describe("mergeChanges", () => {
+  it("takes git's counts for files it saw and adds the files only git saw", async () => {
+    const { mergeChanges } = await import("./turns");
+    const agent = [{ path: "/r/a.ts", added: 9, removed: 9, edits: [{ oldText: "a", newText: "b" }] }, { path: "/tmp/x", added: 1, removed: 0, edits: [] }];
+    const merged = mergeChanges(agent, [{ path: "/r/a.ts", added: 2, removed: 1 }, { path: "/r/run.sh", added: 3, removed: 0 }], { from: "a", to: "b" });
+    expect(merged).toEqual([
+      { path: "/r/a.ts", added: 2, removed: 1, edits: [{ oldText: "a", newText: "b" }], snapshot: { from: "a", to: "b" } },
+      { path: "/tmp/x", added: 1, removed: 0, edits: [] },
+      { path: "/r/run.sh", added: 3, removed: 0, edits: [], snapshot: { from: "a", to: "b" } },
+    ]);
+    expect(mergeChanges(agent, undefined)).toBe(agent);
+  });
+});
+
+describe("changedLines", () => {
+  it("does not show a last line without its newline as changed", async () => {
+    const { changedLines } = await import("./chips");
+    const shown = changedLines({ path: "/r/notes.md", added: 1, removed: 0, edits: [{ oldText: "one\ntwo", newText: "one\ntwo\nthree" }] });
+    expect(shown).toEqual({ lines: [{ sign: "+", text: "three" }], more: 0 });
+  });
+});
+
+describe("countLines at the end of a file", () => {
+  it("counts a line appended after a last line without its newline as one added line", () => {
+    expect(countLines("one\ntwo", "one\ntwo\nthree")).toEqual({ added: 1, removed: 0 });
+  });
+});

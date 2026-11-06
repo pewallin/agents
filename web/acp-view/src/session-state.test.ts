@@ -144,3 +144,12 @@ describe("a turn the view stops", () => {
     expect(state.stoppedTurns).toEqual([id]);
   });
 });
+
+describe("what the agent sends besides text", () => {
+  it("shows a resource link as a link in its text and keeps an image under it", () => {
+    let state = reduce(emptySession(), { type: "update", update: { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "text", text: "See" } } });
+    state = reduce(state, { type: "update", update: { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "resource_link", uri: "file:///r/shot.png", name: "shot.png" } } });
+    state = reduce(state, { type: "update", update: { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "image", mimeType: "image/png", data: "AAAA" } } });
+    expect(state.items).toEqual([{ type: "agent", id: "m1", text: "See [shot.png](file:///r/shot.png) ", images: [{ mimeType: "image/png", data: "AAAA" }] }]);
+  });
+});

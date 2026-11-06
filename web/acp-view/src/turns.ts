@@ -15,6 +15,30 @@ export interface FileChange {
   /** Each change the agent made to the file, in order. An agent may report only the changed
    *  part of the file (Codex does), so they are shown one after another, not merged. */
   edits: Array<{ oldText: string | null; newText: string }>;
+  /** For a change git saw (a shell edit, or the whole turn's count): the trees before and after
+   *  the turn, which its hunks and its review are read from. */
+  snapshot?: { from: string; to: string };
+}
+
+/** A file the turn changed, as git counts it between the snapshots taken at its start and end. */
+export interface GitChange { path: string; added: number; removed: number; binary?: boolean }
+
+/** The turn's changes: what the agent's diffs say, with git's counts where git saw the file
+ *  (they include shell edits and count the turn once), and the files only git saw. */
+export function mergeChanges(fromAgent: FileChange[], fromGit: GitChange[] | undefined, snapshot?: { from: string; to: string }): FileChange[] {
+  if (!fromGit) return fromAgent;
+  const merged = fromAgent.map((change) => ({ ...change }));
+  for (const file of fromGit) {
+    const existing = merged.find((change) => change.path === file.path);
+    if (existing) {
+      existing.added = file.added;
+      existing.removed = file.removed;
+      existing.snapshot = snapshot;
+    } else {
+      merged.push({ path: file.path, added: file.added, removed: file.removed, edits: [], snapshot });
+    }
+  }
+  return merged;
 }
 
 export interface Turn {
@@ -31,7 +55,9 @@ export interface Turn {
 export function countLines(oldText: string | null | undefined, newText: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
-  for (const part of diffLines(oldText ?? "", newText)) {
+  // A line added after a last line without its newline adds one line and changes none.
+  const withEnd = (text: string) => (text && !text.endsWith("\n") ? `${text}\n` : text);
+  for (const part of diffLines(withEnd(oldText ?? ""), withEnd(newText))) {
     if (part.added) added += part.count ?? 0;
     else if (part.removed) removed += part.count ?? 0;
   }
