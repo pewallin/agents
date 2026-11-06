@@ -49,6 +49,12 @@ button { font: inherit; color: inherit; }
 .you.external { background: none; color: var(--dim); font-size: 13px; padding: 2px 4px; }
 .you { align-self: flex-end; max-width: 86%; background: var(--you); border-radius: 18px; padding: 9px 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .you.pending { opacity: .75; }
+.you-body { position: relative; }
+.you.folded .you-body { overflow: hidden; }
+/* The folded text fades into the bubble, whichever colour the bubble has. */
+.you.folded .you-body::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3.2em; background: linear-gradient(to bottom, transparent, var(--you)); pointer-events: none; }
+.you-more { display: block; margin: 4px 0 0 auto; padding: 0; border: 0; background: none; color: var(--dim); font: inherit; font-size: 12.5px; cursor: pointer; }
+.you-more:hover { color: var(--fg2); }
 code { font: 12.5px var(--mono); background: var(--tint2); border-radius: 5px; padding: 1px 5px; }
 
 /* what the agent said */

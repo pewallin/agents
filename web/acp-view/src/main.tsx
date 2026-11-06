@@ -277,6 +277,45 @@ function EditsLine({ changes, onReview, cwd }: { changes: FileChange[]; onReview
   );
 }
 
+/** How tall a message of yours stands before it folds: six lines, never more than 400px. */
+const FOLDED_LINES = 6;
+const FOLDED_MAX_PX = 400;
+
+/** A message you sent. A long one folds to its first lines, fading into the bubble, as in Claude;
+ *  Show more opens it. */
+function YouMessage({ text, pending }: { text: string; pending?: boolean }) {
+  const body = useRef<HTMLDivElement>(null);
+  const [folds, setFolds] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [limit, setLimit] = useState(FOLDED_MAX_PX);
+  useEffect(() => {
+    const element = body.current;
+    if (!element) return;
+    const measure = () => {
+      const lineHeight = parseFloat(getComputedStyle(element).lineHeight) || 22;
+      const folded = Math.min(Math.round(lineHeight * FOLDED_LINES), FOLDED_MAX_PX);
+      setLimit(folded);
+      // A line or two more than the fold is not worth a toggle.
+      setFolds(element.scrollHeight > folded + lineHeight * 1.5);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [text]);
+  const folded = folds && !open;
+  return (
+    <div className={`you${pending ? " pending" : ""}${folds ? " folds" : ""}${folded ? " folded" : ""}`}>
+      <div ref={body} className="you-body" style={folded ? { maxHeight: limit } : undefined}>{text}</div>
+      {folds && (
+        <button type="button" className="you-more" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void }) {
   const streaming = last && working;
   const stopped = useSession((s) => s.stoppedTurns?.includes(turn.id) ?? false);
@@ -284,7 +323,7 @@ function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: bo
     <>
       {turn.user && (turn.user.external
         ? <div className="you external">Sent from the terminal</div>
-        : <div className={`you${turn.user.local ? " pending" : ""}`}>{turn.user.text}</div>)}
+        : <YouMessage text={turn.user.text} pending={turn.user.local} />)}
       <Activity turn={turn} working={streaming && turn.answer.length === 0} stopped={stopped} cwd={cwd} />
       {turn.answer.length > 0 && (
         <div className="say">
