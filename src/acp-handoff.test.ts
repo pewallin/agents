@@ -170,6 +170,11 @@ describe("waitForLockRelease", () => {
     expect(await waitForLockRelease(lock, 300)).toBe(false);
     writeFileSync(lock, JSON.stringify({ pid: 999999 }));
     expect(await waitForLockRelease(lock, 300)).toBe(true);
+    // A live pid that started after the lock was taken is another process (the pid was used again).
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, started_at: "2026-05-01T10:00:00Z" }));
+    expect(await waitForLockRelease(lock, 300)).toBe(true);
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() }));
+    expect(await waitForLockRelease(lock, 300)).toBe(false);
     writeFileSync(lock, String(process.pid));
     setTimeout(() => rmSync(lock, { force: true }), 150);
     expect(await waitForLockRelease(lock, 2_000)).toBe(true);

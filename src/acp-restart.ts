@@ -6,8 +6,8 @@
 //
 //   --check   says whether the pane can be restarted, and why not, without touching it.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { ACP_AGENTS } from "./acp-host-cli.js";
 import { getSelfArgv, getStateDir } from "./paths.js";
 
@@ -69,7 +69,9 @@ export function agentWords(args: string): { name: string; words: string[] } | un
   if (RUNTIMES.has(basename(words[0])) && words.length > 1) start = 1;
   const name = basename(words[start]).toLowerCase();
   if (!(name in AGENTS)) return undefined;
-  return { name, words: [start === 1 ? name : words[0], ...words.slice(start + 1)] };
+  // The executable as it ran (its path), not its name: the restarted pane may not find the name
+  // on its PATH (a Kiro the app could not restart, 2026-11-06).
+  return { name, words: [words[start], ...words.slice(start + 1)] };
 }
 
 /** `codex … resume <session>`: the command's own options stay, a resume it had is replaced. */
@@ -186,11 +188,44 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
   return true;
 }
 
-export async function runAcpRestart(args: string[]): Promise<number> {
+/** Every process under `root` (not `root`), deepest last. */
+export function descendantPids(processes: PaneProcess[], root: number): number[] {
+  return descendants(processes, root).map((process) => process.pid).filter((pid) => pid !== root);
+}
+
+/** A process tree's processes still alive. */
+function aliveOf(pids: number[]): number[] {
+  return pids.filter(alive);
+}
+
+async function waitForAll(pids: number[], timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (aliveOf(pids).length > 0) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return true;
+}
+
+export async function runAcpRestart(args: string[], runtimeTempDir?: string): Promise<number> {
   const paneIndex = args.indexOf("--pane");
   const paneId = paneIndex >= 0 ? args[paneIndex + 1] : process.env.TMUX_PANE;
   const check = args.includes("--check");
-  const say = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  // Each step goes to the pane's ACP log (pane-N.log), also when no host ever starts there.
+  const logPath = runtimeTempDir && paneId && /^%\d+$/.test(paneId)
+    ? join(runtimeTempDir, "acp-session", `pane-${paneId.slice(1)}.log`)
+    : undefined;
+  const log = (message: string) => {
+    if (!logPath || check) return;
+    try {
+      mkdirSync(dirname(logPath), { recursive: true });
+      appendFileSync(logPath, `${new Date().toISOString()} restart: ${message}\n`);
+    } catch {}
+  };
+  const say = (value: unknown) => {
+    if (!check) log(`result ${JSON.stringify(value)}`);
+    process.stdout.write(`${JSON.stringify(value)}\n`);
+  };
   if (!paneId || !/^%\d+$/.test(paneId)) {
     say({ ok: false, reason: "acp-restart needs --pane %N" });
     return 2;
@@ -208,10 +243,11 @@ export async function runAcpRestart(args: string[]): Promise<number> {
     return 1;
   }
   const self = getSelfArgv();
+  const processes = listProcesses();
   const plan = planAcpRestart({
     paneId,
     panePid,
-    processes: listProcesses(),
+    processes,
     stateOf: (stateAgent) => readState(stateAgent, paneId),
     agentsCommand: self.map(shellQuote).join(" "),
   });
@@ -220,26 +256,47 @@ export async function runAcpRestart(args: string[]): Promise<number> {
     return plan.ok ? 0 : 1;
   }
 
+  log(`${plan.agent} ${plan.agentPid} in ${paneId} on session ${plan.sessionId}: ${plan.command}`);
+  // The agent and every process it runs (Kiro v3: kiro-cli, kiro-cli-chat, its TUI and the ACP
+  // child that holds the session's lock): all of them end before the agent starts again.
+  const tree = [plan.agentPid, ...descendantPids(processes, plan.agentPid)];
   // A pane whose start command is the agent closes when the agent ends: it stays for the respawn.
   if (!plan.viaShell) tmux(["set-option", "-p", "-t", paneId, "remain-on-exit", "on"]);
   try {
-    // The agent leaves as on Ctrl-C (twice: most TUIs ask once), then is told to, then made to.
+    // The agent leaves as on Ctrl-C (twice: most TUIs ask once), then by its quit command, then
+    // is told to, then made to.
     tmux(["send-keys", "-t", paneId, "C-c"]);
     await new Promise((resolve) => setTimeout(resolve, 400));
     tmux(["send-keys", "-t", paneId, "C-c"]);
-    if (!await waitForExit(plan.agentPid, 6_000)) {
-      try { process.kill(plan.agentPid, "SIGTERM"); } catch { /* gone */ }
-      if (!await waitForExit(plan.agentPid, 3_000)) {
-        try { process.kill(plan.agentPid, "SIGKILL"); } catch { /* gone */ }
-        await waitForExit(plan.agentPid, 2_000);
+    log("sent Ctrl-C twice");
+    // The quit command only while the agent itself still has the pane: a shell would run it.
+    if (!await waitForAll(tree, 3_000) && alive(plan.agentPid)) {
+      tmux(["send-keys", "-t", paneId, "-l", "/quit"]);
+      tmux(["send-keys", "-t", paneId, "Enter"]);
+      log("still running; sent /quit");
+    }
+    if (!await waitForAll(tree, 4_000)) {
+      log(`still running (${aliveOf(tree).join(" ")}); SIGTERM`);
+      for (const pid of aliveOf(tree)) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
+      if (!await waitForAll(tree, 3_000)) {
+        log(`still running (${aliveOf(tree).join(" ")}); SIGKILL`);
+        for (const pid of aliveOf(tree)) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
+        await waitForAll(tree, 2_000);
       }
     }
+    log(aliveOf(tree).length === 0 ? "the agent ended" : `processes left running: ${aliveOf(tree).join(" ")}`);
     if (plan.viaShell) {
       await new Promise((resolve) => setTimeout(resolve, 300));
       tmux(["send-keys", "-t", paneId, "-l", plan.command]);
       tmux(["send-keys", "-t", paneId, "Enter"]);
     } else {
-      tmux(["respawn-pane", "-k", "-t", paneId, "-c", cwd, plan.command]);
+      // The pane starts again with the PATH and agents settings this CLI runs with (the app's), not
+      // only the tmux server's, which may not find the agent or this CLI.
+      const environment = Object.entries(process.env)
+        .filter(([name, value]) => value !== undefined && (name === "PATH" || name.startsWith("AGENTS_")) && name !== "AGENTS_APP_TMUX_PANE_ID")
+        .flatMap(([name, value]) => ["-e", `${name}=${value}`]);
+      tmux(["respawn-pane", "-k", "-t", paneId, "-c", cwd, ...environment, plan.command]);
+      log("respawned the pane");
     }
   } finally {
     if (!plan.viaShell) {

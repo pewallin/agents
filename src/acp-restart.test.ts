@@ -10,7 +10,7 @@ function plan(processes: PaneProcess[], state: Record<string, { state?: string; 
 describe("acp-restart", () => {
   it("names an agent by its executable, or by the script node runs", () => {
     expect(agentWords("/opt/homebrew/bin/claude --model opus")).toEqual({ name: "claude", words: ["/opt/homebrew/bin/claude", "--model", "opus"] });
-    expect(agentWords("node /Users/me/.nvm/versions/node/v24/bin/codex --model gpt-6.1 -a never")).toEqual({ name: "codex", words: ["codex", "--model", "gpt-6.1", "-a", "never"] });
+    expect(agentWords("node /Users/me/.nvm/versions/node/v24/bin/codex --model gpt-6.1 -a never")).toEqual({ name: "codex", words: ["/Users/me/.nvm/versions/node/v24/bin/codex", "--model", "gpt-6.1", "-a", "never"] });
     expect(agentWords("kiro-cli chat -a --v3")?.name).toBe("kiro-cli");
     expect(agentWords("-zsh")).toBeUndefined();
     expect(agentWords("vim notes.md")).toBeUndefined();
@@ -29,7 +29,7 @@ describe("acp-restart", () => {
     ], { codex: { state: "idle", externalSessionId: "thread-1" } });
     expect(result).toEqual({
       ok: true, agent: "codex", stateAgent: "codex", sessionId: "thread-1", agentPid: 200, viaShell: true,
-      command: `${AGENTS_BIN} codex-session --command 'codex --model gpt-6.1 resume thread-1'`,
+      command: `${AGENTS_BIN} codex-session --command '/x/bin/codex --model gpt-6.1 resume thread-1'`,
     });
   });
 

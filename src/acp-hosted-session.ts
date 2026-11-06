@@ -76,14 +76,14 @@ export class HostedSession {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
       clientInfo: { name: "agents-acp-host", version: "1" },
-    });
+    }, 30_000);
     if (existing) {
       // The load replays the session: its updates are the history a view is given.
       this.sessionId = existing;
-      this.opened = { ...await this.request("session/load", { sessionId: existing, cwd, mcpServers: [] }), sessionId: existing };
+      this.opened = { ...await this.request("session/load", { sessionId: existing, cwd, mcpServers: [] }, 90_000), sessionId: existing };
       return existing;
     }
-    this.opened = await this.request("session/new", { cwd, mcpServers: [] });
+    this.opened = await this.request("session/new", { cwd, mcpServers: [] }, 60_000);
     const sessionId = this.opened.sessionId;
     if (typeof sessionId !== "string" || !sessionId) throw new Error("the agent started no session");
     this.sessionId = sessionId;
@@ -118,10 +118,18 @@ export class HostedSession {
     await this.exited;
   }
 
-  private request(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  /** A request of the host's own; one with `timeoutMs` fails when the agent does not answer in time. */
+  private request(method: string, params: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
     const id = `host-${this.nextId++}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        reject(new Error(`the agent did not answer ${method} within ${Math.round(timeoutMs / 1000)} s`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
       this.toAgent(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });
   }

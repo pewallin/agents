@@ -314,7 +314,8 @@ export const OPEN_IN_OPTION = "@agents_open_in";
 
 function opensInView(paneId: string): boolean {
   try {
-    return execFileSync("tmux", ["show-options", "-p", "-v", "-t", paneId, OPEN_IN_OPTION], { encoding: "utf8", timeout: 3_000 }).trim() === "acp-view";
+    // -q and no stderr: an unset option is no message in the pane.
+    return execFileSync("tmux", ["show-options", "-p", "-q", "-v", "-t", paneId, OPEN_IN_OPTION], { encoding: "utf8", timeout: 3_000, stdio: ["ignore", "pipe", "ignore"] }).trim() === "acp-view";
   } catch {
     return false;
   }

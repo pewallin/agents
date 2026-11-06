@@ -94,7 +94,8 @@ if (firstArg === "claude-acp") {
 }
 if (firstArg === "acp-restart") {
   const { runAcpRestart } = await import("./acp-restart.js");
-  process.exit(await runAcpRestart(args.slice(1)));
+  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
+  process.exit(await runAcpRestart(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp")));
 }
 if (firstArg === "acp-host-supervise") {
   process.exit(await (await import("./acp-host-supervisor.js")).runHostSupervisor(args.slice(1)));

@@ -13,7 +13,7 @@
 //
 // The agent's TUI ending on its own ends the pane's command, as it would without this.
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
@@ -243,9 +243,65 @@ export async function waitForLockRelease(file: string, timeoutMs = 3_000): Promi
   for (;;) {
     if (!existsSync(file)) return true;
     const pid = lockOwner(file);
-    if (pid !== undefined && !processAlive(pid)) return true;
+    if (pid !== undefined && (!processAlive(pid) || !startedAsLocked(file, pid))) return true;
     if (Date.now() >= deadline) return false;
     await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** Every process under `root`, from the process table. */
+function processTree(root: number): number[] {
+  try {
+    const rows = execFileSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8", timeout: 3_000 })
+      .split("\n").map((line) => line.trim().split(/\s+/).map(Number)).filter(([pid, ppid]) => pid > 0 && ppid >= 0);
+    const found: number[] = [];
+    const queue = [root];
+    while (queue.length > 0) {
+      const parent = queue.shift()!;
+      for (const [pid, ppid] of rows) {
+        if (ppid === parent && !found.includes(pid)) {
+          found.push(pid);
+          queue.push(pid);
+        }
+      }
+    }
+    return found;
+  } catch {
+    return [];
+  }
+}
+
+/** The process holding a session lock, as `pid (command)`, while it runs. */
+function lockHolder(file: string): string | undefined {
+  const pid = lockOwner(file);
+  if (pid === undefined || !processAlive(pid)) return undefined;
+  try {
+    return `${pid} (${execFileSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8", timeout: 3_000 }).trim().slice(0, 120)})`;
+  } catch {
+    return String(pid);
+  }
+}
+
+/** Whether the process with the lock's pid is the one that took the lock: a lock records when
+ *  its process started (Kiro: {"pid":N,"started_at":...}), and a pid used again by another
+ *  process since does not hold it. Without a start time, the pid alone counts. */
+function startedAsLocked(file: string, pid: number): boolean {
+  let startedAt: number | undefined;
+  try {
+    const value = JSON.parse(readFileSync(file, "utf8")) as { started_at?: unknown };
+    if (typeof value.started_at === "number") startedAt = value.started_at > 1e12 ? value.started_at : value.started_at * 1000;
+    else if (typeof value.started_at === "string") startedAt = Date.parse(value.started_at);
+  } catch {
+    return true;
+  }
+  if (startedAt === undefined || Number.isNaN(startedAt)) return true;
+  try {
+    const began = Date.parse(execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 3_000 }).trim());
+    // A lock is taken after its process starts, within its first minutes; one taken before it
+    // started is another process's.
+    return Number.isNaN(began) || startedAt >= began - 2_000;
+  } catch {
+    return true;
   }
 }
 
@@ -291,12 +347,25 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
     } catch {}
   };
-  if (input.problem) log(`no ACP view for ${agent.name}: ${input.problem}`);
+  // What the pane's view waits on, for the app (pane-N.status.json): the step under way, or why
+  // the view cannot open. The app shows it instead of waiting in silence.
+  const statusPath = logPath.replace(/\.log$/, ".status.json");
+  const status = (step: string, error?: string) => {
+    try {
+      writeFileSync(statusPath, JSON.stringify({ processId: process.pid, agent: agent.id, step, ...(error ? { error } : {}), at: new Date().toISOString() }));
+    } catch {}
+  };
+  if (input.problem) {
+    log(`no ACP view for ${agent.name}: ${input.problem}`);
+    status("no view", `${agent.name} has no ACP view here: ${input.problem}`);
+  }
 
   let mode: "tui" | "switching" | "view" = "tui";
   let sessionId: string | undefined;
   /** The host is starting its own session: the view waits for it. */
   let hostedStarting = false;
+  /** Why the host's session last failed to start. */
+  let lastHostError: string | undefined;
   /** The session a view started and prompted in, when the TUI had none to give. */
   let startedSession: string | undefined;
   /** The session the TUI has, as far as its command says: "current" is that one. Unknown for a
@@ -310,6 +379,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   const transcript = new TranscriptPrinter((text) => process.stdout.write(text));
 
   const finish = async (code: number) => {
+    try { rmSync(statusPath, { force: true }); } catch {}
     await host?.close();
     process.exit(code);
   };
@@ -324,15 +394,25 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     });
   };
 
+  /** Ends the TUI and every process it runs (Kiro v3's TUI runs the ACP child that holds the
+   *  session's lock): the view loads the session only once none of them has it. */
   const stopTui = async () => {
     const child = tui;
     tui = undefined;
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    const tree = child.pid ? processTree(child.pid) : [];
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
     child.kill("SIGTERM");
     const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
     await exited;
     clearTimeout(timer);
+    const left = tree.filter(processAlive);
+    if (left.length === 0) return;
+    log(`the TUI left ${left.join(" ")} running; ending them`);
+    for (const pid of left) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
+    const deadline = Date.now() + 3_000;
+    while (tree.some(processAlive) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+    for (const pid of tree.filter(processAlive)) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
   };
 
   const giveBack = async () => {
@@ -353,6 +433,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     tuiSession = id;
     tuiSessionUnknown = false;
     setHosted(false);
+    status("in the terminal");
     // A session the view never prompted in was never written: nothing to resume.
     const resumable = id && agent.sessionWritten?.(id) !== false;
     startTui(resumable ? agent.resume(tuiCommand, id) : tuiCommand);
@@ -387,6 +468,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       return { status: 409, message: `${agent.name} has not said which session it has open; switch once it has run a turn.` };
     }
     mode = "switching";
+    status(`Stopping ${agent.name} in the terminal…`);
     const asked = id === "current" ? tuiSession : id;
     sessionId = !asked || agent.sessionWritten?.(asked) === false ? undefined : asked;
     startedSession = undefined;
@@ -394,7 +476,12 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     // The agent may hold its session (a lock file) a moment after its TUI ends: the view's
     // session/load would find it still in use.
     const lock = sessionId ? agent.sessionLock?.(sessionId) : undefined;
-    if (lock) log(await waitForLockRelease(lock) ? `lock ${lock} released` : `lock ${lock} still held after 3 s`);
+    if (lock) {
+      status(`Waiting for ${agent.name} to release the session…`);
+      if (await waitForLockRelease(lock, 8_000)) log(`lock ${lock} released`);
+      else log(`lock ${lock} still held after 8 s, by ${lockHolder(lock) ?? "an unknown process"}; loading the session regardless`);
+    }
+    status(sessionId ? "Loading the session…" : `Starting ${agent.name}…`);
     resetTerminal(transcript);
     // The host holds the session while the view has it: the view attaches to it, and lines for
     // the agent (its coordinator's, its watches') reach it as prompts through the host.
@@ -405,7 +492,8 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       sessionId = undefined;
       await transcript.drained();
       startTui(back ? agent.resume!(tuiCommand, back) : tuiCommand);
-      return { status: 502, message: `${agent.name} could not open its session in the view; it goes on in the terminal.` };
+      status("back in the terminal", lastHostError ?? `${agent.name} could not open its session in the view`);
+      return { status: 502, message: `${agent.name} could not open its session in the view (${lastHostError ?? "see the pane's log"}); it goes on in the terminal.` };
     }
     log(`handed session ${hostedId} to the view${sessionId ? "" : " (a new one: the TUI had none)"}`);
     sessionId = hostedId;
@@ -425,7 +513,8 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       setHosted(true);
       return id;
     } catch (error) {
-      log(`the host's session did not start: ${error instanceof Error ? error.message : String(error)}`);
+      lastHostError = error instanceof Error ? error.message : String(error);
+      log(`the host's session did not start: ${lastHostError}`);
       transcript.dropReplay();
       host.closeClients();
       return undefined;
@@ -436,6 +525,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
 
   /** The view has the session: the pane shows what happens there, and Enter goes back. */
   const inView = () => {
+    status("in the view");
     transcript.title(agent.name);
     transcript.say(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go on in the terminal.\n`);
     transcript.endReplay();
@@ -460,7 +550,10 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   const other = readAcpHostMetadata(acpHostMetadataPath(runtimeTempDir, paneId));
   const otherRuns = other !== undefined && other.processId !== process.pid && processAlive(other.processId)
     && isAcpSessionProcess(other.processId);
-  if (otherRuns) log(`host ${other.processId} still serves ${paneId}: no second host`);
+  if (otherRuns) {
+    log(`host ${other.processId} still serves ${paneId}: no second host`);
+    status("no view", `another ACP host (process ${other.processId}) still serves this pane`);
+  }
   if (input.host && !otherRuns) {
     try {
       host = await startAcpHost({
@@ -492,6 +585,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       log(`host ${host.url} for ${agent.name} in ${paneId}`);
     } catch (error) {
       log(`host did not start: ${error instanceof Error ? error.message : String(error)}`);
+      status("no view", `the ACP host did not start: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   // A command that picks a session without naming it starts in the terminal: the view would not
@@ -513,6 +607,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     }
   } else {
     startTui(input.firstTuiCommand ?? tuiCommand);
+    if (host) status("in the terminal");
   }
   return await new Promise<never>(() => {});
 }
