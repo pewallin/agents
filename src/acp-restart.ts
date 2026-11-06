@@ -257,6 +257,25 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
   }
 
   log(`${plan.agent} ${plan.agentPid} in ${paneId} on session ${plan.sessionId}: ${plan.command}`);
+  try {
+    return await restartAgent(plan, paneId, cwd, remainOnExit, processes, log, say);
+  } catch (error) {
+    // Whatever stops the restart is said, in the pane's log and to the app: never a silent end.
+    const reason = `The restart stopped: ${error instanceof Error ? error.message : String(error)}`;
+    say({ ok: false, agent: plan.agent, reason });
+    return 1;
+  }
+}
+
+async function restartAgent(
+  plan: Extract<RestartPlan, { ok: true }>,
+  paneId: string,
+  cwd: string,
+  remainOnExit: string,
+  processes: PaneProcess[],
+  log: (message: string) => void,
+  say: (value: unknown) => void,
+): Promise<number> {
   // The agent and every process it runs (Kiro v3: kiro-cli, kiro-cli-chat, its TUI and the ACP
   // child that holds the session's lock): all of them end before the agent starts again.
   const tree = [plan.agentPid, ...descendantPids(processes, plan.agentPid)];
