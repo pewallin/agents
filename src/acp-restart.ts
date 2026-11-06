@@ -6,7 +6,7 @@
 //
 //   --check   says whether the pane can be restarted, and why not, without touching it.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ACP_AGENTS } from "./acp-host-cli.js";
 import { getSelfArgv, getStateDir } from "./paths.js";
@@ -27,6 +27,12 @@ export function handOffAgentId(executable: string | undefined): string | undefin
   const name = basename(executable ?? "").toLowerCase();
   const agent = AGENTS[name];
   return agent && !agent.live ? agent.registryId : undefined;
+}
+
+/** A shell integration's pty wrapper (Kiro's "zsh (kiro-cli-term)", Amazon Q's and Fig's alike)
+ *  names itself after the shell it wraps: it is no shell to type into. */
+export function isPtyWrapper(args: string): boolean {
+  return /^\S+ \([^)]+\)/.test(args.trim());
 }
 
 const SHELLS = new Set(["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "-zsh", "-bash", "-sh", "-fish"]);
@@ -114,6 +120,8 @@ export function planAcpRestart(input: {
   panePid: number;
   processes: PaneProcess[];
   stateOf: (stateAgent: string) => AgentState | undefined;
+  /** The session the agent's processes hold open (Kiro's lock files), for an agent that has one. */
+  heldSession?: (registryId: string, pids: number[]) => string | undefined;
   /** How to run this agents CLI, as shell words. */
   agentsCommand: string;
 }): RestartPlan {
@@ -130,7 +138,10 @@ export function planAcpRestart(input: {
   if (state?.state && BUSY.has(state.state)) {
     return { ok: false, agent: name, reason: "The agent is working – restart it in ACP mode when it is done." };
   }
-  const sessionId = state?.externalSessionId?.trim();
+  // The session the running agent holds is the one to resume; a reported one may be from the
+  // agent before it in the pane. A command that names its session says it too.
+  const held = input.heldSession?.(agent.registryId, descendants(input.processes, agentProcess.pid).map((process) => process.pid));
+  const sessionId = held ?? state?.externalSessionId?.trim() ?? resumeIdOf(words);
   if (!sessionId) {
     return { ok: false, agent: name, reason: "The agent has not reported its session yet; it does once it has run a turn. Restart it in ACP mode after that." };
   }
@@ -144,10 +155,43 @@ export function planAcpRestart(input: {
     ? `${bin} codex-session --command ${shellQuote(resumed)}`
     : `${bin} acp-session --agent ${agent.registryId} --tui ${shellQuote(resumed)}`;
   const parent = input.processes.find((process) => process.pid === agentProcess.ppid);
+  // Behind a shell integration's pty wrapper the agent's shell is the wrapper's child, and keys
+  // reach it through the wrapper. An agent the wrapper runs itself ends the wrapper with it.
   const viaShell = agentProcess.pid !== input.panePid
     && parent !== undefined
+    && !isPtyWrapper(parent.args)
     && SHELLS.has(basename(parent.args.trim().split(/\s+/)[0] ?? ""));
   return { ok: true, agent: name, stateAgent: agent.stateAgent, sessionId, agentPid: agentProcess.pid, viaShell, command };
+}
+
+/** `--resume-id <id>` or `--resume <id>` in an agent's command. */
+function resumeIdOf(words: string[]): string | undefined {
+  for (let index = 0; index < words.length - 1; index += 1) {
+    if ((words[index] === "--resume-id" || words[index] === "--resume") && !words[index + 1].startsWith("-")) return words[index + 1];
+  }
+  return undefined;
+}
+
+/** The session whose lock file (`{"pid": …}`) one of `pids` holds, in the agent's lock directory. */
+export function sessionHeldBy(lockDirectory: string, pids: number[]): string | undefined {
+  const wanted = new Set(pids);
+  let names: string[];
+  try {
+    names = readdirSync(lockDirectory).filter((name) => name.endsWith(".lock"));
+  } catch {
+    return undefined;
+  }
+  // A stale lock may name a pid that is now one of these: the newest lock wins.
+  let found: { session: string; at: number } | undefined;
+  for (const name of names) {
+    try {
+      const path = join(lockDirectory, name);
+      const pid = (JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown }).pid;
+      const at = statSync(path).mtimeMs;
+      if (typeof pid === "number" && wanted.has(pid) && (!found || at > found.at)) found = { session: name.slice(0, -".lock".length), at };
+    } catch { /* not a lock */ }
+  }
+  return found?.session;
 }
 
 function tmux(args: string[]): string {
@@ -249,6 +293,10 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
     panePid,
     processes,
     stateOf: (stateAgent) => readState(stateAgent, paneId),
+    heldSession: (registryId, pids) => {
+      const lock = ACP_AGENTS[registryId]?.sessionLock?.("session");
+      return lock ? sessionHeldBy(dirname(lock), pids) : undefined;
+    },
     agentsCommand: self.map(shellQuote).join(" "),
   });
   if (check || !plan.ok) {
@@ -294,7 +342,8 @@ async function restartAgent(
       tmux(["send-keys", "-t", paneId, "Enter"]);
       log("still running; sent /quit");
     }
-    if (!await waitForAll(tree, 4_000)) {
+    // Once the agent itself has quit, what it leaves running (Kiro's ACP child) is ended at once.
+    if (!await waitForAll(tree, alive(plan.agentPid) ? 4_000 : 500)) {
       log(`still running (${aliveOf(tree).join(" ")}); SIGTERM`);
       for (const pid of aliveOf(tree)) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
       if (!await waitForAll(tree, 3_000)) {

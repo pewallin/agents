@@ -1,10 +1,18 @@
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { agentWords, codexResumeCommand, planAcpRestart, type PaneProcess } from "./acp-restart.js";
+import { agentWords, codexResumeCommand, isPtyWrapper, planAcpRestart, sessionHeldBy, type PaneProcess } from "./acp-restart.js";
 
 const AGENTS_BIN = "/Users/me/.agents/agents-cli/app/agents";
 
-function plan(processes: PaneProcess[], state: Record<string, { state?: string; externalSessionId?: string }>, panePid = 100) {
-  return planAcpRestart({ paneId: "%7", panePid, processes, stateOf: (agent) => state[agent], agentsCommand: AGENTS_BIN });
+function plan(
+  processes: PaneProcess[],
+  state: Record<string, { state?: string; externalSessionId?: string }>,
+  panePid = 100,
+  heldSession?: (registryId: string, pids: number[]) => string | undefined,
+) {
+  return planAcpRestart({ paneId: "%7", panePid, processes, stateOf: (agent) => state[agent], heldSession, agentsCommand: AGENTS_BIN });
 }
 
 describe("acp-restart", () => {
@@ -48,5 +56,55 @@ describe("acp-restart", () => {
     expect(plan([{ pid: 100, ppid: 1, args: "zsh" }, { pid: 200, ppid: 100, args: "htop" }], {})).toMatchObject({ ok: false, reason: "This pane runs no agent with an ACP view." });
     expect(plan([{ pid: 100, ppid: 1, args: "/x/agents acp-session --agent claude-acp --tui claude" }, { pid: 200, ppid: 100, args: "claude" }], { claude: { state: "idle", externalSessionId: "s" } }))
       .toMatchObject({ ok: false, reason: expect.stringContaining("already runs with its ACP view") });
+  });
+
+  // Kiro's shell integration (kiro-cli-term) runs the pane's shell in a pty of its own: the pane's
+  // process is the wrapper, the shell its child, and Kiro the shell's (Peter's coordinator, 2026-11-06).
+  const wrapped: PaneProcess[] = [
+    { pid: 42197, ppid: 40694, args: "zsh (kiro-cli-term)" },
+    { pid: 42292, ppid: 42197, args: "-zsh" },
+    { pid: 58321, ppid: 42292, args: "kiro-cli chat -a" },
+    { pid: 58330, ppid: 58321, args: "/Users/me/.local/bin/kiro-cli-chat chat -a" },
+    { pid: 58353, ppid: 58330, args: "/Users/me/Library/Application Support/kiro-cli/bun /Users/me/Library/Application Support/kiro-cli/tui.js chat -a" },
+    { pid: 58370, ppid: 58353, args: "/Users/me/.local/bin/kiro-cli-chat acp --trust-all-tools" },
+  ];
+
+  it("finds Kiro behind its shell integration's pty and types the restart into the wrapped shell", () => {
+    const result = plan(wrapped, { kiro: { state: "idle", externalSessionId: "a28d" } }, 42197);
+    expect(result).toMatchObject({ ok: true, agent: "kiro-cli", agentPid: 58321, viaShell: true, sessionId: "a28d" });
+    expect(result.ok && result.command).toBe(`${AGENTS_BIN} acp-session --agent kiro --tui 'kiro-cli chat -a --resume-id a28d'`);
+  });
+
+  it("resumes the session Kiro's processes hold, before one its state reported, and without any report", () => {
+    const held = (registryId: string, pids: number[]) => registryId === "kiro" && pids.includes(58370) ? "held" : undefined;
+    expect(plan(wrapped, { kiro: { state: "idle", externalSessionId: "older" } }, 42197, held)).toMatchObject({ ok: true, sessionId: "held" });
+    expect(plan(wrapped, {}, 42197, held)).toMatchObject({ ok: true, sessionId: "held" });
+    expect(plan([{ pid: 100, ppid: 1, args: "kiro-cli chat --resume-id named" }], {})).toMatchObject({ ok: true, sessionId: "named" });
+  });
+
+  it("respawns the pane when the pty wrapper runs Kiro itself: no shell stays to type into", () => {
+    const result = plan([
+      { pid: 1335, ppid: 1, args: "zsh (kiro-cli-term)" },
+      { pid: 1362, ppid: 1335, args: "kiro-cli chat -a" },
+    ], { kiro: { state: "idle", externalSessionId: "s" } }, 1335);
+    expect(result).toMatchObject({ ok: true, agentPid: 1362, viaShell: false });
+    expect(isPtyWrapper("zsh (kiro-cli-term)")).toBe(true);
+    expect(isPtyWrapper("-zsh")).toBe(false);
+  });
+
+  it("reads which session a process holds from the lock files, the newest when two name it", () => {
+    const directory = mkdtempSync(join(tmpdir(), "acp-restart-locks-"));
+    try {
+      writeFileSync(join(directory, "stale.lock"), JSON.stringify({ pid: 58370, started_at: "2026-06-01T00:00:00Z" }));
+      utimesSync(join(directory, "stale.lock"), new Date("2026-06-01"), new Date("2026-06-01"));
+      writeFileSync(join(directory, "live.lock"), JSON.stringify({ pid: 58370, started_at: "2026-11-06T10:47:05Z" }));
+      writeFileSync(join(directory, "other.lock"), JSON.stringify({ pid: 1 }));
+      writeFileSync(join(directory, "notes.json"), "{}");
+      expect(sessionHeldBy(directory, [58321, 58370])).toBe("live");
+      expect(sessionHeldBy(directory, [2])).toBeUndefined();
+      expect(sessionHeldBy(join(directory, "missing"), [58370])).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
