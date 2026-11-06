@@ -275,10 +275,19 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   let hosted: HostedSession | undefined;
   let hostedView: { ws: WebSocket; viewId?: string } | undefined;
   const attachWaiters = new Set<() => void>();
-  const hostedPrompt = async (text: string) => {
-    if (!hosted?.alive) throw new Error("the host holds no session");
-    const stopReason = await hosted.prompt(text);
-    log(`hosted turn ended (${stopReason ?? "no reason"})`);
+  // One turn at a time: a line that comes while the agent works waits for its turn to end, as a
+  // line typed into its TUI would.
+  let hostedTurns: Promise<void> = Promise.resolve();
+  const hostedPrompt = (text: string): Promise<void> => {
+    const session = hosted;
+    if (!session?.alive) return Promise.reject(new Error("the host holds no session"));
+    const turn = hostedTurns.then(async () => {
+      if (!session.alive) throw new Error("the agent exited");
+      const stopReason = await session.prompt(text);
+      log(`hosted turn ended (${stopReason ?? "no reason"})`);
+    });
+    hostedTurns = turn.catch(() => undefined);
+    return turn;
   };
 
   const startAgent = (): ChildProcess => {
@@ -485,6 +494,9 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     const hadHosted = hosted !== undefined;
     hosted = undefined;
     hostedView = undefined;
+    // Its turns end with it: the pane is not left working.
+    activity.clientGone(0);
+    activityChanged();
     if (hadHosted && options.warmSpare && !closed && !spare) setTimeout(() => { if (!closed && !spare) spare = startAgent(); }, 3_000);
     for (const client of wss.clients) client.close(1001, "the session went back to the terminal");
     for (const child of children) {
@@ -510,8 +522,16 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       });
     },
     async startHostedSession(existing?: string) {
-      // No spare beside it: the views attach to this one, and two of some agents starting at
-      // once fight over their store (OpenCode: "database is locked").
+      // A process of its own, started now: a spare started beside the TUI can be stuck on the
+      // agent's store the TUI held (OpenCode answers no prompt then). And no spare beside it: the
+      // views attach to this one, and two of some agents starting at once fight over their store
+      // (OpenCode: "database is locked").
+      if (spare) {
+        children.delete(spare);
+        spare.stdin?.end();
+        spare.kill("SIGTERM");
+        spare = undefined;
+      }
       const child = takeAgent(false);
       log(`the host starts a session of its own, agent ${child.pid}`);
       const session = new HostedSession(child, {

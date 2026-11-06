@@ -155,6 +155,8 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
 
   let mode: "tui" | "switching" | "view" = "tui";
   let sessionId: string | undefined;
+  /** The host is starting its own session: the view waits for it. */
+  let hostedStarting = false;
   /** The session a view started and prompted in, when the TUI had none to give. */
   let startedSession: string | undefined;
   /** The session the TUI has, as far as its command says: "current" is that one. Unknown for a
@@ -225,7 +227,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       // Without tmux the pane has no lines to take.
     }
   };
-  let hostedStarting = false;
+
 
   const handOff = async (id: string): Promise<{ status: number; message?: string; session?: string | null }> => {
     if (mode === "view") {
@@ -252,9 +254,38 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     const lock = sessionId ? agent.sessionLock?.(sessionId) : undefined;
     if (lock) log(await waitForLockRelease(lock) ? `lock ${lock} released` : `lock ${lock} still held after 3 s`);
     resetTerminal();
+    // The host holds the session while the view has it: the view attaches to it, and lines for
+    // the agent (its coordinator's, its watches') reach it as prompts through the host.
+    const hostedId = await hostSession(sessionId);
+    if (!hostedId) {
+      const back = sessionId;
+      mode = "tui";
+      sessionId = undefined;
+      startTui(back ? agent.resume!(tuiCommand, back) : tuiCommand);
+      return { status: 502, message: `${agent.name} could not open its session in the view; it goes on in the terminal.` };
+    }
+    log(`handed session ${hostedId} to the view${sessionId ? "" : " (a new one: the TUI had none)"}`);
+    sessionId = hostedId;
     inView();
-    log(sessionId ? `handed session ${sessionId} to the view` : `the view starts a session (the TUI had none: ${id})`);
-    return { status: 200, session: sessionId ?? null };
+    return { status: 200, session: sessionId };
+  };
+
+  /** Starts the host's own session on `existing`, or a new one; undefined when it cannot. */
+  const hostSession = async (existing: string | undefined): Promise<string | undefined> => {
+    if (!host) return undefined;
+    mode = "view";
+    hostedStarting = true;
+    try {
+      const id = await host.startHostedSession(existing);
+      setHosted(true);
+      return id;
+    } catch (error) {
+      log(`the host's session did not start: ${error instanceof Error ? error.message : String(error)}`);
+      host.closeClients();
+      return undefined;
+    } finally {
+      hostedStarting = false;
+    }
   };
 
   /** The view has the session: the pane shows what happens there, and Enter goes back. */
@@ -316,17 +347,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     log(`${agent.name} starts in the view${tuiSession ? ` on session ${tuiSession}` : ""}`);
     // The app knows the pane's agent from its state before any TUI or hook reports it.
     reportViewActivity(agent.stateAgent, paneId)("idle");
-    mode = "view";
-    hostedStarting = true;
-    try {
-      sessionId = await host.startHostedSession(tuiSession);
-      setHosted(true);
-    } catch (error) {
-      log(`the host's session did not start: ${error instanceof Error ? error.message : String(error)}`);
-      host.closeClients();
-    } finally {
-      hostedStarting = false;
-    }
+    sessionId = await hostSession(tuiSession);
     inView();
     if (sessionId && input.firstPrompt) {
       // The app shows the view while the agent waits: a hand-off agent at work cannot be
