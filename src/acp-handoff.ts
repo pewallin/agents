@@ -71,7 +71,14 @@ export class TranscriptPrinter {
     } else if (kind === "tool_call" && typeof update.title === "string") {
       this.role = "tool";
       this.write(`\n  ⚙ ${update.title}`);
+    } else if (kind === "session_info_update" && typeof update.title === "string" && update.title.trim()) {
+      this.title(update.title);
     }
+  }
+
+  /** The pane's title, as the agent's TUI sets it: tmux and the app show it for the pane. */
+  title(text: string): void {
+    this.write(`\x1b]2;${text.replace(/[\x00-\x1f\x7f]/g, " ").trim()}\x07`);
   }
 
   clientLine(line: string): void {
@@ -290,6 +297,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
 
   /** The view has the session: the pane shows what happens there, and Enter goes back. */
   const inView = () => {
+    transcript.title(agent.name);
     process.stdout.write(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go on in the terminal.\n`);
     mode = "view";
     process.stdin.resume();

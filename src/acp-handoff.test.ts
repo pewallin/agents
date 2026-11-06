@@ -40,6 +40,9 @@ describe("acp hand-off", () => {
     printer.agentLine(update("tool_call", { toolCallId: "t", title: "Read README.md" }));
     printer.agentLine("not json");
     expect(out).toBe("\n\n› Hej\n\n• Hej själv\n  ⚙ Read README.md");
+    out = "";
+    printer.agentLine(update("session_info_update", { title: "Fix the\nlogin" }));
+    expect(out).toBe("\x1b]2;Fix the login\x07");
   });
 });
 
@@ -88,7 +91,10 @@ describe("view activity in the app", () => {
       report("needs-you");
       expect(JSON.parse(readFileSync(join(dir, "codex-%7.json"), "utf8")).state).toBe("approval");
       report("working");
-      expect(JSON.parse(readFileSync(join(dir, "codex-%7.json"), "utf8")).state).toBe("working");
+      const written = JSON.parse(readFileSync(join(dir, "codex-%7.json"), "utf8"));
+      expect(written.state).toBe("working");
+      // The app reads a context as text: a report of its own carries none.
+      expect(written.context).toBeUndefined();
     } finally {
       if (previous === undefined) delete process.env.AGENTS_STATE_DIR; else process.env.AGENTS_STATE_DIR = previous;
       rmSync(dir, { recursive: true, force: true });

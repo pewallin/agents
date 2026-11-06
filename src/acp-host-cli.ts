@@ -27,7 +27,8 @@ import { reportState } from "./state.js";
 export function reportViewActivity(stateAgent: string, paneId: string) {
   return (state: "needs-you" | "working" | "idle") => {
     try {
-      reportState(stateAgent, paneId, state === "needs-you" ? "approval" : state, {});
+      // No context: an empty object here would be read as one, which the app cannot take.
+      reportState(stateAgent, paneId, state === "needs-you" ? "approval" : state);
     } catch {
       // The view works without the app's dot.
     }
