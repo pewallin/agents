@@ -124,6 +124,8 @@ export function planAcpRestart(input: {
   heldSession?: (registryId: string, pids: number[]) => string | undefined;
   /** How to run this agents CLI, as shell words. */
   agentsCommand: string;
+  /** The tmux server's version (`#{version}`): a restart that respawns the pane needs 3.8. */
+  tmuxVersion?: string;
 }): RestartPlan {
   const tree = descendants(input.processes, input.panePid);
   if (tree.some((process) => / (codex-session|acp-session)( |$)/.test(process.args))) {
@@ -161,7 +163,25 @@ export function planAcpRestart(input: {
     && parent !== undefined
     && !isPtyWrapper(parent.args)
     && SHELLS.has(basename(parent.args.trim().split(/\s+/)[0] ?? ""));
+  if (!viaShell && !respawnIsSafe(input.tmuxVersion)) {
+    return {
+      ok: false,
+      agent: name,
+      reason: `The agent is this pane's own command, so a restart would respawn the pane, and tmux ${input.tmuxVersion} can crash its server doing that while Agents Next shows the pane (tmux issue 5498, fixed in tmux 3.8). Update tmux (brew upgrade tmux) and restart its server, or start the agent from a shell in the pane.`,
+    };
+  }
   return { ok: true, agent: name, stateAgent: agent.stateAgent, sessionId, agentPid: agentProcess.pid, viaShell, command };
+}
+
+/** Whether respawning a pane is safe with a control client (Agents Next) attached: tmux before
+ *  3.8 keeps a lagging control client's offsets across the respawn, and its next read of the new
+ *  process's output crashes the server in input_parse (tmux issue 5498; the mini's server,
+ *  2026-11-06). A version tmux does not number (master, next-3.9) is taken as new. */
+export function respawnIsSafe(version: string | undefined): boolean {
+  const match = version?.match(/^(?:next-)?(\d+)\.(\d+)/);
+  if (!match) return true;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  return major > 3 || (major === 3 && minor >= 8);
 }
 
 /** `--resume-id <id>` or `--resume <id>` in an agent's command. */
@@ -270,10 +290,12 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
   let panePid: number;
   let cwd: string;
   let remainOnExit: string;
+  let tmuxVersion: string;
   try {
-    const [pid, path] = tmux(["display-message", "-p", "-t", paneId, "#{pane_pid}\t#{pane_current_path}"]).trim().split("\t");
+    const [pid, path, version] = tmux(["display-message", "-p", "-t", paneId, "#{pane_pid}\t#{pane_current_path}\t#{version}"]).trim().split("\t");
     panePid = Number(pid);
     cwd = path;
+    tmuxVersion = version ?? "";
     remainOnExit = tmux(["show-options", "-p", "-v", "-t", paneId, "remain-on-exit"]).trim();
   } catch (error) {
     say({ ok: false, reason: `No such pane: ${error instanceof Error ? error.message : String(error)}` });
@@ -291,6 +313,7 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
       return locks ? sessionHeldBy(locks, pids) : undefined;
     },
     agentsCommand: self.map(shellQuote).join(" "),
+    tmuxVersion,
   });
   if (check || !plan.ok) {
     say(plan);
