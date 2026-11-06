@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { kiroSessionLock, kiroSessionLocks } from "./acp-host-cli.js";
 import { agentWords, codexResumeCommand, isPtyWrapper, planAcpRestart, sessionHeldBy, type PaneProcess } from "./acp-restart.js";
 
 const AGENTS_BIN = "/Users/me/.agents/agents-cli/app/agents";
@@ -100,11 +101,32 @@ describe("acp-restart", () => {
       writeFileSync(join(directory, "live.lock"), JSON.stringify({ pid: 58370, started_at: "2026-11-06T10:47:05Z" }));
       writeFileSync(join(directory, "other.lock"), JSON.stringify({ pid: 1 }));
       writeFileSync(join(directory, "notes.json"), "{}");
-      expect(sessionHeldBy(directory, [58321, 58370])).toBe("live");
-      expect(sessionHeldBy(directory, [2])).toBeUndefined();
-      expect(sessionHeldBy(join(directory, "missing"), [58370])).toBeUndefined();
+      const locks = ["stale", "live", "other", "missing"].map((sessionId) => ({ sessionId, path: join(directory, `${sessionId}.lock`) }));
+      expect(sessionHeldBy(locks, [58321, 58370])).toBe("live");
+      expect(sessionHeldBy(locks, [2])).toBeUndefined();
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("finds Kiro's session locks where Kiro 2 and Kiro 3 keep them", () => {
+    const root = mkdtempSync(join(tmpdir(), "kiro-sessions-"));
+    try {
+      mkdirSync(join(root, "cli"));
+      writeFileSync(join(root, "cli", "a28d7390.lock"), JSON.stringify({ pid: 1 }));
+      writeFileSync(join(root, "cli", "a28d7390.json"), "{}");
+      // Kiro 3.1: <root>/<workspace hash>/<session>/.lock beside session.json; .index is no session.
+      mkdirSync(join(root, "b46ad781d995a6ec", "sess_6200"), { recursive: true });
+      mkdirSync(join(root, "b46ad781d995a6ec", ".index"), { recursive: true });
+      mkdirSync(join(root, "b46ad781d995a6ec", "sess_closed"), { recursive: true });
+      writeFileSync(join(root, "b46ad781d995a6ec", "sess_6200", ".lock"), JSON.stringify({ pid: 5024 }));
+      writeFileSync(join(root, "b46ad781d995a6ec", ".index", ".lock"), "");
+      expect(kiroSessionLocks(root).map((lock) => lock.sessionId).sort()).toEqual(["a28d7390", "sess_6200"]);
+      expect(sessionHeldBy(kiroSessionLocks(root), [5011, 5024])).toBe("sess_6200");
+      expect(kiroSessionLock("sess_6200", root)).toBe(join(root, "b46ad781d995a6ec", "sess_6200", ".lock"));
+      expect(kiroSessionLock("sess_closed", root)).toBe(join(root, "cli", "sess_closed.lock"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

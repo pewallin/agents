@@ -6,7 +6,7 @@
 //
 //   --check   says whether the pane can be restarted, and why not, without touching it.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ACP_AGENTS } from "./acp-host-cli.js";
 import { getSelfArgv, getStateDir } from "./paths.js";
@@ -172,23 +172,16 @@ function resumeIdOf(words: string[]): string | undefined {
   return undefined;
 }
 
-/** The session whose lock file (`{"pid": …}`) one of `pids` holds, in the agent's lock directory. */
-export function sessionHeldBy(lockDirectory: string, pids: number[]): string | undefined {
+/** The session whose lock file (`{"pid": …}`) one of `pids` holds. */
+export function sessionHeldBy(locks: Array<{ sessionId: string; path: string }>, pids: number[]): string | undefined {
   const wanted = new Set(pids);
-  let names: string[];
-  try {
-    names = readdirSync(lockDirectory).filter((name) => name.endsWith(".lock"));
-  } catch {
-    return undefined;
-  }
   // A stale lock may name a pid that is now one of these: the newest lock wins.
   let found: { session: string; at: number } | undefined;
-  for (const name of names) {
+  for (const lock of locks) {
     try {
-      const path = join(lockDirectory, name);
-      const pid = (JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown }).pid;
-      const at = statSync(path).mtimeMs;
-      if (typeof pid === "number" && wanted.has(pid) && (!found || at > found.at)) found = { session: name.slice(0, -".lock".length), at };
+      const pid = (JSON.parse(readFileSync(lock.path, "utf8")) as { pid?: unknown }).pid;
+      const at = statSync(lock.path).mtimeMs;
+      if (typeof pid === "number" && wanted.has(pid) && (!found || at > found.at)) found = { session: lock.sessionId, at };
     } catch { /* not a lock */ }
   }
   return found?.session;
@@ -294,8 +287,8 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
     processes,
     stateOf: (stateAgent) => readState(stateAgent, paneId),
     heldSession: (registryId, pids) => {
-      const lock = ACP_AGENTS[registryId]?.sessionLock?.("session");
-      return lock ? sessionHeldBy(dirname(lock), pids) : undefined;
+      const locks = ACP_AGENTS[registryId]?.sessionLocks?.();
+      return locks ? sessionHeldBy(locks, pids) : undefined;
     },
     agentsCommand: self.map(shellQuote).join(" "),
   });

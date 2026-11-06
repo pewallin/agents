@@ -67,6 +67,8 @@ export interface AcpAgentEntry {
   pickedSession?(tuiCommand: string): string | "unknown" | undefined;
   /** Hand-off agents: the file the agent holds while a process has the session open. */
   sessionLock?(sessionId: string): string;
+  /** Hand-off agents: every session lock there is, to tell which session a process holds. */
+  sessionLocks?(): Array<{ sessionId: string; path: string }>;
   /** The agent's own logs, whose last lines go into the view's diagnostics. */
   logFiles?(): string[];
   /** Hand-off agents that name a session before writing it: whether it has been written. A
@@ -155,6 +157,38 @@ export function copilotAcpArgs(tuiCommand: string | undefined): string[] {
     }
   }
   return ["--acp", ...carried];
+}
+
+/**
+ * Kiro's session locks (`{"pid": …}` while a process has the session open): Kiro 2 keeps
+ * <root>/cli/<session>.lock, Kiro 3 <root>/<workspace hash>/<session>/.lock.
+ */
+export function kiroSessionLocks(root: string = join(homedir(), ".kiro", "sessions")): Array<{ sessionId: string; path: string }> {
+  const locks: Array<{ sessionId: string; path: string }> = [];
+  const entries = (directory: string) => {
+    try {
+      return readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  };
+  for (const entry of entries(join(root, "cli"))) {
+    if (entry.isFile() && entry.name.endsWith(".lock")) locks.push({ sessionId: entry.name.slice(0, -".lock".length), path: join(root, "cli", entry.name) });
+  }
+  for (const workspace of entries(root)) {
+    if (!workspace.isDirectory() || workspace.name === "cli") continue;
+    for (const session of entries(join(root, workspace.name))) {
+      const path = join(root, workspace.name, session.name, ".lock");
+      if (session.isDirectory() && !session.name.startsWith(".") && existsSync(path)) locks.push({ sessionId: session.name, path });
+    }
+  }
+  return locks;
+}
+
+/** Where Kiro keeps a session's lock: beside the session in Kiro 3, in cli/ in Kiro 2. */
+export function kiroSessionLock(sessionId: string, root: string = join(homedir(), ".kiro", "sessions")): string {
+  return kiroSessionLocks(root).find((lock) => lock.sessionId === sessionId)?.path
+    ?? join(root, "cli", `${sessionId}.lock`);
 }
 
 /**
@@ -277,9 +311,10 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     tested: false,
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "kiro-cli"), args: kiroAcpArgs(tuiCommand), env: { ...process.env } }),
     ...sessionOptions(["--resume-id"], ["--resume"], (id) => ["--resume-id", id]),
-    // Kiro keeps <session>.lock beside a session while a process has it open (its TUI or an ACP
-    // agent), and logs to $TMPDIR/kiro-log/kiro-chat.log (kiro.dev/docs/cli/acp).
-    sessionLock: (sessionId) => join(homedir(), ".kiro", "sessions", "cli", `${sessionId}.lock`),
+    // Kiro keeps a lock beside a session while a process has it open (its TUI or an ACP agent),
+    // and logs to $TMPDIR/kiro-log/kiro-chat.log (kiro.dev/docs/cli/acp).
+    sessionLock: (sessionId) => kiroSessionLock(sessionId),
+    sessionLocks: () => kiroSessionLocks(),
     logFiles: () => [process.env.KIRO_CHAT_LOG_FILE || join(tmpdir(), "kiro-log", "kiro-chat.log")],
   },
 };
