@@ -111,3 +111,16 @@ describe("commits", () => {
     expect(changes).toEqual([{ path: join(root, "README.md"), added: 1, removed: 0, edits: [{ oldText: "# Hello\n", newText: "# Hello\nworld\n" }] }]);
   });
 });
+
+describe("git command summaries", () => {
+  it("says what a commit and a push would do", async () => {
+    const { gitCommandSummary } = await import("./acp-peek.js");
+    writeFileSync(join(root, "README.md"), "# Hello\nmore\n");
+    writeFileSync(join(root, "new.txt"), "x\n");
+    git("add", "README.md", "new.txt");
+    expect(await gitCommandSummary(root, 'git commit -m "x"')).toBe("Commits 2 files on main. Nothing is pushed.");
+    expect(await gitCommandSummary(root, "git push")).toBe("Pushes main, which has no upstream yet.");
+    expect(await gitCommandSummary(root, "git log")).toBeNull();
+    expect(await gitCommandSummary(root, "ls")).toBeNull();
+  });
+});

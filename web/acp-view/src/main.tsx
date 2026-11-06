@@ -6,7 +6,7 @@
 //
 // The look: a reading column, the agent's text straight on the page, its work as quiet gray lines
 // that open on demand, one floating field to write in.
-import { StrictMode, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { StrictMode, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
@@ -14,9 +14,10 @@ import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession } fro
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, describeCall, duration, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
-import { Chip, ChipHostContext, fileTarget, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
+import { Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { quoted } from "./compose";
+import { DETAIL_TITLES, failedCalls, lastLines, nextDetailLevel, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import "./view.css";
 
 // Markdown (Streamdown) and code highlighting load after the first paint.
@@ -221,11 +222,19 @@ const PRESENT: Record<string, string> = {
   "Thought": "Thinking", "Deleted": "Deleting", "Moved": "Moving", "Switched mode": "Switching mode",
 };
 
-function ToolLine({ call, cwd }: { call: ToolCall; cwd: string }) {
-  const [open, setOpen] = useState(false);
+/** How much of the work shows (⌃O): the level, and opening a command's output beside the pane. */
+const DetailContext = createContext<{ level: DetailLevel; openOutput: (title: string, text: string) => void }>({ level: "steps", openOutput: () => {} });
+
+const FILE_KINDS = new Set(["read", "edit", "delete", "move"]);
+
+function ToolLine({ call, cwd, failure = false }: { call: ToolCall; cwd: string; failure?: boolean }) {
+  const { level, openOutput } = useContext(DetailContext);
+  const [open, setOpen] = useState(level === "everything");
+  useEffect(() => { if (level === "everything") setOpen(true); }, [level]);
   const { verb, target } = describeCall(call, cwd);
   const output = toolOutput(call);
   const diffCount = call.content.some((entry) => entry.type === "diff");
+  const running = call.status === "pending" || call.status === "in_progress";
   let meta: ReactNode = null;
   if (call.status === "failed") meta = <span className="del">failed</span>;
   else if (diffCount) {
@@ -240,16 +249,30 @@ function ToolLine({ call, cwd }: { call: ToolCall; cwd: string }) {
   const line = oneLine(target.replace(/`([^`]*)`/g, "$1"));
   const whole = line !== target.trim() ? target : null;
   const canOpen = Boolean(output) || whole !== null;
+  // The files a read or an edit acted on, as chips.
+  const files = call.kind && FILE_KINDS.has(call.kind)
+    ? [...new Set([...call.content.flatMap((entry) => (entry.type === "diff" ? [entry.path] : [])), ...call.locations.map((location) => location.path)])].slice(0, 3)
+    : [];
+  const title = call.kind === "execute" ? `${verb} ${line}` : line;
   return (
     <>
-      <div className={`ln${canOpen ? " can-open" : ""}`} onClick={() => canOpen && setOpen(!open)} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
+      <div className={`ln${canOpen ? " can-open" : ""}${failure ? " failure" : ""}`} onClick={() => canOpen && setOpen(!open)} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
         onKeyDown={(event) => { if (canOpen && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setOpen(!open); } }}>
         {verb && <span className="v">{verb}</span>}
-        <span className="t" title={whole ? undefined : line}>{line}</span>
+        {files.length > 0
+          ? <span className="t files">{files.map((path) => <NamedChip key={path} name={path} fallback={<span>{shortPath(path, cwd)}</span>} />)}</span>
+          : <span className="t" title={whole ? undefined : line}>{line}</span>}
         {meta !== null && <span className="m">{meta}</span>}
       </div>
       {open && whole && <pre className="out cmd">{whole}</pre>}
-      {open && output && <pre className="out">{output.length > 6000 ? `${output.slice(0, 6000)}\n…` : output}</pre>}
+      {open && output && (
+        <pre className={`out${OPEN_REVIEW_BESIDE ? " can-beside" : ""}`} title={OPEN_REVIEW_BESIDE ? "Open beside the pane" : undefined}
+          onClick={() => OPEN_REVIEW_BESIDE && openOutput(title, output)}>{output.length > 6000 ? `${output.slice(0, 6000)}\n…` : output}</pre>
+      )}
+      {/* The step under way shows its last lines live; a failure its error lines, whatever the level. */}
+      {!open && (running || failure) && output && level !== "results" && (
+        <pre className={`out tail${failure ? " del" : ""}`}>{lastLines(output, 3).join("\n")}</pre>
+      )}
     </>
   );
 }
@@ -272,42 +295,64 @@ function StepLine({ step, cwd }: { step: Step; cwd: string }) {
 }
 
 function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolean; stopped: boolean; cwd: string }) {
+  const { level } = useContext(DetailContext);
   const [open, setOpen] = useState(false);
   const timed = turn.startedAt !== undefined && turn.endedAt !== undefined && turn.endedAt - turn.startedAt >= 1000;
   if (turn.steps.length === 0) {
     return stopped && !working ? <div className="stopped">Stopped{timed ? ` after ${duration(turn.endedAt! - turn.startedAt!)}` : ""}</div> : null;
   }
-  const isOpen = working || open;
+  // Results: while it works only the running step shows (below the turn); Steps: the steps show
+  // as they come and fold into one line when the answer starts; Everything: all of it, open.
+  if (working && level === "results") return null;
+  const isOpen = level === "everything" || (working && level === "steps") || open;
   const label = working
     ? "Working"
-    : stopped
-      ? `Stopped${timed ? ` after ${duration(turn.endedAt! - turn.startedAt!)}` : ""}`
-      : timed
-        ? `Worked for ${duration(turn.endedAt! - turn.startedAt!)}`
-        : `Worked, ${turn.steps.length} ${turn.steps.length === 1 ? "step" : "steps"}`;
+    : stopped ? `Stopped${timed ? ` after ${duration(turn.endedAt! - turn.startedAt!)}` : ""}` : turnSummary(turn);
+  const failures = isOpen ? [] : failedCalls(turn);
   return (
-    <details className="quiet" open={isOpen} onToggle={(event) => { if (!working) setOpen((event.target as HTMLDetailsElement).open); }}>
-      <summary>{label} <Chevron /></summary>
-      <div className="trail">
-        {turn.steps.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} />)}
-      </div>
-    </details>
+    <>
+      <details className="quiet" open={isOpen} onToggle={(event) => { if (!working && level !== "everything") setOpen((event.target as HTMLDetailsElement).open); }}>
+        <summary>{label} <Chevron /></summary>
+        <div className="trail">
+          {turn.steps.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} />)}
+        </div>
+      </details>
+      {failures.length > 0 && (
+        <div className="trail failures">
+          {failures.map((call) => <ToolLine key={call.id} call={call} cwd={cwd} failure />)}
+        </div>
+      )}
+    </>
   );
 }
 
-function EditsLine({ changes, onReview, cwd }: { changes: FileChange[]; onReview: () => void; cwd: string }) {
-  if (changes.length === 0) return null;
+/** After a turn: a check mark (drawn once, for a turn seen live), when it ended, what it changed,
+ *  and Review, Commit and Undo. Commit and Undo ask the agent; the view runs no git. */
+function Receipt({ turn, cwd, onReview, onSend }: { turn: Turn; cwd: string; onReview: () => void; onSend: (text: string) => void }) {
+  const changes = turn.changes;
   const added = changes.reduce((sum, change) => sum + change.added, 0);
   const removed = changes.reduce((sum, change) => sum + change.removed, 0);
+  const live = turn.endedAt !== undefined;
+  if (!live && changes.length === 0) return null;
   return (
-    <div className="edits">
-      <span>{changes.length === 1 ? `1 file changed` : `${changes.length} files changed`}</span>
-      <span className="n"><span className="add">+{added}</span> <span className="del">−{removed}</span></span>
-      <span className="files">
-        {changes.slice(0, 4).map((change) => <Chip key={change.path} target={fileTarget(change.path, shortPath(change.path, cwd))} />)}
-        {changes.length > 4 && <span className="more">+{changes.length - 4}</span>}
+    <div className={`receipt${live && Date.now() - turn.endedAt! < 4000 ? " draw" : ""}`}>
+      <span className="done">
+        <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7.4l2.6 2.6L11 4.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        {live ? clockTime(turn.endedAt!) : "Done"}
       </span>
-      <button className="tbtn" type="button" onClick={onReview}>Review</button>
+      {changes.length > 0 && (
+        <>
+          <span className="delta">{changes.length === 1 ? "1 file" : `${changes.length} files`} <span className="add">+{added}</span> <span className="del">−{removed}</span></span>
+          <span className="files">
+            {changes.slice(0, 4).map((change) => <Chip key={change.path} target={fileTarget(change.path, shortPath(change.path, cwd))} />)}
+            {changes.length > 4 && <span className="more">+{changes.length - 4}</span>}
+          </span>
+          <span className="sp" />
+          <button className="pbtn" type="button" onClick={onReview}>Review</button>
+          <button className="pbtn" type="button" onClick={() => onSend("Commit the changes you made in this turn, with a message that says what they do.")}>Commit</button>
+          <button className="pbtn" type="button" onClick={() => onSend("Undo the changes you made in this turn.")}>Undo</button>
+        </>
+      )}
     </div>
   );
 }
@@ -359,7 +404,7 @@ function YouMessage({ text, pending, at }: { text: string; pending?: boolean; at
   );
 }
 
-function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void }) {
+function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void; onSend: (text: string) => void }) {
   const streaming = last && working;
   const stopped = useSession((s) => s.stoppedTurns?.includes(turn.id) ?? false);
   const answerText = useMemo(() => turn.answer.map((item) => item.text).join("\n"), [turn.answer]);
@@ -384,9 +429,7 @@ function TurnView({ turn, last, working, cwd, onReview }: { turn: Turn; last: bo
         </div>
       )}
       {!streaming && answerText && <ResultStrip answer={answerText} changes={turn.changes} version={String(turn.endedAt ?? "")} />}
-      {!streaming && <EditsLine changes={turn.changes} cwd={cwd} onReview={() => onReview(turn)} />}
-      {/* When the turn ended, quietly, for a turn the view saw happen. */}
-      {!streaming && turn.endedAt !== undefined && turn.answer.length > 0 && <div className="when turn-when">{clockTime(turn.endedAt)}</div>}
+      {!streaming && (turn.answer.length > 0 || turn.changes.length > 0) && <Receipt turn={turn} cwd={cwd} onReview={() => onReview(turn)} onSend={onSend} />}
     </TurnChangesContext.Provider>
   );
 }
@@ -439,13 +482,22 @@ function Ask({ request, agentName, session, focused, cwd }: { request: Permissio
       : command ? `May ${agentName} run this?` : `May ${agentName} go on?`;
   const detail = command ?? (isPlan ? undefined : request.toolCall.title ?? undefined);
   const reject = request.options.find((option) => option.kind === "reject_once") ?? request.options.find((option) => option.kind.startsWith("reject"));
+  const always = request.options.find((option) => option.kind === "allow_always");
+  // For a git command, what it does in plain words, read from git (the view runs nothing).
+  const [gitLine, setGitLine] = useState<string | null>(null);
+  useEffect(() => {
+    if (!command || !/^\s*git\s/.test(command)) return;
+    let live = true;
+    hostJson<{ summary: string | null }>(`/api/git/summary?command=${encodeURIComponent(command)}`).then((value) => { if (live) setGitLine(value.summary); }, () => {});
+    return () => { live = false; };
+  }, [command]);
 
   useEffect(() => {
     if (!focused) return;
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.tagName === "TEXTAREA" && (target as HTMLTextAreaElement).value.length > 0;
-      if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (typing || (event.metaKey && event.key !== "Enter") || event.ctrlKey || event.altKey) return;
       const digit = Number(event.key);
       if (Number.isInteger(digit) && digit >= 1 && digit <= request.options.length) {
         event.preventDefault();
@@ -453,7 +505,11 @@ function Ask({ request, agentName, session, focused, cwd }: { request: Permissio
       } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         setSelected((index) => (index + (event.key === "ArrowDown" ? 1 : request.options.length - 1)) % request.options.length);
-      } else if (event.key === "Enter" && target?.tagName !== "TEXTAREA") {
+      } else if (event.key === "Enter" && event.metaKey && always) {
+        event.preventDefault();
+        session.answerPermission(request.id, always.optionId);
+      } else if (event.key === "Enter" && !event.shiftKey) {
+        // ⏎ answers with the selected option, also from the field while it is empty.
         event.preventDefault();
         session.answerPermission(request.id, request.options[selected].optionId);
       } else if (event.key === "Escape") {
@@ -463,19 +519,21 @@ function Ask({ request, agentName, session, focused, cwd }: { request: Permissio
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [focused, request, selected, session, reject]);
+  }, [focused, request, selected, session, reject, always]);
 
   return (
     <div className={`ask${isPlan ? " plan" : ""}`} role="alertdialog" aria-label={question}>
       <span className="q">{question}</span>
       {detail && <span className="cmd">{detail}</span>}
       {command && request.toolCall.title && request.toolCall.title !== command && <span className="sub">{request.toolCall.title}</span>}
+      {gitLine && <span className="why">{gitLine}</span>}
       <div className="choices">
         {request.options.map((option, index) => (
           <button key={option.optionId} type="button" className={`choice${index === selected ? " sel" : ""}`}
             onMouseEnter={() => setSelected(index)}
             onClick={() => session.answerPermission(request.id, option.optionId)}>
-            <span className="k2">{index + 1}</span>{optionLabel(option, agentName, request.toolCall)}
+            <span className="k2">{index + 1}</span><span className="lbl">{optionLabel(option, agentName, request.toolCall)}</span>
+            <kbd>{index === selected ? "⏎" : option === always ? "⌘⏎" : option === reject ? "esc" : ""}</kbd>
           </button>
         ))}
       </div>
@@ -555,7 +613,9 @@ function Ring({ percent }: { percent: number }) {
 type SelectChoice = { value?: string; name: string; options?: Array<{ value: string; name: string }> };
 const SHOWN_CATEGORIES = new Set(["mode", "model", "thought_level"]);
 
-function Dock({ session, info, now, onHeight }: { session: AcpSession; info: HostInfo; now: number; onHeight: (height: number) => void }) {
+function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
+  session: AcpSession; info: HostInfo; now: number; onHeight: (height: number) => void; level: DetailLevel; onCycleLevel: () => void;
+}) {
   const [draft, setDraft] = useState("");
   const [flying, setFlying] = useState(false);
   const dock = useRef<HTMLDivElement>(null);
@@ -750,6 +810,10 @@ function Dock({ session, info, now, onHeight }: { session: AcpSession; info: Hos
                 </label>
               );
             })}
+            <button className="opt level" type="button" title="How much of the work shows (⌃O)" onClick={onCycleLevel}>
+              <svg viewBox="0 0 12 12" aria-hidden="true"><path d={level === "results" ? "M2 6h8" : level === "steps" ? "M2 4h8M2 8h5" : "M2 3h8M2 6h8M2 9h8"} fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+              {DETAIL_TITLES[level]}
+            </button>
             <span className="sp" />
             {percent !== undefined && <Ring percent={percent} />}
             {busy && !draft.trim()
@@ -793,7 +857,8 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   const title = useSession((s) => s.title);
   const permissions = useSession((s) => s.permissions);
   const state = useSession((s) => attention(s));
-  const working = state === "working";
+  // A turn that waits on a question is still under way.
+  const working = state === "working" || state === "needs-you";
   const builtTurns = useMemo(() => buildTurns({ items, toolCalls }), [items, toolCalls]);
   const gitTurns = useGitTurns(working, builtTurns.length);
   const turns = useMemo(() => builtTurns.map((turn, index) => {
@@ -860,6 +925,23 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
     }
     setReview(changes);
   };
+  const [level, setLevel] = useState<DetailLevel>(storedDetailLevel);
+  const cycleLevel = useCallback(() => setLevel((current) => { const next = nextDetailLevel(current); storeDetailLevel(next); return next; }), []);
+  // ⌃O cycles how much of the work shows, wherever the keyboard is in the view.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "o") { event.preventDefault(); cycleLevel(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cycleLevel]);
+  const detail = useMemo(() => ({
+    level,
+    // A command's output opens in a pane beside, as a page of the host's.
+    openOutput: (title: string, text: string) => {
+      void hostJson("/api/output", { title, text }).catch(() => {});
+    },
+  }), [level]);
   const openReviewRef = useRef(openReview);
   openReviewRef.current = openReview;
   const chipHost = useMemo<ChipHost>(() => ({
@@ -890,6 +972,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   const lastTurn = turns.at(-1);
   return (
     <ChipHostContext.Provider value={chipHost}>
+    <DetailContext.Provider value={detail}>
     <PeekLayer>
     <div className={`view${review ? " reviewing" : ""}`} data-acp-ready="true" data-attention={state}>
       <div className="main" ref={main}>
@@ -903,7 +986,8 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
             {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
               <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working} cwd={info.cwd}
-                onReview={(t) => void openReview(t.changes)} />
+                onReview={(t) => void openReview(t.changes)}
+                onSend={(text) => void (working ? session.steer : session.prompt)([{ type: "text", text }])} />
             ))}
             {working && permissions.length === 0 && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
             {permissions.map((request, index) => (
@@ -912,7 +996,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           </div>
         </div>
         </div>
-        <Dock session={session} info={info} now={now} onHeight={onDockHeight} />
+        <Dock session={session} info={info} now={now} onHeight={onDockHeight} level={level} onCycleLevel={cycleLevel} />
       </div>
       {review && (
         <ReviewPane changes={review} cwd={info.cwd} agentName={info.agent.name}
@@ -921,6 +1005,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
       )}
     </div>
     </PeekLayer>
+    </DetailContext.Provider>
     </ChipHostContext.Provider>
   );
 }
@@ -1207,6 +1292,23 @@ function ReviewPage({ id }: { id: string }) {
 const OPEN_REVIEW_BESIDE = new URLSearchParams(location.search).get("agents-next") === "acp-view";
 const reviewId = decodeURIComponent(location.pathname.match(/^\/review\/([^/]+)/)?.[1] ?? "") || null;
 const beadId = decodeURIComponent(location.pathname.match(/^\/bead\/([^/]+)/)?.[1] ?? "") || null;
+const outputId = decodeURIComponent(location.pathname.match(/^\/output\/([^/]+)/)?.[1] ?? "") || null;
+
+/** A command's output, opened beside its pane (/output/<id>). */
+function OutputPage({ id }: { id: string }) {
+  const [output, setOutput] = useState<{ title: string; text: string } | null | undefined>(undefined);
+  useEffect(() => {
+    hostJson<{ title: string; text: string }>(`/api/output/${encodeURIComponent(id)}`).then((value) => { setOutput(value); document.title = value.title; }, () => setOutput(null));
+  }, [id]);
+  if (output === undefined) return <Notice>Opening the output…</Notice>;
+  if (output === null) return <Notice>The output is gone. Open it again from the agent's view.</Notice>;
+  return (
+    <div className="view output-page"><div className="main"><div className="scroll"><div className="col">
+      <div className="bead-head"><span className="mono">{output.title}</span></div>
+      <pre className="full-output">{output.text}</pre>
+    </div></div></div></div>
+  );
+}
 
 interface BeadDetail { id: string; title: string; status: string; priority?: number; type?: string; description?: string; notes?: string; updated?: string }
 
@@ -1242,6 +1344,7 @@ function App() {
   if (!token) return <Notice>The page needs the pane's token. Open it from Agents Next.</Notice>;
   if (reviewId) return <ReviewPage id={reviewId} />;
   if (beadId) return <BeadPage id={beadId} />;
+  if (outputId) return <OutputPage id={outputId} />;
   if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
   if (!info) return <Notice>Connecting…</Notice>;
   return <SessionGate info={info} />;

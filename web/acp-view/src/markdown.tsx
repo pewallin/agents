@@ -3,6 +3,7 @@
 // shared by every message.
 import { useEffect, useState, type ReactNode } from "react";
 import { Streamdown } from "streamdown";
+import { CodeBlock, Quote } from "./blocks";
 import { NamedChip } from "./chips";
 
 type Plugins = NonNullable<Parameters<typeof Streamdown>[0]["plugins"]>;
@@ -39,14 +40,19 @@ function Link({ href, children }: { href?: string; children?: ReactNode }) {
 }
 
 /** `code` in the text: a chip when it names a file, an image, a pane, a bead or a commit. */
-function InlineCode({ children, ...props }: { children?: ReactNode }) {
+function InlineCode({ children, node: _node, ...props }: { children?: ReactNode; node?: unknown }) {
   const text = textOf(children)?.trim();
   const code = <code {...props}>{children}</code>;
   if (!text || text.length > 300 || /\s/.test(text)) return code;
   return <NamedChip name={text} fallback={code} />;
 }
 
-const components = { a: Link, inlineCode: InlineCode } as Parameters<typeof Streamdown>[0]["components"];
+/** Streamdown marks a fenced block's code with data-block; the rest is inline. */
+function Code(props: { children?: ReactNode; className?: string; node?: { properties?: { metastring?: string } } }) {
+  return "data-block" in props ? <CodeBlock {...props} /> : <InlineCode>{props.children}</InlineCode>;
+}
+
+const components = { a: Link, inlineCode: InlineCode, code: Code, blockquote: Quote } as Parameters<typeof Streamdown>[0]["components"];
 const controls = { code: { copy: true, download: false }, table: false, mermaid: false } as Parameters<typeof Streamdown>[0]["controls"];
 
 export default function Markdown({ text, streaming }: { text: string; streaming: boolean }) {

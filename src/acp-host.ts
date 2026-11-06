@@ -17,7 +17,7 @@ import { getBuildInfo, getStateDir } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
-import { changesSince, commitChanges, commitInfo, IMAGE_EXTENSIONS, inside, linkInfo, paneStates, peekFile, readBeads, resolveNames, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
+import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, inside, linkInfo, paneStates, peekFile, readBeads, resolveNames, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
 
 export interface AcpHostMetadata {
   url: string;
@@ -855,7 +855,7 @@ function handleBridge(
 }
 
 /** What the view's chips and peeks ask the host (src/acp-peek.ts). */
-const PEEK_PATHS = ["/api/resolve", "/api/peek", "/api/raw", "/api/git", "/api/commit", "/api/bead", "/api/link", "/api/open-page"];
+const PEEK_PATHS = ["/api/resolve", "/api/peek", "/api/raw", "/api/git", "/api/commit", "/api/bead", "/api/link", "/api/open-page", "/api/output"];
 
 const RAW_TYPES: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
@@ -866,7 +866,7 @@ function handlePeek(
   request: IncomingMessage,
   response: ServerResponse,
   url: URL,
-  context: { cwd: string; token: string; paneId: string; origin: string; appControl: AppControlTarget; log: (message: string) => void },
+  context: { cwd: string; token: string; paneId: string; origin: string; appControl: AppControlTarget; reviews: ReviewStore; log: (message: string) => void },
   fail: (status: number) => (error: unknown) => void,
 ): boolean {
   const path = url.pathname;
@@ -897,6 +897,27 @@ function handlePeek(
     }
     response.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'" });
     response.end(readFileSync(file));
+    return true;
+  }
+  if (path === "/api/git/summary" && request.method === "GET") {
+    gitCommandSummary(cwd, param("command")).then((summary) => sendJson(response, 200, { summary }), () => sendJson(response, 200, { summary: null }));
+    return true;
+  }
+  // A command's output, opened as a page of its own beside the pane.
+  if (path === "/api/output" && request.method === "POST") {
+    readJson(request, 8 * 1024 * 1024).then(async (body) => {
+      const { title, text } = (body ?? {}) as { title?: unknown; text?: unknown };
+      if (typeof text !== "string") { sendJson(response, 400, { message: "text is needed" }); return; }
+      const id = context.reviews.put({ kind: "output", title: typeof title === "string" ? title : "Output", text });
+      await openPageBeside(context.appControl, context.paneId, `${context.origin}/output/${id}#token=${encodeURIComponent(context.token)}`);
+      sendJson(response, 200, { id });
+    }).catch(fail(503));
+    return true;
+  }
+  const output = path.match(/^\/api\/output\/([A-Za-z0-9_-]+)$/);
+  if (output && request.method === "GET") {
+    const stored = context.reviews.get(output[1]) as { kind?: string } | undefined;
+    sendJson(response, stored?.kind === "output" ? 200 : 404, stored?.kind === "output" ? stored : { message: "gone" });
     return true;
   }
   if (path === "/api/git/snapshot" && request.method === "POST") {

@@ -18,6 +18,21 @@ export function languageOf(path: string): string | undefined {
   return EXTENSIONS[name.split(".").pop()?.toLowerCase() ?? ""];
 }
 
+const ALIASES: Record<string, string> = {
+  ts: "typescript", typescript: "typescript", tsx: "tsx", js: "javascript", javascript: "javascript", jsx: "jsx",
+  sh: "shellscript", bash: "shellscript", zsh: "shellscript", shell: "shellscript", console: "shellscript", shellscript: "shellscript",
+  py: "python", python: "python", rb: "ruby", ruby: "ruby", go: "go", rust: "rust", rs: "rust", swift: "swift", kotlin: "kotlin",
+  java: "java", c: "c", cpp: "cpp", "c++": "cpp", csharp: "csharp", cs: "csharp", json: "json", jsonc: "json", yaml: "yaml", yml: "yaml",
+  toml: "toml", html: "html", css: "css", scss: "scss", sql: "sql", md: "markdown", markdown: "markdown", diff: "diff", patch: "diff",
+  dockerfile: "dockerfile", make: "make", makefile: "make", lua: "lua", php: "php", vue: "vue", svelte: "svelte", xml: "xml", ini: "ini",
+};
+
+/** A fenced block's language as Shiki names it (its info string, or the file it names). */
+export function languageNamed(language: string | undefined, path?: string): string | undefined {
+  const named = language ? ALIASES[language.toLowerCase()] : undefined;
+  return named ?? (path ? languageOf(path) : undefined);
+}
+
 type Highlighter = Awaited<ReturnType<typeof import("shiki")["createHighlighter"]>>;
 const highlighters = new Map<string, Promise<Highlighter>>();
 
@@ -36,8 +51,8 @@ function highlighterFor(lang: string): Promise<Highlighter> {
   return highlighter;
 }
 
-export async function highlightLines(code: string, path: string): Promise<Lines | null> {
-  const lang = languageOf(path);
+export async function highlightLines(code: string, path: string, language?: string): Promise<Lines | null> {
+  const lang = language ?? languageOf(path);
   if (!lang || !code) return null;
   const highlighter = await highlighterFor(lang);
   const result = highlighter.codeToTokens(code, { lang: lang as never, themes: { light: "github-light", dark: "github-dark" } });

@@ -181,6 +181,36 @@ export async function versionsBetween(cwd: string, from: string, to: string, pat
   return { oldText, newText: newText ?? "" };
 }
 
+/** What a git command an agent asks to run does, in plain words, from git itself: "Commits 4 files
+ *  on main. Nothing is pushed." Null for commands it has nothing to say about. */
+export async function gitCommandSummary(cwd: string, command: string): Promise<string | null> {
+  const words = command.trim().split(/\s+/);
+  if (words[0] !== "git") return null;
+  const sub = words.slice(1).find((word) => !word.startsWith("-") && !word.includes("="));
+  const branch = (await git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "")).trim();
+  if (!branch) return null;
+  const count = (text: string) => text.split("\n").filter(Boolean).length;
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  if (sub === "commit") {
+    const all = words.includes("-a") || words.includes("--all") || words.some((word) => /^-[a-zA-Z]*a[a-zA-Z]*$/.test(word));
+    const staged = count(await git(cwd, ["diff", "--cached", "--name-only"]).catch(() => ""));
+    const tracked = all ? count(await git(cwd, ["diff", "--name-only"]).catch(() => "")) : 0;
+    const files = staged + tracked;
+    return files ? `Commits ${plural(files, "file", "files")} on ${branch}. Nothing is pushed.` : `Nothing is staged on ${branch}; the commit may be empty or fail.`;
+  }
+  if (sub === "push") {
+    const ahead = (await git(cwd, ["rev-list", "--count", "@{upstream}..HEAD"]).catch(() => "")).trim();
+    const upstream = (await git(cwd, ["rev-parse", "--abbrev-ref", "@{upstream}"]).catch(() => "")).trim();
+    return upstream ? `Pushes ${plural(Number(ahead) || 0, "commit", "commits")} from ${branch} to ${upstream}.` : `Pushes ${branch}, which has no upstream yet.`;
+  }
+  if (sub === "add") return `Stages files on ${branch}. Nothing is committed.`;
+  if (sub === "reset" || sub === "restore" || sub === "checkout" || sub === "clean" || sub === "stash") {
+    const changed = count(await git(cwd, ["status", "--porcelain"]).catch(() => ""));
+    return `${changed ? `${plural(changed, "file has", "files have")} changes on ${branch}` : `No changes on ${branch}`}; this command can discard or move them.`;
+  }
+  return null;
+}
+
 // --- commits -------------------------------------------------------------------------------
 
 export interface CommitSummary { sha: string; short: string; author: string; when: string; subject: string; body: string }
