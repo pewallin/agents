@@ -6,6 +6,7 @@ import { BACK_ENV } from "./back.js";
 import { detectMultiplexer, getMux } from "./multiplexer.js";
 import { appendRuntimeFocusRequest } from "./runtime-events.js";
 import { classicLayout } from "./tmux-layout.js";
+import { respawnPane } from "./tmux-respawn.js";
 
 export interface SiblingPane {
   tmuxPaneId: string;
@@ -248,5 +249,7 @@ while true; do sleep 86400; done
   if (detectMultiplexer() === "zellij") return;
   const path = join(tmpdir(), `agents-ph-${paneId.replace("%", "")}.sh`);
   writeFileSync(path, script, { mode: 0o755 });
-  exec(`tmux respawn-pane -k -t ${paneId} 'bash ${path}'`);
+  try {
+    respawnPane(paneId, ["-k", "-t", paneId, `bash ${path}`]);
+  } catch { /* as before: a pane that cannot take the placeholder keeps what it runs */ }
 }

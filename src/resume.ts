@@ -7,6 +7,7 @@ import { splitCommandArgv } from "./workspace.js";
 import { execFileCapture } from "./shell.js";
 import { setTmuxPaneCommandMetadata } from "./tmux-pane-metadata.js";
 import { getSelfArgv } from "./paths.js";
+import { respawnPane } from "./tmux-respawn.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
 import { handOffAgentId } from "./acp-restart.js";
@@ -370,18 +371,14 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     if (target.targetKind === "new-session") {
       clearStateExternalSessionId(resumeAgent, pane.tmuxPaneId);
     }
-    const respawn = execFileCapture("tmux", [
-      "respawn-pane",
-      "-k",
-      "-t",
-      pane.tmuxPaneId,
-      "-c",
-      cwd,
-      respawnCommand,
-    ]);
-    if (respawn.status !== 0) {
-      throw new Error(respawn.stderr || respawn.stdout || respawn.error?.message || `tmux respawn-pane exited ${respawn.status}`);
-    }
+    // Safe on tmux before 3.8 with Agents Next attached (tmux-respawn.ts).
+    respawnPane(pane.tmuxPaneId, ["-k", "-t", pane.tmuxPaneId, "-c", cwd, respawnCommand], (args) => {
+      const result = execFileCapture("tmux", args);
+      if (result.status !== 0) {
+        throw new Error(result.stderr || result.stdout || result.error?.message || `tmux ${args[0]} exited ${result.status}`);
+      }
+      return result.stdout;
+    });
     setTmuxPaneCommandMetadata(pane.tmuxPaneId, {
       agent: resumeAgent,
       command,

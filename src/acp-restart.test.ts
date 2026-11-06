@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { kiroSessionLock, kiroSessionLocks } from "./acp-host-cli.js";
-import { agentWords, codexResumeCommand, isPtyWrapper, respawnIsSafe, planAcpRestart, sessionHeldBy, type PaneProcess } from "./acp-restart.js";
+import { agentWords, codexResumeCommand, isPtyWrapper, planAcpRestart, sessionHeldBy, type PaneProcess } from "./acp-restart.js";
 
 const AGENTS_BIN = "/Users/me/.agents/agents-cli/app/agents";
 
@@ -12,9 +12,8 @@ function plan(
   state: Record<string, { state?: string; externalSessionId?: string }>,
   panePid = 100,
   heldSession?: (registryId: string, pids: number[]) => string | undefined,
-  tmuxVersion = "3.8",
 ) {
-  return planAcpRestart({ paneId: "%7", panePid, processes, stateOf: (agent) => state[agent], heldSession, agentsCommand: AGENTS_BIN, tmuxVersion });
+  return planAcpRestart({ paneId: "%7", panePid, processes, stateOf: (agent) => state[agent], heldSession, agentsCommand: AGENTS_BIN });
 }
 
 describe("acp-restart", () => {
@@ -131,16 +130,4 @@ describe("acp-restart", () => {
     }
   });
 
-  // tmux before 3.8 crashes its server when a pane is respawned while a control client (Agents
-  // Next) is behind on it (issue 5498): the mini's server died so on a Claude restart, 2026-11-06.
-  it("respawns a pane only on a tmux that survives it; a restart typed into a shell needs no respawn", () => {
-    const own = [{ pid: 100, ppid: 1, args: "claude --resume s" }];
-    const state = { claude: { state: "idle", externalSessionId: "s" } };
-    expect(plan(own, state, 100, undefined, "3.7c")).toMatchObject({ ok: false, reason: expect.stringContaining("tmux 3.7c can crash") });
-    expect(plan(own, state, 100, undefined, "3.8")).toMatchObject({ ok: true, viaShell: false });
-    const inShell = [{ pid: 100, ppid: 1, args: "-zsh" }, { pid: 200, ppid: 100, args: "claude" }];
-    expect(plan(inShell, state, 100, undefined, "3.6b")).toMatchObject({ ok: true, viaShell: true });
-    expect([respawnIsSafe("3.6b"), respawnIsSafe("3.7c"), respawnIsSafe("3.8"), respawnIsSafe("3.8a"), respawnIsSafe("next-3.9"), respawnIsSafe("master"), respawnIsSafe("4.0")])
-      .toEqual([false, false, true, true, true, true, true]);
-  });
 });
