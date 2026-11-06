@@ -5,6 +5,7 @@ import { exec } from "./shell.js";
 import { BACK_ENV } from "./back.js";
 import { detectMultiplexer, getMux } from "./multiplexer.js";
 import { appendRuntimeFocusRequest } from "./runtime-events.js";
+import { classicLayout } from "./tmux-layout.js";
 
 export interface SiblingPane {
   tmuxPaneId: string;
@@ -158,7 +159,8 @@ export function findSiblingPanes(windowId: string, excludePaneId: string): Sibli
 }
 
 export function snapshotWindow(windowId: string): WindowSnapshot {
-  const layout = exec(`tmux display-message -t ${JSON.stringify(windowId)} -p '#{window_layout}'`);
+  // tmux 3.8 reports JSON: the snapshot keeps the classic format its pane ids are read from.
+  const layout = classicLayout(exec(`tmux display-message -t ${JSON.stringify(windowId)} -p '#{window_layout}'`));
   return { windowId, layout };
 }
 
