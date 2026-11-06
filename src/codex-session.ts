@@ -250,6 +250,7 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
   const startupTimeoutMs = input.startupTimeoutMs ?? 5_000;
   mkdirSync(dirname(plan.endpointMetadataPath), { recursive: true });
   rmSync(plan.endpointMetadataPath, { force: true });
+  rmSync(plan.endpointMetadataPath.replace(/\.json$/, "-exit.json"), { force: true });
   rmSync(plan.logPath, { force: true });
 
   const server = spawnBackgroundLogged(plan.server.executable, plan.server.args, {
@@ -287,6 +288,7 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
     if (plan.resumePermissions) resumeWithPermissions(input, plan, endpoint);
     acpHost = startAcpHost(input, plan, endpoint);
 
+    const tuiStarted = Date.now();
     const result = execFileInheritUntilExit(
       plan.tui.executable,
       ["--remote", endpoint, ...plan.tui.args],
@@ -295,6 +297,9 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
     if (result.error) throw result.error;
     tuiStatus = result.status;
     tuiSignal = result.signal;
+    if (tuiStatus !== 0 && !tuiSignal && Date.now() - tuiStarted < QUICK_EXIT_MS) {
+      reportQuickExit(plan, tuiStatus, Date.now() - tuiStarted, input.environment);
+    }
   } finally {
     acpHost?.terminate();
     server.terminate();
@@ -307,6 +312,23 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
     logPath: plan.logPath,
     appServer: true,
   };
+}
+
+/** A Codex that ends with an error this soon after it started did not start. */
+const QUICK_EXIT_MS = 15_000;
+
+/** Codex ended with an error as it started (a refused option, a session it cannot resume): the
+ *  pane keeps its message on screen until Enter, and the view's diagnostics find the exit
+ *  beside the app-server's log (pane-N-exit.json). */
+function reportQuickExit(plan: CodexSessionLaunchPlan, status: number, afterMs: number, environment: NodeJS.ProcessEnv): void {
+  try {
+    writeFileSync(plan.endpointMetadataPath.replace(/\.json$/, "-exit.json"), JSON.stringify({
+      status, afterMs, at: new Date().toISOString(), log: plan.logPath,
+    }));
+  } catch {}
+  if (environment.AGENTS_CODEX_SESSION_NO_WAIT === "1" || !process.stdin.isTTY) return;
+  process.stderr.write(`\nCodex exited as it started (exit status ${status}); its message is above.\nPress Enter to close this pane.\n`);
+  spawnSync("/bin/sh", ["-c", "read _"], { stdio: "inherit", timeout: 24 * 60 * 60_000 });
 }
 
 /** Resumes the thread on the pane's app-server with the command's permissions (`agents
@@ -335,9 +357,13 @@ function startAcpHost(
   const argv = input.acpHostArgv === undefined ? getSelfArgv() : input.acpHostArgv;
   if (!argv || argv.length === 0) return undefined;
   try {
+    // Under a supervisor: a host that ends while Codex runs is started again (acp-host-supervisor).
     return spawnBackgroundLogged(
       argv[0],
-      [...argv.slice(1), "acp-session", "--agent", "codex-acp", "--pane", input.paneId, "--app-server", endpoint, "--cwd", process.cwd()],
+      [
+        ...argv.slice(1), "acp-host-supervise", "--parent", String(process.pid), "--",
+        argv[0], ...argv.slice(1), "acp-session", "--agent", "codex-acp", "--pane", input.paneId, "--app-server", endpoint, "--cwd", process.cwd(),
+      ],
       {
         env: plan.viewMode ? { ...input.environment, INITIAL_AGENT_MODE: plan.viewMode } : input.environment,
         logPath: plan.logPath.replace(/\.log$/, "-acp-session.log"),

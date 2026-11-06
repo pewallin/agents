@@ -55,6 +55,9 @@ export interface AcpHostOptions {
   /** Keep one agent process started ahead of the next client. */
   warmSpare?: boolean;
   port?: number;
+  /** The address and token of a host of this pane that ended without closing (it crashed): a
+   *  view still open on it reconnects to this one. */
+  reuse?: { port: number; token: string };
   log?: (message: string) => void;
   /** The agent's own log files: their last lines go into the diagnostics. */
   agentLogFiles?: string[];
@@ -233,7 +236,7 @@ export class HostDiagnostics {
 export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const diagnostics = new HostDiagnostics();
   const log = (message: string) => { diagnostics.log(message); options.log?.(message); };
-  const token = randomBytes(32).toString("base64url");
+  const token = options.reuse?.token ?? randomBytes(32).toString("base64url");
   const webRoot = resolve(options.webRoot);
   const metadataPath = acpHostMetadataPath(options.runtimeTempDir, options.paneId);
   const children = new Set<ChildProcess>();
@@ -477,7 +480,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
 
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
-    server.listen(options.port ?? 0, "127.0.0.1", () => resolveListen());
+    server.listen(options.port ?? options.reuse?.port ?? 0, "127.0.0.1", () => resolveListen());
   });
   const port = (server.address() as { port: number }).port;
   const url = `http://127.0.0.1:${port}`;

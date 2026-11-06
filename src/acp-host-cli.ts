@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { acpHostMetadataPath, startAcpHost } from "./acp-host.js";
+import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost } from "./acp-host.js";
 import { runHandoffSession } from "./acp-handoff.js";
 import { getResourceRoot, getSelfArgv, getStateDir, isCompiledBinary } from "./paths.js";
 import { reportState } from "./state.js";
@@ -382,7 +382,7 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
     process.exit(problem?.startsWith("no ACP web view") ? 1 : 2);
   }
   const appServerUrl = option(args, "--app-server");
-  const host = await startAcpHost({
+  const hostOptions: Parameters<typeof startAcpHost>[0] = {
     currentSession: agent.id === "codex-acp" && appServerUrl
       ? async () => (await import("./codex-current-thread.js")).codexCurrentThread(appServerUrl)
       : undefined,
@@ -400,7 +400,21 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
     warmSpare: true,
     onActivity: reportViewActivity(agent.stateAgent, paneId),
     log,
-  });
+  };
+  // A host of this pane that crashed left its metadata: this one takes its address and token,
+  // so a view still open on it reconnects (its supervisor restarts the host, acp-host-supervisor).
+  const left = readAcpHostMetadata(acpHostMetadataPath(runtimeTempDir, paneId));
+  const reuse = left && left.agent === agent.id && !processAlive(left.processId)
+    ? { port: Number(new URL(left.url).port), token: left.token }
+    : undefined;
+  let host;
+  try {
+    host = await startAcpHost({ ...hostOptions, reuse });
+  } catch (error) {
+    if (!reuse) throw error;
+    log(`the address of the host before (${left!.url}) is taken: ${error instanceof Error ? error.message : String(error)}`);
+    host = await startAcpHost(hostOptions);
+  }
   console.error(`acp-session ${agent.id} for ${paneId}: ${host.url} (metadata ${acpHostMetadataPath(runtimeTempDir, paneId)})`);
   const stop = async () => {
     await host.close();
@@ -410,6 +424,15 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
   process.on("SIGINT", stop);
   process.on("SIGHUP", stop);
   return await new Promise<never>(() => {});
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 /** codex-acp, bundled into this CLI: its module starts the adapter on stdio when loaded. */

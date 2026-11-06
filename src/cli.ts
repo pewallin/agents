@@ -96,6 +96,13 @@ if (firstArg === "acp-restart") {
   const { runAcpRestart } = await import("./acp-restart.js");
   process.exit(await runAcpRestart(args.slice(1)));
 }
+if (firstArg === "acp-host-supervise") {
+  process.exit(await (await import("./acp-host-supervisor.js")).runHostSupervisor(args.slice(1)));
+}
+if (firstArg === "acp-restart-host") {
+  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
+  process.exit(await (await import("./acp-restart-host.js")).runAcpRestartHost(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp")));
+}
 if (firstArg === "codex-thread-settings") {
   const value = (name: string) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
   const appServer = value("--app-server");

@@ -152,9 +152,13 @@ function ErrorNotice({ title, error, agentName, onRetry }: {
   onRetry?: () => void;
 }) {
   const [report, setReport] = useState<HostDiagnosticsReport | null>(null);
+  const [hostGone, setHostGone] = useState(false);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
-    hostJson<HostDiagnosticsReport>("/api/diagnostics").then(setReport, () => setReport(null));
+    hostJson<HostDiagnosticsReport>("/api/diagnostics").then(
+      (value) => { setReport(value); setHostGone(false); },
+      () => { setReport(null); setHostGone(true); },
+    );
   }, [error]);
   // The agent's own last words: what its adapter printed on stderr (logged as "agent <pid>: …").
   const stderr = (report?.log ?? []).filter((line) => / agent \d+: /.test(line)).slice(-12)
@@ -166,6 +170,14 @@ function ErrorNotice({ title, error, agentName, onRetry }: {
       error: { title, ...error },
       ...(latest ?? { host: "did not answer" }),
     }, null, 2);
+    // A host that does not answer has nothing to add; in the app, the app adds what the host
+    // left on disk (its log, its metadata) and copies the lot.
+    if (!latest && OPEN_REVIEW_BESIDE) {
+      location.href = `agents-next-action://copy-acp-diagnostics#${btoa(unescape(encodeURIComponent(text)))}`;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      return;
+    }
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -187,6 +199,9 @@ function ErrorNotice({ title, error, agentName, onRetry }: {
         {error.data && <pre>{error.data}</pre>}
         {stderr.length > 0 && (<><div className="d">Last output from {agentName}:</div><pre>{stderr.join("\n")}</pre></>)}
         <div className="acts">
+          {hostGone && OPEN_REVIEW_BESIDE && (
+            <button type="button" className="link" onClick={() => { location.href = "agents-next-action://restart-view-host"; }}>Restart view host</button>
+          )}
           {onRetry && <button type="button" className="link" onClick={onRetry}>Reconnect</button>}
           <button type="button" className="link" onClick={() => void copy()}>{copied ? "Copied" : "Copy diagnostics"}</button>
         </div>
