@@ -98,3 +98,20 @@ export async function codexStartFirstTurn(appServerUrl: string, threadId: string
     throw new Error("Codex did not write the thread to disk");
   }, timeoutMs + 5_000);
 }
+
+/** Resumes a thread on the pane's app-server with permissions (`agents codex-thread-settings`):
+ *  a TUI that resumes it over --remote then finds them on it (Codex refuses them from such a TUI). */
+export async function codexResumeWithPermissions(
+  appServerUrl: string,
+  threadId: string,
+  settings: { approvalPolicy?: string; sandbox?: string },
+): Promise<void> {
+  await withAppServer(appServerUrl, async (server) => {
+    await server.request("thread/resume", {
+      threadId,
+      excludeTurns: true,
+      ...(settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
+      ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
+    });
+  }, 15_000);
+}

@@ -96,6 +96,22 @@ if (firstArg === "acp-restart") {
   const { runAcpRestart } = await import("./acp-restart.js");
   process.exit(await runAcpRestart(args.slice(1)));
 }
+if (firstArg === "codex-thread-settings") {
+  const value = (name: string) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
+  const appServer = value("--app-server");
+  const thread = value("--thread");
+  if (!appServer || !thread) {
+    console.error("codex-thread-settings needs --app-server and --thread");
+    process.exit(2);
+  }
+  try {
+    await (await import("./codex-current-thread.js")).codexResumeWithPermissions(appServer, thread, { approvalPolicy: value("--approval"), sandbox: value("--sandbox") });
+    process.exit(0);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
 if (firstArg === "acp-prompt") {
   const { runAcpPrompt } = await import("./acp-host-cli.js");
   const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");

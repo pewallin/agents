@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
-import { createCodexSessionLaunchPlan, runPaneLocalCodexSession } from "./codex-session.js";
+import { codexPermissionOptions, createCodexSessionLaunchPlan, runPaneLocalCodexSession } from "./codex-session.js";
 
 describe("createCodexSessionLaunchPlan", () => {
   it("routes the Codex TUI through a pane-local app server", () => {
@@ -16,21 +16,48 @@ describe("createCodexSessionLaunchPlan", () => {
 
     expect(plan.endpointMetadataPath).toBe("/tmp/agents-runtime/codex-app-server/pane-346.json");
     expect(plan.logPath).toBe("/tmp/agents-runtime/codex-app-server/pane-346-4242.log");
+    // Codex refuses permission options on a TUI that resumes over --remote (codex 0.166): the
+    // pane's app-server takes them as its config instead.
     expect(plan.server).toEqual({
       executable: "codex",
       args: [
         "app-server",
+        "-c", 'approval_policy="never"',
+        "-c", 'sandbox_mode="danger-full-access"',
         "--listen",
         "ws://127.0.0.1:0",
       ],
     });
-    expect(plan.tui).toEqual({
-      executable: "codex",
-      args: [
-        "--dangerously-bypass-approvals-and-sandbox",
-        "resume",
-        "thread-123",
-      ],
+    expect(plan.tui).toEqual({ executable: "codex", args: ["resume", "thread-123"] });
+    // The thread is resumed on the app-server with them before the TUI attaches, and the ACP view
+    // starts in the same mode, so its turns run as the TUI's do.
+    expect(plan.resumePermissions).toEqual({ threadId: "thread-123", approvalPolicy: "never", sandbox: "danger-full-access" });
+    expect(plan.viewMode).toBe("agent-full-access");
+    // Without an app-server Codex runs on its own, with the options as given.
+    expect(plan.plainTui.args).toEqual(["--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "thread-123"]);
+  });
+
+  it("keeps the permission options of a new session in its TUI too, and gives them to the app-server", () => {
+    const plan = createCodexSessionLaunchPlan({
+      command: "codex -a on-request --sandbox=workspace-write -c approval_policy=untrusted -c model=o3 -m gpt-6 'Fix it -s'",
+      paneId: "%1", runtimeTempDir: "/tmp/agents-runtime", processId: 1, supportsNoDaemon: false,
+    });
+    expect(plan.tui.args).toEqual(["-a", "on-request", "--sandbox=workspace-write", "-c", "approval_policy=untrusted", "-c", "model=o3", "-m", "gpt-6", "Fix it -s"]);
+    expect(plan.server.args).toEqual(["app-server", "-c", 'approval_policy="untrusted"', "-c", 'sandbox_mode="workspace-write"', "--listen", "ws://127.0.0.1:0"]);
+  });
+
+  it("tells permission options from the rest of a Codex command", () => {
+    expect(codexPermissionOptions(["--full-auto", "resume", "--last", "--", "--yolo"])).toEqual({
+      serverConfig: ["-c", 'approval_policy="on-request"', "-c", 'sandbox_mode="workspace-write"'],
+      rest: ["resume", "--last", "--", "--yolo"],
+      approvalPolicy: "on-request",
+      sandboxMode: "workspace-write",
+    });
+    expect(codexPermissionOptions(["--config", 'sandbox_mode="read-only"', "-s", "danger-full-access", "resume", "t1"])).toEqual({
+      serverConfig: ["-c", 'sandbox_mode="danger-full-access"'],
+      rest: ["resume", "t1"],
+      approvalPolicy: undefined,
+      sandboxMode: "danger-full-access",
     });
   });
 

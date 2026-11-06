@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { basename, dirname, join } from "path";
 import { splitCommandArgv } from "./agent-restore.js";
 import { spawnSync } from "child_process";
@@ -21,6 +21,10 @@ export interface CodexSessionLaunchPlan {
    * Codex has it, so it never runs on the shared daemon with another pane's environment.
    */
   plainTui: CodexSessionProcessPlan;
+  /** The ACP view's mode for the command's permissions (codex-acp INITIAL_AGENT_MODE). */
+  viewMode?: string;
+  /** A resumed thread's permissions from the command, given to it on the app-server first. */
+  resumePermissions?: { threadId: string; approvalPolicy?: string; sandbox?: string };
 }
 
 export interface CodexSessionLaunchInput {
@@ -72,16 +76,117 @@ export function createCodexSessionLaunchPlan(input: CodexSessionLaunchInput): Co
   // --no-daemon beside --remote, and a --remote inherited from another pane is that pane's server.
   const args = withoutCodexServerOptions(argv.slice(1));
   const supportsNoDaemon = input.supportsNoDaemon ?? codexSupportsNoDaemon(executable);
+  // Codex refuses permission options on a TUI that resumes over --remote ("Permission overrides
+  // are not supported when resuming a remote task", codex 0.166): the pane's app-server takes them
+  // as its config, so the session runs as the command asked, in the TUI and in the ACP view.
+  const permissions = codexPermissionOptions(args);
 
   return {
     endpointMetadataPath,
     logPath,
     server: {
       executable,
-      args: ["app-server", "--listen", "ws://127.0.0.1:0"],
+      args: ["app-server", ...permissions.serverConfig, "--listen", "ws://127.0.0.1:0"],
     },
-    tui: { executable, args },
+    tui: { executable, args: isCodexResume(args) ? permissions.rest : args },
     plainTui: { executable, args: supportsNoDaemon ? ["--no-daemon", ...args] : args },
+    viewMode: codexAcpMode(permissions.approvalPolicy, permissions.sandboxMode),
+    resumePermissions: permissions.serverConfig.length > 0 && resumedThreadId(args)
+      ? { threadId: resumedThreadId(args)!, approvalPolicy: permissions.approvalPolicy, sandbox: permissions.sandboxMode }
+      : undefined,
+  };
+}
+
+/** The ACP view's mode for a command's permissions (codex-acp's INITIAL_AGENT_MODE), so a turn
+ *  the view starts runs as the TUI's do; none for the default (Auto review). */
+export function codexAcpMode(approvalPolicy: string | undefined, sandboxMode: string | undefined): string | undefined {
+  if (sandboxMode === "danger-full-access" && (approvalPolicy === "never" || approvalPolicy === undefined)) return "agent-full-access";
+  if (sandboxMode === "read-only") return "read-only";
+  if (sandboxMode === "workspace-write" && approvalPolicy === "on-request") return "workspace-write";
+  return undefined;
+}
+
+/** The thread a `codex ... resume <id>` command resumes; none for `resume --last` or a picker. */
+export function resumedThreadId(args: string[]): string | undefined {
+  const end = args.indexOf("--");
+  const head = end < 0 ? args : args.slice(0, end);
+  const at = head.indexOf("resume");
+  if (at < 0) return undefined;
+  return head.slice(at + 1).find((arg) => !arg.startsWith("-"));
+}
+
+/** Whether a Codex command resumes a session (`codex ... resume ...`). */
+export function isCodexResume(args: string[]): boolean {
+  const end = args.indexOf("--");
+  return (end < 0 ? args : args.slice(0, end)).includes("resume");
+}
+
+const PERMISSION_CONFIG_KEYS = new Set(["approval_policy", "sandbox_mode"]);
+
+/**
+ * A Codex command's permission options, as app-server config (`-c key=value`), and the command
+ * without them: --dangerously-bypass-approvals-and-sandbox (--yolo), --full-auto,
+ * -a/--ask-for-approval, -s/--sandbox, and -c approval_policy=/sandbox_mode=.
+ */
+export function codexPermissionOptions(args: string[]): {
+  serverConfig: string[];
+  rest: string[];
+  approvalPolicy?: string;
+  sandboxMode?: string;
+} {
+  const config = new Map<string, string>();
+  const values = new Map<string, string>();
+  const rest: string[] = [];
+  const set = (key: string, value: string) => {
+    const plain = value.replace(/^["']|["']$/g, "");
+    values.set(key, plain);
+    config.set(key, `${key}=${JSON.stringify(plain)}`);
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") {
+      rest.push(...args.slice(index));
+      break;
+    }
+    if (arg === "--dangerously-bypass-approvals-and-sandbox" || arg === "--yolo") {
+      set("approval_policy", "never");
+      set("sandbox_mode", "danger-full-access");
+      continue;
+    }
+    if (arg === "--full-auto") {
+      set("approval_policy", "on-request");
+      set("sandbox_mode", "workspace-write");
+      continue;
+    }
+    const valued: Array<[string[], string]> = [[["-a", "--ask-for-approval"], "approval_policy"], [["-s", "--sandbox"], "sandbox_mode"]];
+    let taken = false;
+    for (const [names, key] of valued) {
+      const inline = names.find((name) => name.startsWith("--") && arg.startsWith(`${name}=`));
+      if (inline) {
+        set(key, arg.slice(inline.length + 1));
+        taken = true;
+      } else if (names.includes(arg) && args[index + 1] !== undefined) {
+        set(key, args[index + 1]);
+        index += 1;
+        taken = true;
+      }
+    }
+    if (taken) continue;
+    if ((arg === "-c" || arg === "--config") && args[index + 1] !== undefined) {
+      const [key, ...value] = args[index + 1].split("=");
+      if (PERMISSION_CONFIG_KEYS.has(key.trim()) && value.length > 0) {
+        set(key.trim(), value.join("=").trim());
+        index += 1;
+        continue;
+      }
+    }
+    rest.push(arg);
+  }
+  return {
+    serverConfig: [...config.values()].flatMap((value) => ["-c", value]),
+    rest,
+    approvalPolicy: values.get("approval_policy"),
+    sandboxMode: values.get("sandbox_mode"),
   };
 }
 
@@ -177,6 +282,9 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
   let acpHost: ManagedBackgroundProcess | undefined;
   try {
     writeEndpointMetadata(plan.endpointMetadataPath, endpoint, input.processId);
+    // A resumed thread takes the command's permissions from its app-server: the TUI may not give
+    // them when it resumes over --remote. Resumed here with them, the TUI finds them on the thread.
+    if (plan.resumePermissions) resumeWithPermissions(input, plan, endpoint);
     acpHost = startAcpHost(input, plan, endpoint);
 
     const result = execFileInheritUntilExit(
@@ -201,6 +309,22 @@ export function runPaneLocalCodexSession(input: PaneLocalCodexSessionInput): Pan
   };
 }
 
+/** Resumes the thread on the pane's app-server with the command's permissions (`agents
+ *  codex-thread-settings`); a failure leaves the thread as it was, logged beside the server's. */
+function resumeWithPermissions(input: PaneLocalCodexSessionInput, plan: CodexSessionLaunchPlan, endpoint: string): void {
+  const argv = input.acpHostArgv === undefined ? getSelfArgv() : input.acpHostArgv;
+  const settings = plan.resumePermissions;
+  if (!argv || argv.length === 0 || !settings) return;
+  const result = spawnSync(argv[0], [
+    ...argv.slice(1), "codex-thread-settings", "--app-server", endpoint, "--thread", settings.threadId,
+    ...(settings.approvalPolicy ? ["--approval", settings.approvalPolicy] : []),
+    ...(settings.sandbox ? ["--sandbox", settings.sandbox] : []),
+  ], { env: input.environment, encoding: "utf8", timeout: 20_000 });
+  try {
+    appendFileSync(plan.logPath, `codex-thread-settings ${settings.threadId}: ${result.status === 0 ? "ok" : `failed (${result.status ?? result.signal}) ${(result.stderr || result.stdout || "").trim()}`}\n`);
+  } catch {}
+}
+
 /** The pane's ACP view: optional, so nothing about Codex depends on it starting. */
 function startAcpHost(
   input: PaneLocalCodexSessionInput,
@@ -214,7 +338,10 @@ function startAcpHost(
     return spawnBackgroundLogged(
       argv[0],
       [...argv.slice(1), "acp-session", "--agent", "codex-acp", "--pane", input.paneId, "--app-server", endpoint, "--cwd", process.cwd()],
-      { env: input.environment, logPath: plan.logPath.replace(/\.log$/, "-acp-session.log") },
+      {
+        env: plan.viewMode ? { ...input.environment, INITIAL_AGENT_MODE: plan.viewMode } : input.environment,
+        logPath: plan.logPath.replace(/\.log$/, "-acp-session.log"),
+      },
     );
   } catch {
     return undefined;
