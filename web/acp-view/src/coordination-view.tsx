@@ -3,7 +3,7 @@
 // commands an agent runs as event rows, a line at the top of a worker's view naming its
 // coordinator and task, and an orange row for each worker that waits on you.
 import { lazy, Suspense, useContext, useEffect, useState, type ReactNode } from "react";
-import { Chip, ChipHostContext, NamedChip } from "./chips";
+import { Chip, ChipHostContext, NamedChip, PeekContext } from "./chips";
 import { describeAgentEvent, needsUser, tasksIn, useCoordination, workerNamed, type AgentEvent, type CoordinationPane } from "./coordination";
 
 const Markdown = lazy(() => import("./markdown"));
@@ -129,24 +129,108 @@ export function WorkerLine() {
   );
 }
 
-/** In a coordinator's view: each worker that waits on you, as an orange row leading to its pane. */
-export function NeedsYouRows() {
-  const workers = useCoordination((state) => state.workers);
-  const waiting = workers.filter(needsUser);
-  if (waiting.length === 0) return null;
+type WorkerState = "needs-you" | "blocked" | "done" | "working" | "idle";
+
+/** One word for where a worker stands, from its agent's state and its latest report. */
+export function workerState(worker: CoordinationPane): WorkerState {
+  if (needsUser(worker)) return "needs-you";
+  if (worker.report === "blocked") return "blocked";
+  if (worker.status === "working" || worker.status === "compacting" || worker.status === "pending") return "working";
+  if (worker.report === "done" || worker.report === "closed" || worker.status === "done") return "done";
+  return "idle";
+}
+
+const STATE_WORDS: Record<WorkerState, string> = { "needs-you": "waits for you", blocked: "blocked", done: "done", working: "working", idle: "idle" };
+
+/** "4m", "1h 12m": how long a worker has been at it. */
+export function elapsed(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 1) return "< 1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+}
+
+function StateMark({ state }: { state: WorkerState }) {
+  if (state === "done") return <svg className="wk-mark done" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 5.2l2 2 4-4.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+  if (state === "working") return <span className="wk-mark spin" aria-hidden="true" />;
+  return <span className={`wk-mark dot ${state}`} aria-hidden="true" />;
+}
+
+const OPEN_KEY = "agents-acp-workers-open";
+
+function storedOpen(): boolean {
+  try { return localStorage.getItem(OPEN_KEY) === "1"; } catch { return false; }
+}
+
+/** A coordinator's workers, docked above the field: a row of small pills (task and state) that
+ *  ⌥W or the "Workers" label expands into a list with each worker's agent, state, latest report
+ *  and time. A click on a pill or a row shows the worker's pane; hovering shows its last lines. A
+ *  worker that waits on you turns its pill orange; the strip does not open by itself. Open or
+ *  closed is remembered per pane (the page's storage belongs to the pane's host). */
+export function WorkerStrip() {
+  const { role, workers } = useCoordination();
+  const host = useContext(ChipHostContext);
+  const peek = useContext(PeekContext);
+  const [open, setOpen] = useState(storedOpen);
+  const [now, setNow] = useState(() => Date.now());
+  const shown = workers.length > 0 && role !== "worker";
+  useEffect(() => {
+    if (!shown) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.altKey && !event.metaKey && !event.ctrlKey && event.code === "KeyW") {
+        event.preventDefault();
+        setOpen((value) => { try { localStorage.setItem(OPEN_KEY, value ? "0" : "1"); } catch { /* no storage */ } return !value; });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shown]);
+  useEffect(() => {
+    if (!shown || !open) return;
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [shown, open]);
+  if (!shown) return null;
+  const toggle = () => setOpen((value) => { try { localStorage.setItem(OPEN_KEY, value ? "0" : "1"); } catch { /* no storage */ } return !value; });
+  const show = (worker: CoordinationPane) => host?.open({ kind: "pane", id: worker.pane, state: worker.status }, { alternate: false });
+  const hover = (worker: CoordinationPane, element: HTMLElement) => peek?.show({ kind: "pane", id: worker.pane, state: worker.status }, element);
   return (
-    <div className="needs-you">
-      {waiting.map((worker: CoordinationPane) => (
-        <div key={worker.pane} className="event need">
-          <span className="dot" />
-          <span className="what">
-            <WorkerChip task={worker.task ?? worker.pane} pane={worker.pane} />
-            {worker.report === "ask-user" ? " asks you" : " waits for you"}
-            {worker.reportLine ? <span className="dim"> · {worker.reportLine}</span> : null}
-          </span>
-          <Chip target={{ kind: "pane", id: worker.pane, state: worker.status }} label="Open" />
+    <div className={`worker-strip${open ? " open" : ""}`} aria-label="Workers">
+      <div className="wk-row">
+        <button type="button" className="wk-label" onClick={toggle} title="Show the workers (⌥W)" aria-expanded={open}>
+          Workers <svg viewBox="0 0 10 10" aria-hidden="true"><path d={open ? "M2.5 6.5L5 4l2.5 2.5" : "M2.5 4L5 6.5 7.5 4"} fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+        </button>
+        {!open && workers.map((worker) => {
+          const state = workerState(worker);
+          return (
+            <span key={worker.pane} className={`wk-pill ${state}`} role="button" tabIndex={0} title={worker.reportLine ?? undefined}
+              onClick={() => show(worker)} onKeyDown={(event) => { if (event.key === "Enter") show(worker); }}
+              onMouseEnter={(event) => hover(worker, event.currentTarget)} onMouseLeave={() => peek?.hide(false)}>
+              <StateMark state={state} />{worker.task ?? worker.pane}
+            </span>
+          );
+        })}
+      </div>
+      {open && (
+        <div className="wk-list">
+          {workers.map((worker) => {
+            const state = workerState(worker);
+            return (
+              <div key={worker.pane} className={`wk-item ${state}`} role="button" tabIndex={0}
+                onClick={() => show(worker)} onKeyDown={(event) => { if (event.key === "Enter") show(worker); }}
+                onMouseEnter={(event) => hover(worker, event.currentTarget)} onMouseLeave={() => peek?.hide(false)}>
+                <StateMark state={state} />
+                <span className="wk-name">{worker.task ?? worker.pane}</span>
+                {worker.agent && <span className="wk-agent">{worker.agent}</span>}
+                <span className="wk-state">{STATE_WORDS[state]}</span>
+                <span className="wk-line">{worker.reportLine ?? ""}</span>
+                {worker.started !== undefined && <span className="wk-time">{elapsed(now - worker.started)}</span>}
+              </div>
+            );
+          })}
         </div>
-      ))}
+      )}
     </div>
   );
 }

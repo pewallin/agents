@@ -17,7 +17,7 @@ import { buildTurns, changesOf, conversationChanges, describeCall, duration, mer
 import { Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { quoted } from "./compose";
-import { AgentEventLine, BriefRow, DeliveryRow, NeedsYouRows, WorkerLine } from "./coordination-view";
+import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine, WorkerStrip } from "./coordination-view";
 import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { DETAIL_TITLES, failedCalls, lastLines, nextDetailLevel, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
@@ -914,6 +914,7 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   return (
     <div className="dock" ref={dock}>
       <div className="inner">
+        <WorkerStrip />
         <PlanLine />
         {slashItems.length > 0 && (
           <div className="pop slash" role="listbox" aria-label="Commands">
@@ -1269,7 +1270,6 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
                 onSend={(text) => void (working ? session.steer : session.prompt)([{ type: "text", text }])} />
             ))}
             {working && permissions.length === 0 && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
-            <NeedsYouRows />
             {permissions.map((request, index) => (
               <Ask key={request.id} request={request} agentName={info.agent.name} session={session} focused={index === 0} cwd={info.cwd} />
             ))}

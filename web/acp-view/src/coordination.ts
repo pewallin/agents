@@ -16,6 +16,10 @@ export interface CoordinationPane {
   /** started, progress, done, blocked, ask-coordinator, ask-user, closed. */
   report?: string;
   reportLine?: string;
+  /** The agent it runs (codex, claude, …). */
+  agent?: string;
+  /** When its task was created (ms since 1970). */
+  started?: number;
 }
 
 export interface Coordination {

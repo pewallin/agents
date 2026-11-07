@@ -3,6 +3,8 @@
 // shared by every message.
 import { useEffect, useState, type ReactNode } from "react";
 import { Streamdown } from "streamdown";
+// The fade-in of words as a reply streams (Streamdown's animate plugin and its keyframes).
+import "streamdown/styles.css";
 import { CodeBlock, Quote } from "./blocks";
 import { NamedChip } from "./chips";
 
@@ -52,6 +54,9 @@ function Code(props: { children?: ReactNode; className?: string; node?: { proper
   return "data-block" in props ? <CodeBlock {...props} /> : <InlineCode>{props.children}</InlineCode>;
 }
 
+/** Words fade in as the agent writes them, as in Claude: soft, quick, word by word. */
+const STREAMING_FADE = { animation: "fadeIn", duration: 260, easing: "ease-out", sep: "word" as const, stagger: 12 };
+
 const components = { a: Link, inlineCode: InlineCode, code: Code, blockquote: Quote } as Parameters<typeof Streamdown>[0]["components"];
 const controls = { code: { copy: true, download: false }, table: false, mermaid: false } as Parameters<typeof Streamdown>[0]["controls"];
 
@@ -64,6 +69,7 @@ export default function Markdown({ text, streaming }: { text: string; streaming:
   }, []);
   return (
     <Streamdown mode={streaming ? "streaming" : "static"} isAnimating={streaming} plugins={plugins}
+      animated={streaming ? STREAMING_FADE : false}
       components={components} controls={controls} linkSafety={{ enabled: false }}>
       {text}
     </Streamdown>

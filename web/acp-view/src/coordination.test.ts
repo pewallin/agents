@@ -26,3 +26,24 @@ describe("coordination lines", () => {
     expect(describeAgentEvent({ kind: "send", task: "ios-tests", steer: true })).toBe("Steered ios-tests");
   });
 });
+
+describe("worker states", () => {
+  it("says where a worker stands", async () => {
+    const { workerState } = await import("./coordination-view");
+    expect(workerState({ pane: "%4", status: "question" })).toBe("needs-you");
+    expect(workerState({ pane: "%4", status: "idle", report: "ask-user" })).toBe("needs-you");
+    expect(workerState({ pane: "%4", status: "idle", report: "blocked" })).toBe("blocked");
+    expect(workerState({ pane: "%4", status: "working", report: "done" })).toBe("working");
+    expect(workerState({ pane: "%4", status: "idle", report: "done" })).toBe("done");
+    expect(workerState({ pane: "%4", status: "idle" })).toBe("idle");
+  });
+});
+
+describe("elapsed", () => {
+  it("says how long a worker has been at it", async () => {
+    const { elapsed } = await import("./coordination-view");
+    expect(elapsed(20_000)).toBe("< 1m");
+    expect(elapsed(4 * 60_000)).toBe("4m");
+    expect(elapsed(72 * 60_000)).toBe("1h 12m");
+  });
+});

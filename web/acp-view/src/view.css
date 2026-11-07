@@ -75,8 +75,10 @@ button, summary, .status, .row, .edits, .when, .chev { -webkit-user-select: none
 .main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; overscroll-behavior: none; }
 /* What scrolls under the floating field fades out before it reaches it. */
-.scroll.under-dock { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) - 40px), transparent calc(100% - var(--dock-space, 150px) + 50px));
-  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) - 40px), transparent calc(100% - var(--dock-space, 150px) + 50px)); }
+/* Only what scrolls under the field fades: the end of the conversation above it stays whole. */
+.scroll.under-dock { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) + 12px), transparent calc(100% - var(--dock-space, 150px) + 70px));
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) + 12px), transparent calc(100% - var(--dock-space, 150px) + 70px)); }
+@media (prefers-reduced-motion: reduce) { [data-sd-animate] { animation: none !important; } }
 /* The page draws its own thumb (ScrollThumb): the native one stays on screen in a web view where
    scroll bars always show, so it fades a second after scrolling stops. */
 .scroll::-webkit-scrollbar { display: none; }
@@ -471,11 +473,37 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .brief-body .you-more { margin: 4px 0 0; }
 .worker-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--dim); font-size: calc(var(--fs) - 1px); padding-bottom: 4px; border-bottom: 1px solid var(--hair); }
 .worker-line .spark { width: 11px; height: 11px; color: var(--hue); }
-.needs-you { display: flex; flex-direction: column; gap: 6px; }
-.event.need { padding: 7px 10px; border-radius: 9px; background: color-mix(in srgb, var(--orange) 10%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--orange) 45%, transparent); }
-.event.need .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 25%, transparent); flex: none; }
-.event.need .what { flex: 1; }
 .you.external.with-text { color: var(--fg2); font-size: inherit; background: var(--tint); padding: 8px 13px; border-radius: 14px; align-self: flex-end; max-width: 84%; }
 .you.external .from { display: block; font-size: calc(var(--fs) - 2.5px); color: var(--dim); margin-bottom: 2px; }
 .trail.coordination { margin-top: -6px; border-left-color: color-mix(in srgb, var(--hue) 40%, transparent); }
 .brief > .you-more { align-self: flex-start; margin: 0; }
+
+/* a coordinator's workers, docked above the field: pills that expand to a list */
+.worker-strip { display: flex; flex-direction: column; gap: 4px; padding: 0 6px; font-size: calc(var(--fs) - 1.5px); }
+.wk-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.wk-label { all: unset; display: inline-flex; align-items: center; gap: 3px; color: var(--dim); padding: 2px 6px 2px 2px; border-radius: 6px; -webkit-user-select: none; user-select: none; }
+.wk-label:hover { color: var(--fg2); background: var(--tint); }
+.wk-label svg { width: 9px; height: 9px; }
+.wk-pill { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 8px; border-radius: 11px; background: var(--field);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: 0 0 0 1px var(--edge); color: var(--fg2);
+  font: calc(var(--fs-mono) - .5px) var(--mono); cursor: pointer; -webkit-user-select: none; user-select: none; }
+.wk-pill:hover { color: var(--fg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--hue) 50%, var(--edge)); }
+.wk-pill.needs-you { color: var(--fg); background: color-mix(in srgb, var(--orange) 16%, var(--field)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--orange) 60%, transparent); }
+.wk-pill.blocked { box-shadow: 0 0 0 1px color-mix(in srgb, var(--red) 50%, transparent); }
+.wk-mark { flex: none; }
+.wk-mark.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.wk-mark.dot.needs-you { background: var(--orange); }
+.wk-mark.dot.blocked { background: var(--red); }
+.wk-mark.done { width: 10px; height: 10px; color: var(--ok); }
+.wk-mark.spin { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--acc); border-right-color: transparent; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .wk-mark.spin { animation: none; } }
+.wk-list { display: flex; flex-direction: column; padding: 4px; border-radius: 10px; background: var(--field); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: 0 0 0 1px var(--edge); }
+.wk-item { display: grid; grid-template-columns: 12px minmax(70px, max-content) max-content max-content 1fr max-content; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 7px; cursor: pointer; color: var(--fg2); }
+.wk-item:hover { background: var(--tint); color: var(--fg); }
+.wk-item.needs-you { background: color-mix(in srgb, var(--orange) 12%, transparent); }
+.wk-name { font: calc(var(--fs-mono) - .5px) var(--mono); color: var(--fg); }
+.wk-agent, .wk-time { color: var(--dim); font-variant-numeric: tabular-nums; }
+.wk-state { color: var(--dim); }
+.wk-item.needs-you .wk-state { color: var(--orange); }
+.wk-line { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
