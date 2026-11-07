@@ -16,8 +16,12 @@ export interface AcpSession {
   /** Loads the session, or with no session given starts one in the pane's directory. */
   load(): Promise<LoadSessionResponse & { sessionId: string }>;
   prompt(blocks: ContentBlock[]): Promise<void>;
-  /** Adds to the turn in progress: Codex takes it into the running turn, other agents queue it. */
-  steer(blocks: ContentBlock[]): Promise<void>;
+  /** Adds to the turn in progress, for an agent that takes steering over ACP (`_session/steering`:
+   *  Codex, Claude): "steered" when it went into the running turn, "prompted" when the turn had
+   *  ended, or the agent takes no steering, and it went as a prompt of its own. */
+  steer(blocks: ContentBlock[]): Promise<"steered" | "prompted">;
+  /** Whether the agent takes steering over ACP (its initialize says so); known once it answers. */
+  steering(): Promise<boolean>;
   cancel(): Promise<void>;
   answerPermission(id: string, optionId: string | null): void;
   setConfigOption(configId: string, value: string | boolean): Promise<void>;
@@ -131,13 +135,29 @@ export function connectSession(options: {
       }
     },
     async steer(blocks) {
-      const text = blocks.map((block) => (block.type === "text" ? block.text : "")).join("");
-      if (options.agentId === "codex-acp") {
-        dispatch({ type: "update", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } }, at: Date.now() });
-        await agent.request("_session/steering", { sessionId, prompt: blocks });
-        return;
+      // An agent that takes no steering over ACP gets a prompt, which it runs after its turn.
+      if (!(await this.steering())) {
+        await this.prompt(blocks);
+        return "prompted";
       }
-      await this.prompt(blocks);
+      const text = blocks.map((block) => (block.type === "text" ? block.text : "")).join("");
+      // promptRequired: a turn that ended meanwhile gets the message as a prompt of the view's own,
+      // whose answer the view follows like any other.
+      const result = await agent.request("_session/steering", {
+        sessionId, prompt: blocks, _meta: { steering: { idleBehavior: "promptRequired" } },
+      } as never) as { outcome?: string } | undefined;
+      if (result?.outcome === "promptRequired") {
+        await this.prompt(blocks);
+        return "prompted";
+      }
+      // The agent does not show what it was steered with as a message of its own.
+      dispatch({ type: "update", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } }, at: Date.now() });
+      return "steered";
+    },
+    async steering() {
+      const initialized = await ready.catch(() => undefined);
+      const meta = (initialized as { _meta?: { steering?: { supported?: unknown } } } | undefined)?._meta;
+      return meta?.steering?.supported === true || options.agentId === "codex-acp";
     },
     async cancel() {
       // Codex interrupts the thread's turn, whichever client started it (the pane's TUI too).

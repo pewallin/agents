@@ -608,6 +608,47 @@ function mentionAt(text: string, caret: number): { start: number; query: string 
   return match ? { start: caret - match[2].length - 1, query: match[2] } : null;
 }
 
+interface QueuedMessage { id: string; text: string; at: string; state: "queued" | "offered" }
+
+/** The pane's queue of messages for after the turn, as its host keeps it, kept current. A message
+ *  the agent took from its steer inbox shows in the conversation as what you sent. */
+function useHostQueue(): QueuedMessage[] {
+  const [items, setItems] = useState<QueuedMessage[]>([]);
+  const dispatch = useSession((s) => s.dispatch);
+  useEffect(() => {
+    if (!token) return;
+    let live = true;
+    hostJson<{ items: QueuedMessage[] }>("/api/queue").then((value) => { if (live) setItems(value.items); }, () => {});
+    const events = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+    events.addEventListener("queue", (event) => setItems((JSON.parse((event as MessageEvent<string>).data) as { items: QueuedMessage[] }).items));
+    events.addEventListener("steered", (event) => {
+      const { text } = JSON.parse((event as MessageEvent<string>).data) as { text: string };
+      dispatch({ type: "update", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } }, at: Date.now() });
+    });
+    return () => { live = false; events.close(); };
+  }, [dispatch]);
+  return items;
+}
+
+/** How the agent takes a message during its turn: over ACP (Codex, Claude), through the pane's
+ *  steer inbox (Pi, with the agents extension), or not at all (it waits for the turn's end). */
+function useSteerWay(session: AcpSession): "acp" | "inbox" | "none" | undefined {
+  const [way, setWay] = useState<"acp" | "inbox" | "none">();
+  const working = useSession((s) => s.prompting || attention(s) === "working");
+  useEffect(() => {
+    let live = true;
+    void session.steering().then(async (acp) => {
+      if (acp) return "acp" as const;
+      const inbox = await hostJson<{ inbox: boolean }>("/api/steer").then((value) => value.inbox, () => false);
+      return inbox ? "inbox" as const : "none" as const;
+    }).then((next) => { if (live) setWay(next); });
+    return () => { live = false; };
+    // The agent's extension says it takes steered messages once its session runs: look again
+    // when a turn starts.
+  }, [session, working]);
+  return way;
+}
+
 function Ring({ percent }: { percent: number }) {
   const angle = Math.min(0.999, percent / 100) * 2 * Math.PI;
   const x = 7 + 5.4 * Math.sin(angle);
@@ -656,7 +697,11 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     window.addEventListener("agents-next-quote", onQuote);
     return () => window.removeEventListener("agents-next-quote", onQuote);
   }, []);
-  const [queue, setQueue] = useState<string[]>([]);
+  // Messages for after the turn, kept by the pane's host (a reload keeps them, every view of the
+  // pane shows the same), and how the agent takes a message during its turn.
+  const queue = useHostQueue();
+  const steerWay = useSteerWay(session);
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [selectedHit, setSelectedHit] = useState(0);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -723,13 +768,16 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     return blocks;
   }, [info.cwd]);
 
-  // A queued message goes once the turn ends.
+  // A queued message goes once the turn ends, from the one view that takes it from the host.
+  const taking = useRef(false);
   useEffect(() => {
-    if (prompting || working || queue.length === 0) return;
-    const [next, ...rest] = queue;
-    setQueue(rest);
-    void blocksFor(next).then((blocks) => session.prompt(blocks));
-  }, [prompting, working, queue, session, blocksFor]);
+    const next = queue.find((item) => item.state === "queued" && item.id !== editing?.id);
+    if (prompting || working || !next || taking.current) return;
+    taking.current = true;
+    hostJson<{ item: QueuedMessage }>(`/api/queue/${next.id}/take`, {})
+      .then(({ item }) => blocksFor(item.text).then((blocks) => session.prompt(blocks)), () => {})
+      .finally(() => { taking.current = false; });
+  }, [prompting, working, queue, editing, session, blocksFor]);
 
   const setField = (text: string) => {
     setDraft(text);
@@ -798,8 +846,21 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     setMention(null);
     setFlying(true);
     setTimeout(() => setFlying(false), 360);
-    if (how === "queue" && (prompting || working)) { setQueue((items) => [...items, text]); return; }
-    void blocksFor(text).then((blocks) => (prompting || working ? session.steer(blocks) : session.prompt(blocks)));
+    const enqueue = () => hostJson("/api/queue", { text }).catch(() => setNotice("The message could not be queued."));
+    if (!(prompting || working)) { void blocksFor(text).then((blocks) => session.prompt(blocks)); return; }
+    if (how === "queue" || steerWay === "none") { void enqueue(); return; }
+    if (steerWay === "acp") { void blocksFor(text).then((blocks) => session.steer(blocks)); return; }
+    // Through the pane's steer inbox (Pi): what the agent cannot take now waits for the turn's end.
+    void fetch("/api/steer", {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+    }).then(async (response) => {
+      if (response.status === 409) {
+        setNotice(`${agentName} cannot take a message during its turn, so it is queued for when the turn is done.`);
+        await enqueue();
+      } else if (!response.ok) {
+        setNotice("The message could not be sent.");
+      }
+    }, () => setNotice("The message could not be sent."));
   };
 
   const pick = (path: string) => {
@@ -862,12 +923,42 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
             ))}
           </div>
         )}
-        {queue.map((text, index) => <div className="qd" key={index}>{text} – sent when the turn is done</div>)}
+        {queue.map((item) => editing?.id === item.id
+          ? (
+            <textarea key={item.id} className="qd editing" value={editing.text} autoFocus rows={Math.min(6, editing.text.split("\n").length)}
+              aria-label="Edit the queued message"
+              onChange={(event) => setEditing({ id: item.id, text: event.target.value })}
+              onBlur={() => setEditing(null)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") { event.preventDefault(); setEditing(null); }
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  const text = editing.text.trim();
+                  setEditing(null);
+                  if (text) void fetch(`/api/queue/${item.id}`, { method: "PATCH", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+                }
+              }} />
+          )
+          : (
+            <div className={`qd ${item.state}`} key={item.id}>
+              <span className="qt" title={item.state === "queued" ? "Edit" : undefined}
+                onClick={() => { if (item.state === "queued") setEditing({ id: item.id, text: item.text }); }}>{item.text}</span>
+              <small>{item.state === "offered" ? `waiting for ${agentName}'s next step` : "sent when the turn is done"}</small>
+              <button type="button" className="qx" aria-label="Remove"
+                onClick={() => void fetch(`/api/queue/${item.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }).then((response) => {
+                  if (response.status === 409) setNotice(`${agentName} has that message already.`);
+                })}>
+                <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+              </button>
+            </div>
+          ))}
         {busy && !asking && (
           <div className="status">
             <span>{turnStart !== undefined ? `Working for ${duration(now - turnStart)}` : "Working"}</span>
             <span className="sp" />
-            <span><kbd>↵</kbd> steer · <kbd>⌥↵</kbd> queue · <kbd>esc</kbd> stop</span>
+            <span>{steerWay === "none"
+              ? <><kbd>↵</kbd> queue · <kbd>esc</kbd> stop</>
+              : <><kbd>↵</kbd> steer · <kbd>⌥↵</kbd> queue · <kbd>esc</kbd> stop</>}</span>
           </div>
         )}
         <form className="box" onSubmit={(event) => { event.preventDefault(); submit("send"); }}>
@@ -876,7 +967,7 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
             className="input"
             value={draft}
             rows={1}
-            placeholder={busy ? `Steer ${agentName} while it works` : `Ask ${agentName}, @ for files and panes, / for commands`}
+            placeholder={busy ? (steerWay === "none" ? `Queue a message for when ${agentName} is done` : `Steer ${agentName} while it works`) : `Ask ${agentName}, @ for files and panes, / for commands`}
             onChange={(event) => {
               setDraft(event.target.value);
               setCaret(event.target.selectionStart ?? event.target.value.length);
@@ -959,7 +1050,7 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
               ? <button className="go stop" type="button" aria-label="Stop" onClick={() => void session.cancel()}>
                   <svg viewBox="0 0 14 14" aria-hidden="true"><rect x="3.8" y="3.8" width="6.4" height="6.4" rx="1.3" fill="currentColor" /></svg>
                 </button>
-              : <SendButton ready={Boolean(draft.trim())} flying={flying} label={busy ? "Steer" : "Send"} />}
+              : <SendButton ready={Boolean(draft.trim())} flying={flying} label={busy ? (steerWay === "none" ? "Queue" : "Steer") : "Send"} />}
           </div>
         </form>
       </div>

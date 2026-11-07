@@ -126,7 +126,7 @@ describe("the host's own session", () => {
       expect(await host.startHostedSession()).toBe("s1");
       const accepted = await post("hi");
       expect(accepted.status).toBe(202);
-      expect(await accepted.json()).toEqual({ sessionId: "s1" });
+      expect(await accepted.json()).toEqual({ sessionId: "s1", state: "prompted" });
       await host.hostedPrompt("again");
       expect(await host.viewAttached(10)).toBe(false);
     } finally {

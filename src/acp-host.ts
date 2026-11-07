@@ -16,6 +16,7 @@ import { createInterface } from "node:readline";
 import { getBuildInfo, getStateDir } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
+import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, inside, linkInfo, paneStates, peekFile, readBeads, resolveNames, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
 
@@ -247,11 +248,30 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const activity = new AcpActivity();
   const reviews = new ReviewStore();
   const events = new Set<ServerResponse>();
+  const broadcast = (name: string, data: unknown) => {
+    const event = `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const listener of events) listener.write(event);
+  };
+  // What the views send while the agent works (acp-queue.ts): the steer inbox is the one the
+  // agent's own hook or extension reads, so the agent's environment names the pane.
+  const queue = new MessageQueue(steerInboxDirectory(options.agentCommand.env));
+  queue.onChange(() => broadcast("queue", { items: queue.list() }));
+  queue.onSteered((message, state) => broadcast("steered", { id: message.id, text: message.text, state }));
   let lastActivity = activity.state;
   const activityChanged = () => {
     const state = activity.state;
     if (state === lastActivity) return;
     lastActivity = state;
+    if (state === "idle") {
+      queue.turnEnded();
+      // No view to send what waits (a worker the host runs on its own): the host prompts it.
+      if (events.size === 0 && hosted?.alive) {
+        for (const item of queue.list()) {
+          if (item.state !== "queued" || !queue.take(item.id)) continue;
+          void hostedPrompt(item.text).catch((error: unknown) => log(`queued prompt failed: ${error instanceof Error ? error.message : String(error)}`));
+        }
+      }
+    }
     options.onActivity?.(state);
   };
   // The agent's own state as its hooks report it, sent to the views as it changes.
@@ -334,12 +354,27 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         response.writeHead(401, { "Cache-Control": "no-store" }).end();
         return;
       }
-      readJson(request).then((body) => {
-        const text = (body as { text?: unknown } | undefined)?.text;
+      readJson(request).then(async (body) => {
+        const { text, steer } = (body ?? {}) as { text?: unknown; steer?: unknown };
         if (typeof text !== "string" || !text.trim()) { sendJson(response, 400, { message: "A prompt is needed." }); return; }
-        if (!hosted?.alive || !hosted.sessionId) { sendJson(response, 409, { message: "The host holds no session of the agent to prompt." }); return; }
-        void hostedPrompt(text).catch((error: unknown) => log(`hosted prompt failed: ${error instanceof Error ? error.message : String(error)}`));
-        sendJson(response, 202, { sessionId: hosted.sessionId });
+        const session = hosted;
+        if (!session?.alive || !session.sessionId) { sendJson(response, 409, { message: "The host holds no session of the agent to prompt." }); return; }
+        const prompt = (state: "prompted" | "queued") => {
+          void hostedPrompt(text).catch((error: unknown) => log(`hosted prompt failed: ${error instanceof Error ? error.message : String(error)}`));
+          sendJson(response, 202, { sessionId: session.sessionId, state });
+        };
+        if (steer !== true) { prompt("prompted"); return; }
+        // Into the running turn: over ACP (Claude), else through the pane's steer inbox (Pi); an
+        // agent that takes neither gets it as its next prompt, after the turn.
+        const steered = await session.steer(text).catch((error: unknown) => {
+          log(`steer failed: ${error instanceof Error ? error.message : String(error)}`);
+          return "unsupported" as const;
+        });
+        if (steered === "steered") { sendJson(response, 200, { sessionId: session.sessionId, state: "steered" }); return; }
+        if (steered === "idle") { prompt("prompted"); return; }
+        const offered = await queue.steer(text);
+        if (offered.ok) { sendJson(response, 200, { sessionId: session.sessionId, state: offered.state }); return; }
+        prompt("queued");
       }, () => sendJson(response, 400, { message: "The body is not JSON." }));
       return;
     }
@@ -352,6 +387,8 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       appControl: options.appControl ?? appControlTarget(),
       cwd: options.cwd,
       startFirstTurn: options.startFirstTurn,
+      queue,
+      agentName: options.agent.name,
       log,
     })) return;
     handleHttp(request, response, {
@@ -566,6 +603,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       if (closed) return;
       closed = true;
       if (options.agentStateFile) unwatchFile(options.agentStateFile, agentStateChanged);
+      queue.close();
       if (readAcpHostMetadata(metadataPath)?.token === token) rmSync(metadataPath, { force: true });
       for (const client of wss.clients) client.close(1001, "host closing");
       for (const child of children) {
@@ -764,6 +802,8 @@ function handleBridge(
     /** The pane's directory: chips and peeks read only inside it. */
     cwd: string;
     startFirstTurn?: (sessionId: string, text: string) => Promise<void>;
+    queue: MessageQueue;
+    agentName: string;
     log: (message: string) => void;
   },
 ): boolean {
@@ -771,7 +811,8 @@ function handleBridge(
   const path = url.pathname;
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
     || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
-    || path === "/api/session/first-turn" || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+    || path === "/api/session/first-turn" || path === "/api/steer" || path === "/api/queue" || path.startsWith("/api/queue/")
+    || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
     response.writeHead(401, { "Cache-Control": "no-store" }).end();
@@ -792,6 +833,54 @@ function handleBridge(
       await context.startFirstTurn!(sessionId, text);
       sendJson(response, 200, { sessionId });
     }).catch(fail(502));
+    return true;
+  }
+  // Steering through the pane's steer inbox, for an agent that takes it there (Pi); 409 when it
+  // cannot be steered, and the view queues the message instead.
+  if (path === "/api/steer" && request.method === "GET") {
+    const harness = context.queue.harness();
+    sendJson(response, 200, { inbox: Boolean(harness), harness: harnessName(harness) ?? null });
+    return true;
+  }
+  if (path === "/api/steer" && request.method === "POST") {
+    readJson(request).then(async (body) => {
+      const text = String((body as { text?: unknown } | undefined)?.text ?? "");
+      if (!text.trim()) { sendJson(response, 400, { message: "nothing to send" }); return; }
+      const outcome = await context.queue.steer(text);
+      if (!outcome.ok) { sendJson(response, 409, { message: `${context.agentName} cannot take a message during its turn: ${outcome.reason}.` }); return; }
+      context.log(`steer: ${outcome.state} (${outcome.message.id})`);
+      sendJson(response, 200, { state: outcome.state, item: outcome.message });
+    }).catch(fail(500));
+    return true;
+  }
+  if (path === "/api/queue" && request.method === "GET") {
+    sendJson(response, 200, { items: context.queue.list() });
+    return true;
+  }
+  if (path === "/api/queue" && request.method === "POST") {
+    readJson(request).then((body) => {
+      const text = String((body as { text?: unknown } | undefined)?.text ?? "");
+      if (!text.trim()) { sendJson(response, 400, { message: "nothing to queue" }); return; }
+      sendJson(response, 200, { item: context.queue.add(text) });
+    }, fail(400));
+    return true;
+  }
+  const queued = path.match(/^\/api\/queue\/([A-Za-z0-9_-]+)(\/take)?$/);
+  if (queued && request.method === "POST" && queued[2]) {
+    const item = context.queue.take(queued[1]);
+    sendJson(response, item ? 200 : 409, item ? { item } : { message: "already sent, or gone" });
+    return true;
+  }
+  if (queued && request.method === "PATCH" && !queued[2]) {
+    readJson(request).then((body) => {
+      const item = context.queue.edit(queued[1], String((body as { text?: unknown } | undefined)?.text ?? ""));
+      sendJson(response, item ? 200 : 409, item ? { item } : { message: "it cannot be changed now" });
+    }, fail(400));
+    return true;
+  }
+  if (queued && request.method === "DELETE" && !queued[2]) {
+    const removed = context.queue.remove(queued[1]);
+    sendJson(response, removed ? 200 : 409, removed ? {} : { message: "the agent has it already" });
     return true;
   }
   if (path === "/api/events" && request.method === "GET") {

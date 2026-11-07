@@ -487,10 +487,12 @@ export async function runClaudeAcpAgent(): Promise<never> {
 }
 
 /**
- * `agents acp-prompt --pane %N` with the text on stdin: a line for the pane's agent when the
- * pane's host holds its session (a hand-off agent that started in its ACP view): the host
- * prompts the agent with it, as typing it into the TUI would. Prints one JSON line; exit 0 when
- * the host took it, 3 when the host holds no session (type it into the pane instead).
+ * `agents acp-prompt --pane %N [--steer]` with the text on stdin: a line for the pane's agent when
+ * the pane's host holds its session (a hand-off agent that started in its ACP view): the host
+ * prompts the agent with it, as typing it into the TUI would. With --steer it goes into the
+ * running turn where the agent can take that (state steered, or offered in its steer inbox), else
+ * it is the agent's next prompt (state queued). Prints one JSON line; exit 0 when the host took
+ * it, 3 when the host holds no session (type it into the pane instead).
  */
 export async function runAcpPrompt(args: string[], runtimeTempDir: string): Promise<number> {
   const paneId = option(args, "--pane") ?? process.env.TMUX_PANE ?? "";
@@ -512,12 +514,12 @@ export async function runAcpPrompt(args: string[], runtimeTempDir: string): Prom
     const response = await fetch(`${host.url}/api/prompt`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify({ text, steer: args.includes("--steer") }),
+      signal: AbortSignal.timeout(40_000),
     });
-    const body = await response.json().catch(() => ({})) as { message?: string; sessionId?: string };
-    if (response.status === 202) {
-      say({ ok: true, hosted: true, sessionId: body.sessionId });
+    const body = await response.json().catch(() => ({})) as { message?: string; sessionId?: string; state?: string };
+    if (response.status === 202 || response.status === 200) {
+      say({ ok: true, hosted: true, sessionId: body.sessionId, state: body.state ?? "prompted" });
       return 0;
     }
     say({ ok: false, hosted: response.status !== 409 ? undefined : false, reason: body.message ?? `the host answered ${response.status}` });

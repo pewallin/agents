@@ -215,6 +215,14 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .status .sp { flex: 1; }
 .status kbd { font: calc(var(--fs-mono) - 1px) var(--mono); color: var(--faint); }
 .qd { align-self: flex-end; max-width: 80%; font-size: calc(var(--fs) - 1px); color: var(--dim); border: 1px dashed var(--faint); border-radius: 14px; padding: 5px 12px; }
+.qd:not(.editing) { display: flex; align-items: baseline; gap: 8px; }
+.qd .qt { white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+.qd.offered .qt { cursor: default; }
+.qd small { color: var(--faint); font-size: calc(var(--fs) - 2.5px); white-space: nowrap; }
+.qd .qx { flex: none; align-self: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--faint); display: grid; place-items: center; cursor: default; }
+.qd .qx:hover { background: var(--tint2); color: var(--fg); }
+.qd .qx svg { width: 9px; height: 9px; }
+.qd.editing { width: 80%; font: inherit; font-size: calc(var(--fs) - 1px); color: var(--fg); background: transparent; border-style: solid; resize: none; outline: none; }
 .box { background: var(--field); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border-radius: 14px; box-shadow: 0 0 0 1px var(--edge), var(--shadow); padding: 9px 10px 7px 13px; display: flex; flex-direction: column; gap: 6px; }
 .box .input { all: unset; display: block; width: 100%; min-height: 20px; line-height: 1.45; cursor: text; max-height: 40vh; overflow-y: hidden; resize: none; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
 .box .input::placeholder { color: var(--faint); }

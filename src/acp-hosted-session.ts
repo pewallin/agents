@@ -99,6 +99,25 @@ export class HostedSession {
     return typeof result.stopReason === "string" ? result.stopReason : undefined;
   }
 
+  /** Whether the agent takes steering over ACP (`_session/steering`, its initialize says so). */
+  get steers(): boolean {
+    const meta = (this.initialized as { _meta?: { steering?: { supported?: unknown } } } | undefined)?._meta;
+    return meta?.steering?.supported === true;
+  }
+
+  /** Adds `text` to the agent's running turn: "steered", or "idle" when no turn runs (the caller
+   *  prompts instead), or "unsupported" for an agent that takes no steering over ACP. */
+  async steer(text: string): Promise<"steered" | "idle" | "unsupported"> {
+    if (!this.sessionId) throw new Error("the session has not started");
+    if (!this.steers) return "unsupported";
+    const result = await this.request("_session/steering", {
+      sessionId: this.sessionId, prompt: [{ type: "text", text }], _meta: { steering: { idleBehavior: "promptRequired" } },
+    }, 30_000);
+    if (result.outcome === "promptRequired") return "idle";
+    this.userMessage(text, true);
+    return "steered";
+  }
+
   /** A view of the session: it gets the agent's messages, and its own pass through. The view that
    *  attaches last has the session; one before it is let go (`replaced`). */
   attach(send: (line: string) => void, replaced?: () => void): HostedView {
