@@ -4,7 +4,7 @@
 // directory, and it never touches the user's index, stashes or branches: a turn's snapshot is
 // written with a temporary index.
 import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -71,10 +71,44 @@ export function looksLikePath(name: string): boolean {
 interface ResolveContext {
   cwd: string;
   files: () => Promise<string[]>;
+  /** More directories a relative name is looked up in after the pane's: program folders. */
+  bases?: () => Promise<string[]>;
 }
 
-/** What each name stands for, or null. Files must be inside the pane's directory; a bare file
- *  name stands for the one project file of that name, if there is exactly one. */
+/** The real path of an absolute path that exists, else null. */
+function existing(path: string): string | null {
+  try { return realpathSync(path); } catch { return null; }
+}
+
+let programCache: { at: number; pane: string | undefined; directories: Promise<string[]> } | undefined;
+
+/** The program folders of the coordinators on the pane's tmux server, the pane's own first: a
+ *  name a coordinator writes relative to its program (`OVERVIEW.md`, `tasks/ui/report.md`) is
+ *  found there, as the terminal finds it (TerminalPaneLinkTargets in the app). Read from tmux each
+ *  few seconds, so an agent made coordinator after its view opened has its program too. */
+export function programDirectories(pane = process.env.TMUX_PANE): Promise<string[]> {
+  if (!process.env.TMUX) return Promise.resolve([]);
+  if (programCache && programCache.pane === pane && Date.now() - programCache.at < 5000) return programCache.directories;
+  const directories = run("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{@agents_program}"], process.cwd()).then((out) => {
+    const own: string[] = [];
+    const others: string[] = [];
+    for (const line of out.split("\n")) {
+      const [id, program] = line.split("\t");
+      if (!program) continue;
+      const path = program.startsWith("~/") ? join(homedir(), program.slice(2)) : program;
+      if (!isAbsolute(path)) continue;
+      (id === pane ? own : others).push(path);
+    }
+    return [...new Set([...own, ...others])];
+  }, () => []);
+  programCache = { at: Date.now(), pane, directories };
+  return directories;
+}
+
+/** What each name stands for, or null. A relative path is looked up in the pane's directory, then
+ *  in the coordinators' program folders; a bare file name also stands for the one project file of
+ *  that name, if there is exactly one. An absolute path or one under ~ stands for the file there,
+ *  as in the terminal (reading it is another matter: see insideAllowed). */
 export async function resolveNames(names: string[], context: ResolveContext): Promise<Record<string, Resolved | null>> {
   const result: Record<string, Resolved | null> = {};
   let projectFiles: string[] | undefined;
@@ -94,8 +128,15 @@ export async function resolveNames(names: string[], context: ResolveContext): Pr
       if (commit) { result[raw] = { kind: "commit", sha: commit.sha, short: commit.short, subject: commit.subject }; continue; }
     }
     if (!looksLikePath(name)) continue;
-    const expanded = name.replace(/^file:\/\//, "").replace(/^\.\//, "");
-    let path = insideAllowed(context.cwd, expanded);
+    const written = name.replace(/^file:\/\//, "").replace(/^\.\//, "");
+    const expanded = written.startsWith("~/") ? join(homedir(), written.slice(2)) : written;
+    let path = isAbsolute(expanded) ? existing(expanded) : inside(context.cwd, expanded);
+    if (!path && !isAbsolute(expanded)) {
+      for (const base of await context.bases?.() ?? []) {
+        path = inside(base, expanded);
+        if (path) break;
+      }
+    }
     if (!path && !expanded.includes("/") && !isAbsolute(expanded)) {
       projectFiles ??= await context.files();
       const matches = projectFiles.filter((file) => file === expanded || file.endsWith(`/${expanded}`));
@@ -369,4 +410,16 @@ export function linkInfo(url: string): Promise<{ title: string | null; site: str
 
 function decodeEntities(text: string): string {
   return text.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&#x27;/g, "'").replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)));
+}
+
+/** Where a file pasted or dropped into the view's field goes, so the agent can read it by its
+ *  path: a folder of its own under the system's temporary directory, the name kept. */
+export function saveAttachment(name: string, data: Buffer): string {
+  const safe = basename(name).replace(/[^\w.\- ]+/g, "_").replace(/^\.+/, "").slice(0, 120) || "pasted";
+  const root = join(tmpdir(), "agents-acp-attachments");
+  mkdirSync(root, { recursive: true });
+  const folder = mkdtempSync(join(root, "a-"));
+  const path = join(folder, safe);
+  writeFileSync(path, data);
+  return realpathSync(path);
 }

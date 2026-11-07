@@ -18,7 +18,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
-import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, readBeads, resolveNames, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
+import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
 
 export interface AcpHostMetadata {
   url: string;
@@ -948,7 +948,7 @@ function handleBridge(
 }
 
 /** What the view's chips and peeks ask the host (src/acp-peek.ts). */
-const PEEK_PATHS = ["/api/resolve", "/api/peek", "/api/raw", "/api/git", "/api/commit", "/api/bead", "/api/link", "/api/open-page", "/api/output", "/api/text", "/api/typed"];
+const PEEK_PATHS = ["/api/resolve", "/api/peek", "/api/raw", "/api/git", "/api/commit", "/api/bead", "/api/link", "/api/open-page", "/api/output", "/api/text", "/api/typed", "/api/attachment"];
 
 const RAW_TYPES: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
@@ -969,7 +969,7 @@ function handlePeek(
     readJson(request, 256 * 1024).then(async (body) => {
       const names = (body as { names?: unknown })?.names;
       if (!Array.isArray(names)) { sendJson(response, 400, { message: "names are needed" }); return; }
-      sendJson(response, 200, { resolved: await resolveNames(names.filter((name): name is string => typeof name === "string"), { cwd, files: () => projectFiles(cwd) }) });
+      sendJson(response, 200, { resolved: await resolveNames(names.filter((name): name is string => typeof name === "string"), { cwd, files: () => projectFiles(cwd), bases: () => programDirectories() }) });
     }).catch(fail(400));
     return true;
   }
@@ -1013,6 +1013,15 @@ function handlePeek(
     return true;
   }
   // A command's output, opened as a page of its own beside the pane.
+  // A file pasted or dropped into the field: saved where the agent can read it, by its path.
+  if (path === "/api/attachment" && request.method === "POST") {
+    readJson(request, 40 * 1024 * 1024).then((body) => {
+      const { name, data } = (body ?? {}) as { name?: unknown; data?: unknown };
+      if (typeof data !== "string") { sendJson(response, 400, { message: "data is needed" }); return; }
+      sendJson(response, 200, { path: saveAttachment(typeof name === "string" ? name : "pasted", Buffer.from(data, "base64")) });
+    }).catch(fail(400));
+    return true;
+  }
   if (path === "/api/output" && request.method === "POST") {
     readJson(request, 8 * 1024 * 1024).then(async (body) => {
       const { title, text } = (body ?? {}) as { title?: unknown; text?: unknown };

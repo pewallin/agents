@@ -420,10 +420,14 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 
 /* the work's rows */
 .trail .ln .t.files { display: inline-flex; gap: 5px; overflow: visible; }
-.trail .ln.failure .v, .trail .ln.failure .t { color: var(--red); }
+/* A failed step is one quiet line, as in Claude and Codex: a small red dot and "failed · exit 1";
+   its output opens on a click. Only a failure the turn ended on has a red title. */
+.trail .ln .fail-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--red); align-self: center; margin-right: -2px; opacity: .8; }
+.trail .ln .m .fail { color: color-mix(in srgb, var(--red) 75%, var(--faint)); }
+.trail .ln.failure .t { color: var(--red); }
 .trail.failures { margin-top: -6px; }
+.quiet summary .fail-count { color: color-mix(in srgb, var(--red) 60%, var(--faint)); }
 .trail .out.tail { max-height: none; color: var(--dim); margin: 0 0 2px; }
-.trail .out.tail.del { color: var(--red); }
 .trail .out.can-beside { cursor: zoom-in; }
 .trail .out.can-beside:hover { color: var(--fg2); }
 
@@ -507,3 +511,16 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .wk-state { color: var(--dim); }
 .wk-item.needs-you .wk-state { color: var(--orange); }
 .wk-line { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* Files and images pasted or dropped into the field: small chips over the text, a picture for an
+   image, × to take one out (Backspace in an empty field takes the last). */
+.box.dropping { outline: 1.5px dashed color-mix(in srgb, var(--acc) 70%, transparent); outline-offset: -3px; }
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
+.att { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; height: 30px; padding: 0 4px 0 4px; border-radius: 7px; background: var(--tint); border: 1px solid var(--hair); font-size: calc(var(--fs) - 1.5px); color: var(--fg2); }
+.att img { width: 22px; height: 22px; object-fit: cover; border-radius: 4px; flex: none; }
+.att svg { width: 14px; height: 14px; flex: none; color: var(--dim); margin-left: 3px; }
+.att .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.att .qx { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border: 0; background: none; color: var(--faint); border-radius: 4px; padding: 0; cursor: default; }
+.att .qx:hover { color: var(--fg); background: var(--tint); }
+.att .qx svg { width: 9px; height: 9px; margin: 0; color: inherit; }
+.you-images { display: block; margin-top: 4px; font-size: calc(var(--fs) - 2px); color: var(--dim); }

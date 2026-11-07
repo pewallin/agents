@@ -85,9 +85,18 @@ export function turnSummary(turn: Turn): string {
   return parts.join(" · ");
 }
 
-/** Steps that failed: shown whatever the level, with their last error lines. */
+/** Steps that failed: counted on the folded line ("· 1 failed"); their output opens on a click. */
 export function failedCalls(turn: Turn): ToolCall[] {
   return turn.steps.flatMap((step) => (step.type === "tool" && step.call.status === "failed" ? [step.call] : []));
+}
+
+/** The step a turn ended on when it failed and the agent said nothing after it: the one failure
+ *  that shows outside the folded steps. A failure the agent went on from stays in the fold, as in
+ *  Claude and Codex. */
+export function endingFailure(turn: Turn): ToolCall | null {
+  if (turn.answer.some((item) => item.text.trim())) return null;
+  const last = turn.steps.at(-1);
+  return last?.type === "tool" && last.call.status === "failed" ? last.call : null;
 }
 
 /** The last lines of a step's output, for the step that is running. */

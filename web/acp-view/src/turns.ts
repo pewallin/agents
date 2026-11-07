@@ -215,6 +215,17 @@ export function toolOutput(call: ToolCall): string {
   return "";
 }
 
+/** A command's exit code, when the agent says it: Codex in its raw output, Claude in its text
+ *  ("Exit code 1"). */
+export function exitCode(call: ToolCall): number | null {
+  const raw = call.rawOutput as { exit_code?: unknown; exitCode?: unknown; metadata?: { exit_code?: unknown } } | undefined;
+  for (const value of [raw?.exit_code, raw?.exitCode, raw?.metadata?.exit_code]) {
+    if (typeof value === "number") return value;
+  }
+  const match = toolOutput(call).match(/\bexit(?:ed with)?(?: code|\s+status)?:?\s+(\d{1,3})\b/i);
+  return match ? Number(match[1]) : null;
+}
+
 /** "2m 14s", "12s". */
 export function duration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));

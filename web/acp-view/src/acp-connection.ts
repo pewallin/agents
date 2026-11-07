@@ -22,6 +22,8 @@ export interface AcpSession {
   steer(blocks: ContentBlock[]): Promise<"steered" | "prompted">;
   /** Whether the agent takes steering over ACP (its initialize says so); known once it answers. */
   steering(): Promise<boolean>;
+  /** What a prompt may hold besides text and links (initialize's promptCapabilities). */
+  promptCapabilities(): Promise<{ image: boolean; embeddedContext: boolean }>;
   cancel(): Promise<void>;
   answerPermission(id: string, optionId: string | null): void;
   setConfigOption(configId: string, value: string | boolean): Promise<void>;
@@ -153,6 +155,11 @@ export function connectSession(options: {
       // The agent does not show what it was steered with as a message of its own.
       dispatch({ type: "update", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } }, at: Date.now() });
       return "steered";
+    },
+    async promptCapabilities() {
+      const initialized = await ready.catch(() => undefined);
+      const capabilities = initialized?.agentCapabilities?.promptCapabilities;
+      return { image: capabilities?.image === true, embeddedContext: capabilities?.embeddedContext === true };
     },
     async steering() {
       const initialized = await ready.catch(() => undefined);

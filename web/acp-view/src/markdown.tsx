@@ -2,11 +2,12 @@
 // Code highlighting (Shiki, through @streamdown/code) is loaded after the first paint and then
 // shared by every message.
 import { useEffect, useState, type ReactNode } from "react";
-import { Streamdown } from "streamdown";
+import { defaultRehypePlugins, Streamdown } from "streamdown";
 // The fade-in of words as a reply streams (Streamdown's animate plugin and its keyframes).
 import "streamdown/styles.css";
 import { CodeBlock, Quote } from "./blocks";
 import { NamedChip } from "./chips";
+import { rehypePathRefs } from "./paths";
 
 type Plugins = NonNullable<Parameters<typeof Streamdown>[0]["plugins"]>;
 
@@ -41,12 +42,28 @@ function Link({ href, children }: { href?: string; children?: ReactNode }) {
   return <NamedChip name={href.replace(/^file:\/\//, "")} label={label} fallback={plain} />;
 }
 
+/** A file the agent named relative to something (`OVERVIEW.md`, `src/main.tsx:42`) keeps the name
+ *  it wrote on its chip, without the line, which the chip shows itself; an absolute or ~ path
+ *  shows its last parts. */
+function writtenLabel(name: string): string | undefined {
+  const bare = name.replace(/(?::\d+){1,2}$|#L\d+(?:-L?\d+)?$/, "");
+  if (!bare || bare.startsWith("/") || bare.startsWith("~") || bare.startsWith("%") || !/[./]/.test(bare)) return undefined;
+  return bare.split("/").length > 3 ? undefined : bare;
+}
+
 /** `code` in the text: a chip when it names a file, an image, a pane, a bead or a commit. */
 function InlineCode({ children, node: _node, ...props }: { children?: ReactNode; node?: unknown }) {
   const text = textOf(children)?.trim();
   const code = <code {...props}>{children}</code>;
   if (!text || text.length > 300 || /\s/.test(text)) return code;
-  return <NamedChip name={text} fallback={code} />;
+  return <NamedChip name={text} label={writtenLabel(text)} fallback={code} />;
+}
+
+/** A path or pane id in the prose (marked by rehypePathRefs): a chip when the host finds it. */
+function Span({ children, node: _node, ...props }: { children?: ReactNode; node?: unknown; "data-path-ref"?: string }) {
+  const name = props["data-path-ref"];
+  if (name === undefined) return <span {...props}>{children}</span>;
+  return <NamedChip name={name} label={writtenLabel(name)} fallback={<>{children}</>} />;
 }
 
 /** Streamdown marks a fenced block's code with data-block; the rest is inline. */
@@ -57,8 +74,11 @@ function Code(props: { children?: ReactNode; className?: string; node?: { proper
 /** Words fade in as the agent writes them, as in Claude: soft, quick, word by word. */
 const STREAMING_FADE = { animation: "fadeIn", duration: 260, easing: "ease-out", sep: "word" as const, stagger: 12 };
 
-const components = { a: Link, inlineCode: InlineCode, code: Code, blockquote: Quote } as Parameters<typeof Streamdown>[0]["components"];
+const components = { a: Link, inlineCode: InlineCode, code: Code, blockquote: Quote, span: Span } as Parameters<typeof Streamdown>[0]["components"];
 const controls = { code: { copy: true, download: false }, table: false, mermaid: false } as Parameters<typeof Streamdown>[0]["controls"];
+
+/** Streamdown's own plugins, then the one that finds paths in the prose. */
+const rehypePlugins = [...Object.values(defaultRehypePlugins), rehypePathRefs] as Parameters<typeof Streamdown>[0]["rehypePlugins"];
 
 export default function Markdown({ text, streaming }: { text: string; streaming: boolean }) {
   const [plugins, setPlugins] = useState<Plugins | undefined>(undefined);
@@ -70,7 +90,7 @@ export default function Markdown({ text, streaming }: { text: string; streaming:
   return (
     <Streamdown mode={streaming ? "streaming" : "static"} isAnimating={streaming} plugins={plugins}
       animated={streaming ? STREAMING_FADE : false}
-      components={components} controls={controls} linkSafety={{ enabled: false }}>
+      components={components} controls={controls} rehypePlugins={rehypePlugins} linkSafety={{ enabled: false }}>
       {text}
     </Streamdown>
   );

@@ -13,14 +13,15 @@ import type { ContentBlock } from "@agentclientprotocol/sdk";
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession } from "./acp-connection";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
-import { buildTurns, changesOf, conversationChanges, describeCall, duration, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
+import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
 import { Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { quoted } from "./compose";
+import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
 import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine, WorkerStrip } from "./coordination-view";
 import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
-import { DETAIL_TITLES, failedCalls, lastLines, nextDetailLevel, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
+import { DETAIL_TITLES, endingFailure, failedCalls, lastLines, nextDetailLevel, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import "./view.css";
 
 // Markdown (Streamdown) and code highlighting load after the first paint.
@@ -246,7 +247,11 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
   const diffCount = call.content.some((entry) => entry.type === "diff");
   const running = call.status === "pending" || call.status === "in_progress";
   let meta: ReactNode = null;
-  if (call.status === "failed") meta = <span className="del">failed</span>;
+  const failed = call.status === "failed";
+  if (failed) {
+    const code = exitCode(call);
+    meta = <span className="fail">failed{code !== null ? ` · exit ${code}` : ""}</span>;
+  }
   else if (diffCount) {
     let added = 0;
     let removed = 0;
@@ -266,8 +271,9 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
   const title = call.kind === "execute" ? `${verb} ${line}` : line;
   return (
     <>
-      <div className={`ln${canOpen ? " can-open" : ""}${failure ? " failure" : ""}`} onClick={() => canOpen && setOpen(!open)} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
+      <div className={`ln${canOpen ? " can-open" : ""}${failed ? " failed" : ""}${failure ? " failure" : ""}`} onClick={() => canOpen && setOpen(!open)} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
         onKeyDown={(event) => { if (canOpen && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setOpen(!open); } }}>
+        {failed && <span className="fail-dot" aria-label="failed" />}
         {verb && <span className="v">{verb}</span>}
         {files.length > 0
           ? <span className="t files">{files.map((path) => <NamedChip key={path} name={path} fallback={<span>{shortPath(path, cwd)}</span>} />)}</span>
@@ -279,9 +285,9 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
         <pre className={`out${OPEN_REVIEW_BESIDE ? " can-beside" : ""}`} title={OPEN_REVIEW_BESIDE ? "Open beside the pane" : undefined}
           onClick={() => OPEN_REVIEW_BESIDE && openOutput(title, output)}>{output.length > 6000 ? `${output.slice(0, 6000)}\n…` : output}</pre>
       )}
-      {/* The step under way shows its last lines live; a failure its error lines, whatever the level. */}
-      {!open && (running || failure) && output && level !== "results" && (
-        <pre className={`out tail${failure ? " del" : ""}`}>{lastLines(output, 3).join("\n")}</pre>
+      {/* The step under way shows its last lines live. A failure is one line; its output opens on a click. */}
+      {!open && running && output && level !== "results" && (
+        <pre className="out tail">{lastLines(output, 3).join("\n")}</pre>
       )}
     </>
   );
@@ -311,21 +317,30 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
   if (turn.steps.length === 0) {
     return stopped && !working ? <div className="stopped">Stopped{timed ? ` after ${duration(turn.endedAt! - turn.startedAt!)}` : ""}</div> : null;
   }
-  // Results: while it works only the running step shows (below the turn); Steps: the steps show
-  // as they come and fold into one line when the answer starts; Everything: all of it, open.
-  if (working && level === "results") return null;
+  // While the agent works the steps stay as they are, whatever it says between them: what it
+  // writes after a step shows below them and joins them when the next step starts, so nothing
+  // folds and unfolds under the reader. Results shows only what it says; Steps everything it does;
+  // a finished turn folds into one line (Everything keeps it open).
+  if (working && level === "results") {
+    const remarks = turn.steps.filter((step) => step.type === "remark");
+    return remarks.length > 0
+      ? <div className="trail remarks">{remarks.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} />)}</div>
+      : null;
+  }
   const isOpen = level === "everything" || (working && level === "steps") || open;
   const label = working
     ? "Working"
     : stopped ? `Stopped${timed ? ` after ${duration(turn.endedAt! - turn.startedAt!)}` : ""}` : turnSummary(turn);
-  const failures = isOpen ? [] : failedCalls(turn);
+  // Failures are counted on the folded line; only one the turn ended on shows outside it.
+  const failedCount = working ? 0 : failedCalls(turn).length;
+  const ending = isOpen || working ? null : endingFailure(turn);
   // Coordination (workers started, steered, reported to, closed) shows whatever the level.
   const coordinationCalls = isOpen ? [] : turn.steps.flatMap((step) =>
     step.type === "tool" && step.call.kind === "execute" && step.call.status !== "failed" && parseAgentCommand(commandOf(step.call) ?? "") ? [step.call] : []);
   return (
     <>
       <details className="quiet" open={isOpen} onToggle={(event) => { if (!working && level !== "everything") setOpen((event.target as HTMLDetailsElement).open); }}>
-        <summary>{label} <Chevron /></summary>
+        <summary>{label}{failedCount > 0 && <span className="fail-count"> · {failedCount} failed</span>} <Chevron /></summary>
         <div className="trail">
           {turn.steps.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} />)}
         </div>
@@ -335,9 +350,9 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
           {coordinationCalls.map((call) => <ToolLine key={call.id} call={call} cwd={cwd} />)}
         </div>
       )}
-      {failures.length > 0 && (
+      {ending && (
         <div className="trail failures">
-          {failures.map((call) => <ToolLine key={call.id} call={call} cwd={cwd} failure />)}
+          <ToolLine call={ending} cwd={cwd} failure />
         </div>
       )}
     </>
@@ -386,7 +401,7 @@ function clockTime(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function YouMessage({ text, pending, at }: { text: string; pending?: boolean; at?: number }) {
+function YouMessage({ text, pending, at, images = 0 }: { text: string; pending?: boolean; at?: number; images?: number }) {
   const body = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(false);
   const [open, setOpen] = useState(false);
@@ -413,6 +428,7 @@ function YouMessage({ text, pending, at }: { text: string; pending?: boolean; at
     <div className={`you${pending ? " pending" : ""}${folds ? " folds" : ""}${folded ? " folded" : ""}`}>
       {at !== undefined && <span className="when you-when">{clockTime(at)}</span>}
       <div ref={body} className="you-body" style={folded ? { maxHeight: limit } : undefined}>{text}</div>
+      {images > 0 && <span className="you-images">{images === 1 ? "1 image" : `${images} images`}</span>}
       {folds && (
         <button type="button" className="you-more" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
           {open ? "Show less" : "Show more"}
@@ -434,7 +450,7 @@ function UserItem({ user }: { user: NonNullable<Turn["user"]> }) {
       ? <div className="you external with-text"><span className="from">From the terminal</span>{user.text}</div>
       : <div className="you external">Sent from the terminal</div>;
   }
-  return <YouMessage text={user.text} pending={user.local} at={user.at} />;
+  return <YouMessage text={user.text} pending={user.local} at={user.at} images={user.images} />;
 }
 
 function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void; onSend: (text: string) => void }) {
@@ -444,7 +460,7 @@ function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; 
   return (
     <TurnChangesContext.Provider value={turn.changes}>
       {turn.user && <UserItem user={turn.user} />}
-      <Activity turn={turn} working={streaming && turn.answer.length === 0} stopped={stopped} cwd={cwd} />
+      <Activity turn={turn} working={streaming} stopped={stopped} cwd={cwd} />
       {turn.answer.length > 0 && (
         <div className="say">
           {turn.answer.map((item, index) => (
@@ -702,6 +718,9 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
 }) {
   const [draft, setDraft] = useState("");
   const [flying, setFlying] = useState(false);
+  // Files and images pasted or dropped into the field, sent with the message.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [dropping, setDropping] = useState(false);
   const dock = useRef<HTMLDivElement>(null);
   // The conversation leaves room under its end for the field floating over it.
   useLayoutEffect(() => {
@@ -792,7 +811,8 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
         const shown = await hostJson<{ text: string }>(`/api/panes/${encodeURIComponent(path)}/text`).catch(() => null);
         if (shown) blocks.push({ type: "resource", resource: { uri: `tmux://pane/${path}`, mimeType: "text/plain", text: shown.text } });
       } else {
-        blocks.push({ type: "resource_link", uri: `file://${info.cwd.replace(/\/$/, "")}/${path}`, name: path });
+        const absolute = path.startsWith("/") ? path : `${info.cwd.replace(/\/$/, "")}/${path}`;
+        blocks.push({ type: "resource_link", uri: `file://${absolute}`, name: path.split("/").pop() ?? path });
       }
     }
     return blocks;
@@ -862,7 +882,7 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
 
   const submit = (how: "send" | "queue") => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text && attachments.length === 0) return;
     const parsed = slashDraft(text, text.length);
     const command = parsed ? commands.find((entry) => entry.name === (parsed.stage === "name" ? parsed.query : parsed.name)) : undefined;
     if (command?.view) { runView(command.view, parsed?.stage === "args" ? parsed.args : ""); return; }
@@ -870,20 +890,35 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     sendText(text, command ? "queue" : how);
   };
 
-  const sendText = (text: string, how: "send" | "queue") => {
+  const sendText = (typed: string, how: "send" | "queue") => {
+    const attached = attachments;
+    setAttachments([]);
     setField("");
     setNotice(null);
     setMention(null);
     setFlying(true);
     setTimeout(() => setFlying(false), 360);
-    const enqueue = () => hostJson("/api/queue", { text }).catch(() => setNotice("The message could not be queued."));
-    if (!(prompting || working)) { void blocksFor(text).then((blocks) => session.prompt(blocks)); return; }
+    const save = (attachment: Attachment) => hostJson<{ path: string }>("/api/attachment", { name: attachment.name, data: attachment.data ?? "" }).then((value) => value.path);
+    // The message with its attachments: images as images when the agent takes them, the rest as links.
+    const withAttachments = async (text: string) => {
+      const blocks = (await blocksFor(text)).filter((block) => block.type !== "text" || block.text.trim());
+      if (attached.length === 0) return blocks;
+      return [...blocks, ...await attachmentBlocks(attached, await session.promptCapabilities(), save)];
+    };
+    // A queued or inboxed message is text: its attachments go as @paths.
+    const withPaths = async () => {
+      const paths = await Promise.all(attached.map((attachment) => attachment.path ?? save(attachment)));
+      return [typed, ...paths.map((path) => `@${path}`)].filter(Boolean).join(" ");
+    };
+    const failed = () => setNotice("The attachments could not be saved for the agent.");
+    const enqueue = () => withPaths().then((text) => hostJson("/api/queue", { text })).catch(() => setNotice("The message could not be queued."));
+    if (!(prompting || working)) { void withAttachments(typed).then((blocks) => session.prompt(blocks), failed); return; }
     if (how === "queue" || steerWay === "none") { void enqueue(); return; }
-    if (steerWay === "acp") { void blocksFor(text).then((blocks) => session.steer(blocks)); return; }
+    if (steerWay === "acp") { void withAttachments(typed).then((blocks) => session.steer(blocks), failed); return; }
     // Through the pane's steer inbox (Pi): what the agent cannot take now waits for the turn's end.
-    void fetch("/api/steer", {
+    void withPaths().then((text) => fetch("/api/steer", {
       method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ text }),
-    }).then(async (response) => {
+    })).then(async (response) => {
       if (response.status === 409) {
         setNotice(`${agentName} cannot take a message during its turn, so it is queued for when the turn is done.`);
         await enqueue();
@@ -892,6 +927,49 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
       }
     }, () => setNotice("The message could not be sent."));
   };
+
+  // A file dropped anywhere on the view goes into the field (a drop the page let through would
+  // open the file in its place). A chip dragged within the view is a link, not a drop to take.
+  const attachRef = useRef<(files: File[], uris: string) => boolean>(() => false);
+  useEffect(() => {
+    const carries = (event: DragEvent) => {
+      const types = [...(event.dataTransfer?.types ?? [])];
+      return types.includes("Files") || types.includes("text/uri-list");
+    };
+    let leaveTimer: ReturnType<typeof setTimeout> | undefined;
+    const over = (event: DragEvent) => {
+      if (!carries(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      clearTimeout(leaveTimer);
+      setDropping(true);
+    };
+    const leave = () => { clearTimeout(leaveTimer); leaveTimer = setTimeout(() => setDropping(false), 80); };
+    const drop = (event: DragEvent) => {
+      setDropping(false);
+      if (!carries(event) || !event.dataTransfer) return;
+      event.preventDefault();
+      attachRef.current([...event.dataTransfer.files], event.dataTransfer.getData("text/uri-list"));
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    return () => { window.removeEventListener("dragover", over); window.removeEventListener("dragleave", leave); window.removeEventListener("drop", drop); clearTimeout(leaveTimer); };
+  }, []);
+
+  /** Files from a paste or a drop: read into the field, or named by path. */
+  const attach = (files: File[], uris: string) => {
+    const named = files.length === 0 ? attachmentsFromURIs(uris) : [];
+    if (named.length) setAttachments((current) => [...current, ...named]);
+    if (files.length === 0) return named.length > 0;
+    void Promise.all(files.map(readAttachment)).then(
+      (read) => setAttachments((current) => [...current, ...read]),
+      () => setNotice("The file could not be read."),
+    );
+    input.current?.focus();
+    return true;
+  };
+  attachRef.current = attach;
 
   const pick = (path: string) => {
     if (!mention) return;
@@ -992,7 +1070,23 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
               : <><kbd>↵</kbd> steer · <kbd>⌥↵</kbd> queue · <kbd>esc</kbd> stop</>}</span>
           </div>
         )}
-        <form className="box" onSubmit={(event) => { event.preventDefault(); submit("send"); }}>
+        <form className={`box${dropping ? " dropping" : ""}`} onSubmit={(event) => { event.preventDefault(); submit("send"); }}>
+          {attachments.length > 0 && (
+            <div className="attachments">
+              {attachments.map((attachment) => (
+                <span key={attachment.id} className={`att ${attachment.kind}`} title={attachment.path ?? attachment.name}>
+                  {attachment.preview
+                    ? <img src={attachment.preview} alt="" />
+                    : <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M4 1.8h4l2.5 2.5v7.9H4z M8 1.8v2.5h2.5" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" /></svg>}
+                  <span className="nm">{attachment.name}</span>
+                  <button type="button" className="qx" aria-label={`Remove ${attachment.name}`}
+                    onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== attachment.id))}>
+                    <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <textarea
             ref={input}
             className="input"
@@ -1009,6 +1103,12 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
               setNotice(null);
             }}
             onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+            onPaste={(event) => {
+              const files = [...event.clipboardData.files];
+              if (files.length === 0) return;
+              event.preventDefault();
+              attach(files, "");
+            }}
             onKeyDown={(event) => {
               if (slashItems.length > 0 && !event.nativeEvent.isComposing) {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1029,6 +1129,11 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
                 }
                 if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pick(hits[selectedHit].path); return; }
                 if (event.key === "Escape") { event.preventDefault(); setMention(null); return; }
+              }
+              if (event.key === "Backspace" && !draft && attachments.length > 0) {
+                event.preventDefault();
+                setAttachments((current) => current.slice(0, -1));
+                return;
               }
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();

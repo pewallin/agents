@@ -462,10 +462,14 @@ export function resultNames(text: string): string[] {
 }
 
 /** The turn's results as pictures: files named or linked in the answer, and images the turn
- *  made; one entry per file, at most four, then "+N". */
+ *  made; one entry per file, at most four, then "+N". A markdown file is a result only when the
+ *  turn wrote it: one the agent just mentions is a chip in the text. */
 export function ResultStrip({ answer, changes, version }: { answer: string; changes: FileChange[]; version: string }) {
   const host = useContext(ChipHostContext);
-  const names = useMemo(() => resultNames(answer), [answer]);
+  const names = useMemo(() => resultNames(answer).filter((name) => {
+    const bare = name.replace(/[:#].*$/, "");
+    return !/\.md$/i.test(bare) || changes.some((change) => change.path === bare || change.path.endsWith(`/${bare.replace(/^\.?\//, "")}`));
+  }), [answer, changes]);
   const made = changes.filter((change) => IMAGE_EXTENSIONS.test(change.path)).map((change) => change.path);
   return <ResolvedStrip names={names} made={made} host={host} version={version} />;
 }

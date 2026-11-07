@@ -51,8 +51,33 @@ describe("names", () => {
     expect(resolved["bd-abhn"]).toEqual({ kind: "bead", id: "bd-abhn", title: "Native ACP view", status: "in_progress" });
     expect(resolved[sha.slice(0, 7)]).toMatchObject({ kind: "commit", sha, subject: "First" });
     expect(resolved["../etc/passwd"]).toBeNull();
-    expect(resolved["/etc/hosts"]).toBeNull();
+    // An absolute path that exists is a link, as in the terminal; reading it is not allowed.
+    expect(resolved["/etc/hosts"]).toMatchObject({ kind: "file", path: realpathSync("/etc/hosts") });
     expect(resolved["missing.ts"]).toBeNull();
+  });
+
+  it("finds names in the coordinators' program folders and under ~", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "acp-home-")));
+    const previous = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const program = join(home, ".agents/programs/app");
+      mkdirSync(join(program, "tasks/ui"), { recursive: true });
+      writeFileSync(join(program, "OVERVIEW.md"), "# Overview\n");
+      writeFileSync(join(program, "tasks/ui/report.md"), "done\n");
+      const resolved = await resolveNames(
+        ["OVERVIEW.md", "tasks/ui/report.md", "~/.agents/programs/app/", "~/.agents/programs/app/OVERVIEW.md", "~/nothing.md"],
+        { cwd: root, files: async () => [], bases: async () => [program] },
+      );
+      expect(resolved["OVERVIEW.md"]).toMatchObject({ kind: "file", path: join(program, "OVERVIEW.md"), rel: "~/.agents/programs/app/OVERVIEW.md" });
+      expect(resolved["tasks/ui/report.md"]).toMatchObject({ kind: "file", path: join(program, "tasks/ui/report.md") });
+      expect(resolved["~/.agents/programs/app/"]).toMatchObject({ kind: "dir", path: program });
+      expect(resolved["~/.agents/programs/app/OVERVIEW.md"]).toMatchObject({ kind: "file" });
+      expect(resolved["~/nothing.md"]).toBeNull();
+    } finally {
+      process.env.HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("reads files only inside the directory", () => {
@@ -141,6 +166,20 @@ describe("the coordination's files", () => {
     } finally {
       process.env.HOME = previous;
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("attachments", () => {
+  it("saves a pasted file under the temporary directory with a safe name", async () => {
+    const { saveAttachment } = await import("./acp-peek.js");
+    const path = saveAttachment("../../screen shot?.png", Buffer.from("png"));
+    try {
+      expect(path.startsWith(realpathSync(tmpdir()))).toBe(true);
+      expect(path.endsWith("/screen shot_.png")).toBe(true);
+      expect(readFileSync(path, "utf8")).toBe("png");
+    } finally {
+      rmSync(join(path, ".."), { recursive: true, force: true });
     }
   });
 });

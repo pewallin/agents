@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { lastLines, nextDetailLevel, testResult, turnSummary } from "./detail";
-import type { Turn } from "./turns";
+import { endingFailure, failedCalls, lastLines, nextDetailLevel, testResult, turnSummary } from "./detail";
+import { exitCode, type Turn } from "./turns";
 
 describe("testResult", () => {
   it("reads the summaries of common test runners", () => {
@@ -36,5 +36,26 @@ describe("levels", () => {
 
   it("keeps the last lines of output", () => {
     expect(lastLines("a\nb\n\nc\nd\n", 3)).toEqual(["b", "c", "d"]);
+  });
+});
+
+describe("failures", () => {
+  const call = (id: string, status: string, extra: object = {}) => ({ type: "tool" as const, id, call: { id, title: id, kind: "execute", status, content: [], locations: [], ...extra } as never });
+  const agent = (text: string) => ({ type: "agent" as const, id: "a", text });
+
+  it("shows only a failure the turn ended on, not one the agent went on from", () => {
+    const recovered: Turn = { id: "t", steps: [call("1", "failed"), call("2", "completed")], answer: [agent("Fixed it.")], changes: [] };
+    expect(endingFailure(recovered)).toBeNull();
+    expect(failedCalls(recovered)).toHaveLength(1);
+    const answered: Turn = { id: "t", steps: [call("1", "failed")], answer: [agent("The build fails; here is why.")], changes: [] };
+    expect(endingFailure(answered)).toBeNull();
+    const ended: Turn = { id: "t", steps: [call("1", "completed"), call("2", "failed")], answer: [], changes: [] };
+    expect(endingFailure(ended)?.id).toBe("2");
+  });
+
+  it("reads a command's exit code from Codex's raw output or Claude's text", () => {
+    expect(exitCode({ id: "1", content: [], locations: [], rawOutput: { exit_code: 2 } } as never)).toBe(2);
+    expect(exitCode({ id: "1", content: [{ type: "content", content: { type: "text", text: "Exit code 1\nerror: no such file" } }], locations: [] } as never)).toBe(1);
+    expect(exitCode({ id: "1", content: [], locations: [] } as never)).toBeNull();
   });
 });
