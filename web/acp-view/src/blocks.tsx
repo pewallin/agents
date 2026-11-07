@@ -3,7 +3,7 @@
 // notes (GitHub's > [!NOTE] and "Note:" quotes) as a quiet callout. Tables, headings and lists
 // are Streamdown's, styled in view.css.
 import { Children, cloneElement, isValidElement, useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
-import { ChipHostContext, useResolved, useResolvedNames, type ChipHost, type ChipTarget } from "./chips";
+import { ChipHostContext, clickHint, useResolved, useResolvedNames, type ChipHost, type ChipTarget } from "./chips";
 import { pathTokens } from "./paths";
 import { highlightLines, languageNamed, type Lines } from "./highlight";
 
@@ -25,6 +25,18 @@ function codeText(children: ReactNode): string {
 }
 
 /** A fenced code block. Inline code is the chips' (markdown.tsx). */
+/** Plain text (a command's output, the command itself) with the paths in it that exist as links,
+ *  as in a code block. */
+export function LinkedText({ text }: { text: string }) {
+  const host = useContext(ChipHostContext);
+  const candidates = useMemo(() => [...new Set(text.split("\n").flatMap((line) => pathTokens(line).map((token) => token.token)))].slice(0, 40), [text]);
+  const found = useResolvedNames(candidates);
+  if (found.size === 0) return <>{text}</>;
+  return <>{text.split("\n").map((line, index, lines) => (
+    <span key={index}><CodeLine tokens={[{ content: line }]} found={found} host={host} />{index < lines.length - 1 ? "\n" : ""}</span>
+  ))}</>;
+}
+
 type CodeToken = { content: string; color?: string; dark?: string };
 
 function tokenSpan(token: CodeToken, key: number | string) {
@@ -50,11 +62,13 @@ export function CodeLine({ tokens, found, host }: { tokens: CodeToken[]; found: 
     if (!link) return;
     const target = link.target;
     out.push(
-      <span key={`l${link.start}`} className="cpath" role="link" title="Open beside the pane (⌥ in the editor)"
+      <span key={`l${link.start}`} className="cpath" role="link" title={clickHint(target)}
         data-path={target.kind === "file" || target.kind === "image" || target.kind === "dir" ? `${target.path}${target.line ? `:${target.line}` : ""}` : undefined}
         onClick={(event) => {
+          // A drag that selected text is a selection, not a click.
           if (window.getSelection()?.toString()) return;
           event.preventDefault();
+          event.stopPropagation();
           host?.open(target, { alternate: event.altKey, command: event.metaKey });
         }}>{group}</span>,
     );

@@ -16,6 +16,7 @@ import { attention, emptySession, reduce, type PermissionRequest, type SessionAc
 import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
 import { Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
+import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
 import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
 import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine, WorkerStrip } from "./coordination-view";
@@ -280,10 +281,10 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
           : <span className="t" title={whole ? undefined : line}>{line}</span>}
         {meta !== null && <span className="m">{meta}</span>}
       </div>
-      {open && whole && <pre className="out cmd">{whole}</pre>}
+      {open && whole && <pre className="out cmd"><LinkedText text={whole} /></pre>}
       {open && output && (
         <pre className={`out${OPEN_REVIEW_BESIDE ? " can-beside" : ""}`} title={OPEN_REVIEW_BESIDE ? "Open beside the pane" : undefined}
-          onClick={() => OPEN_REVIEW_BESIDE && openOutput(title, output)}>{output.length > 6000 ? `${output.slice(0, 6000)}\n…` : output}</pre>
+          onClick={() => OPEN_REVIEW_BESIDE && !window.getSelection()?.toString() && openOutput(title, output)}><LinkedText text={output.length > 6000 ? `${output.slice(0, 6000)}\n…` : output} /></pre>
       )}
       {/* The step under way shows its last lines live. A failure is one line; its output opens on a click. */}
       {!open && output && level !== "results" && <LiveTail text={lastLines(output, 3).join("\n")} running={running} />}
@@ -1469,12 +1470,12 @@ function useGitTurns(working: boolean, turnCount: number): Record<number, { from
  *  a changed file opens this turn's diff beside it, a pane shows, an image opens in Quick Look, a
  *  link, a bead or a commit opens in a pane beside (a link with ⌥ in the default browser). */
 function openChip(target: ChipTarget, options: { alternate: boolean; command?: boolean; change?: FileChange }, openReview: (changes: FileChange[]) => void) {
-  // ⌘-click does what it does on the same link in a terminal: a web page in the default browser,
-  // a file beside the pane, a pane shown.
+  // A plain click opens a link, as on a web page; ⌘ opens a file in the editor and a web page in
+  // the default browser (in a terminal, where a click places the cursor, ⌘ is what opens).
   if (options.command) {
     if (target.kind === "url") { window.open(target.url, "_blank"); return; }
     if (target.kind === "file" || target.kind === "dir" || target.kind === "image") {
-      postToApp("agentsNextACPLink", { href: `${target.path}${"line" in target && target.line ? `:${target.line}` : ""}` });
+      postToApp("agentsNextACPLink", { href: `${target.path}${"line" in target && target.line ? `:${target.line}` : ""}`, alternate: true });
       return;
     }
   }

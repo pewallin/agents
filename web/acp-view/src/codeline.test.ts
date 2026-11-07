@@ -9,7 +9,7 @@ describe("paths in code", () => {
     const html = renderToStaticMarkup(createElement(CodeLine, { tokens: [{ content: "open src/", color: "#111" }, { content: "main.ts:4 and gone.ts" }], found, host: null }));
     expect(html).toBe(
       '<span style="--c:#111">open </span>'
-      + '<span class="cpath" role="link" title="Open beside the pane (⌥ in the editor)" data-path="/code/app/src/main.ts:4"><span style="--c:#111">src/</span><span>main.ts:4</span></span>'
+      + '<span class="cpath" role="link" title="Click: open beside · ⌘-click: open in the editor" data-path="/code/app/src/main.ts:4"><span style="--c:#111">src/</span><span>main.ts:4</span></span>'
       + "<span> and gone.ts</span>",
     );
   });

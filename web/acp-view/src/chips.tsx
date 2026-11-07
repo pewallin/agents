@@ -283,10 +283,24 @@ export function PeekLayer({ children }: { children: ReactNode }) {
       {shown && (
         <PeekCard anchor={shown.anchor} onEnter={() => clearTimeout(hideTimer.current)} onLeave={() => control.hide(false)}>
           <PeekBody target={shown.target} change={shown.change} />
+          <div className="peek-hint">{clickHint(shown.target, Boolean(shown.change))}</div>
         </PeekCard>
       )}
     </PeekContext.Provider>
   );
+}
+
+/** What a click and a ⌘-click on a link do, as the peek and the tooltips say it. A link opens
+ *  with a plain click, as on a web page; ⌘ opens a file in the editor and a page in the browser. */
+export function clickHint(target: ChipTarget, changed = false): string {
+  switch (target.kind) {
+    case "file": return changed ? "Click: this turn's changes · ⌘-click: open in the editor" : "Click: open beside · ⌘-click: open in the editor";
+    case "dir": return "Click: open beside · ⌘-click: open in the editor";
+    case "image": return "Click: Quick Look · ⌘-click: open in the editor";
+    case "url": return "Click: open beside · ⌘-click: open in your browser";
+    case "pane": return "Click: show the pane";
+    case "bead": case "commit": return "Click: open beside";
+  }
 }
 
 function PeekCard({ anchor, children, onEnter, onLeave }: { anchor: DOMRect; children: ReactNode; onEnter: () => void; onLeave: () => void }) {
