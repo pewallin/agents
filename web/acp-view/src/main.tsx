@@ -13,10 +13,11 @@ import type { ContentBlock } from "@agentclientprotocol/sdk";
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession } from "./acp-connection";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
-import { buildTurns, changesOf, describeCall, duration, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
+import { buildTurns, changesOf, conversationChanges, describeCall, duration, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
 import { Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { quoted } from "./compose";
+import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { DETAIL_TITLES, failedCalls, lastLines, nextDetailLevel, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import "./view.css";
 
@@ -565,6 +566,13 @@ function postToApp(handler: "agentsNextACPLink" | "agentsNextACPQuickLook", body
   return true;
 }
 
+/** Whether the view is in Agents Next on the Mac, which takes the view's links and actions. */
+function inMacApp(): boolean {
+  return Boolean((window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }).webkit?.messageHandlers?.agentsNextACPLink);
+}
+
+type SlashItem = { kind: "command"; command: SlashCommand } | { kind: "choice"; choice: Choice; current: boolean };
+
 /** What @ can add: the project's files, and the other panes of the pane's tmux session. */
 function useMentionSearch(query: string | null): MentionHit[] {
   const [hits, setHits] = useState<MentionHit[]>([]);
@@ -675,6 +683,31 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   const hits = useMentionSearch(mention ? mention.query : null);
   const agentName = info.agent.name;
 
+  // "/" at the start lists the agent's commands and the view's own; after a view command that
+  // sets something, its choices.
+  const agentCommands = useSession((s) => s.commands);
+  const [caret, setCaret] = useState(0);
+  const [slashClosed, setSlashClosed] = useState(false);
+  const [selectedSlash, setSelectedSlash] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
+  const commands = useMemo(
+    () => allCommands(agentCommands, viewCommands({ configOptions, modes, inApp: inMacApp() })),
+    [agentCommands, configOptions, modes],
+  );
+  const slash = slashDraft(draft, caret);
+  const slashCommand = slash?.stage === "args" ? commands.find((command) => command.name === slash.name) : undefined;
+  const slashTarget = slashCommand?.view ? optionTarget(slashCommand.view, configOptions, modes) : null;
+  const slashItems: SlashItem[] = slashClosed || !slash ? []
+    : slash.stage === "name" ? filterCommands(commands, slash.query).map((command): SlashItem => ({ kind: "command", command }))
+    : slashTarget ? filterChoices(slashTarget.choices, slash.args).map((choice): SlashItem => ({ kind: "choice", choice, current: choice.value === slashTarget.current }))
+    : [];
+  const slashHint = !slashClosed && slash?.stage === "args" && !slash.args && !slashTarget ? slashCommand?.hint : undefined;
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
   // @path names a file, @%3 a pane: a file goes as a link, a pane as what it shows now.
   const blocksFor = useCallback(async (text: string): Promise<ContentBlock[]> => {
     const blocks: ContentBlock[] = [{ type: "text", text }];
@@ -698,10 +731,70 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     void blocksFor(next).then((blocks) => session.prompt(blocks));
   }, [prompting, working, queue, session, blocksFor]);
 
+  const setField = (text: string) => {
+    setDraft(text);
+    setCaret(text.length);
+    setSelectedSlash(0);
+    requestAnimationFrame(() => {
+      input.current?.focus();
+      input.current?.setSelectionRange(text.length, text.length);
+    });
+  };
+
+  /** Runs one of the view's own commands; a failed one keeps the field and says why. */
+  const runView = (id: ViewCommandId, arg: string) => {
+    const done = () => { setField(""); setNotice(null); };
+    if (id === "terminal") {
+      done();
+      window.location.href = "agents-next-action://back-to-terminal";
+      return;
+    }
+    if (id === "changes") {
+      let count = 0;
+      window.dispatchEvent(new CustomEvent("agents-next-review-conversation", { detail: { answer: (found: number) => { count = found; } } }));
+      if (count === 0) { setNotice("Nothing has changed in this conversation yet."); return; }
+      done();
+      return;
+    }
+    const target = optionTarget(id, configOptions, modes);
+    if (!target) { setNotice(`${agentName} has no ${id} to set.`); return; }
+    const choice = choiceFor(target.choices, arg);
+    if (!choice) {
+      setNotice(arg.trim() ? `No ${id} called "${arg.trim()}". Pick one from the list.` : `Pick a ${id} from the list.`);
+      setField(`/${id} `);
+      return;
+    }
+    done();
+    void (target.kind === "config" ? session.setConfigOption(target.id, choice.value) : session.setMode(choice.value));
+  };
+
+  /** Tab on a command puts it in the field; Enter also runs it when it needs nothing more. */
+  const pickSlash = (item: SlashItem, run: boolean) => {
+    if (item.kind === "choice") { if (slashCommand?.view) runView(slashCommand.view, item.choice.value); return; }
+    const { command } = item;
+    const needsMore = command.view ? optionTarget(command.view, configOptions, modes) !== null : needsInput(command);
+    if (run && !needsMore) {
+      if (command.view) runView(command.view, "");
+      else sendText(`/${command.name}`, "send");
+      return;
+    }
+    const space = draft.search(/\s/);
+    setField(`/${command.name} ${space < 0 ? "" : draft.slice(space + 1)}`);
+  };
+
   const submit = (how: "send" | "queue") => {
     const text = draft.trim();
     if (!text) return;
-    setDraft("");
+    const parsed = slashDraft(text, text.length);
+    const command = parsed ? commands.find((entry) => entry.name === (parsed.stage === "name" ? parsed.query : parsed.name)) : undefined;
+    if (command?.view) { runView(command.view, parsed?.stage === "args" ? parsed.args : ""); return; }
+    // An agent's command waits for the turn to end: it is not something to steer the turn with.
+    sendText(text, command ? "queue" : how);
+  };
+
+  const sendText = (text: string, how: "send" | "queue") => {
+    setField("");
+    setNotice(null);
     setMention(null);
     setFlying(true);
     setTimeout(() => setFlying(false), 360);
@@ -731,7 +824,32 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     <div className="dock" ref={dock}>
       <div className="inner">
         <PlanLine />
-        {mention && hits.length > 0 && (
+        {slashItems.length > 0 && (
+          <div className="pop slash" role="listbox" aria-label="Commands">
+            {slashItems.map((item, index) => {
+              const group = item.kind === "choice" ? `/${slashCommand?.name}` : item.command.view ? "This view" : agentName;
+              const previous = slashItems[index - 1];
+              const previousGroup = previous && (previous.kind === "choice" ? group : previous.command.view ? "This view" : agentName);
+              return (
+                <div key={item.kind === "choice" ? `c-${item.choice.value}` : `${item.command.view ? "v" : "a"}-${item.command.name}`} style={{ display: "contents" }}>
+                  {group !== previousGroup && <div className="gh">{group}</div>}
+                  <div role="option" aria-selected={index === selectedSlash} className={`it${index === selectedSlash ? " sel" : ""}`}
+                    ref={index === selectedSlash ? (element) => element?.scrollIntoView({ block: "nearest" }) : undefined}
+                    onMouseDown={(event) => { event.preventDefault(); pickSlash(item, true); }} onMouseEnter={() => setSelectedSlash(index)}>
+                    {item.kind === "choice"
+                      ? <><span>{item.choice.name}</span>{item.current && <small>current</small>}</>
+                      : <><span className="p">/{item.command.name}</span>{(item.command.description || item.command.hint) && <small title={item.command.description}>{item.command.description || item.command.hint}</small>}</>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {slashHint && slashItems.length === 0 && (
+          <div className="pop slash" aria-live="polite"><div className="it"><span className="p">/{slashCommand!.name} {slashHint}</span></div></div>
+        )}
+        {notice && <div className="note-line" role="status">{notice}</div>}
+        {slashItems.length === 0 && mention && hits.length > 0 && (
           <div className="pop" role="listbox" aria-label="Add">
             {hits.map((hit, index) => (
               <div key={`${hit.kind}-${hit.path}`} style={{ display: "contents" }}>
@@ -758,14 +876,30 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
             className="input"
             value={draft}
             rows={1}
-            placeholder={busy ? `Steer ${agentName} while it works` : `Ask ${agentName}, @ for files and panes`}
+            placeholder={busy ? `Steer ${agentName} while it works` : `Ask ${agentName}, @ for files and panes, / for commands`}
             onChange={(event) => {
               setDraft(event.target.value);
+              setCaret(event.target.selectionStart ?? event.target.value.length);
               setMention(mentionAt(event.target.value, event.target.selectionStart ?? event.target.value.length));
               setSelectedHit(0);
+              setSelectedSlash(0);
+              setSlashClosed(false);
+              setNotice(null);
             }}
+            onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
             onKeyDown={(event) => {
-              if (mention && hits.length > 0) {
+              if (slashItems.length > 0 && !event.nativeEvent.isComposing) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setSelectedSlash((index) => (index + (event.key === "ArrowDown" ? 1 : slashItems.length - 1)) % slashItems.length);
+                  return;
+                }
+                const item = slashItems[Math.min(selectedSlash, slashItems.length - 1)];
+                if (event.key === "Tab") { event.preventDefault(); pickSlash(item, false); return; }
+                if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); pickSlash(item, true); return; }
+                if (event.key === "Escape") { event.preventDefault(); setSlashClosed(true); return; }
+              }
+              if (slashItems.length === 0 && mention && hits.length > 0) {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                   event.preventDefault();
                   setSelectedHit((index) => (index + (event.key === "ArrowDown" ? 1 : hits.length - 1)) % hits.length);
@@ -949,6 +1083,18 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   }), [level]);
   const openReviewRef = useRef(openReview);
   openReviewRef.current = openReview;
+  // /changes: one review of every file the conversation changed.
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  useEffect(() => {
+    const onReview = (event: Event) => {
+      const changes = conversationChanges(turnsRef.current);
+      (event as CustomEvent<{ answer?: (count: number) => void }>).detail?.answer?.(changes.length);
+      if (changes.length > 0) void openReviewRef.current(changes);
+    };
+    window.addEventListener("agents-next-review-conversation", onReview);
+    return () => window.removeEventListener("agents-next-review-conversation", onReview);
+  }, []);
   const chipHost = useMemo<ChipHost>(() => ({
     cwd: info.cwd,
     inApp: OPEN_REVIEW_BESIDE,

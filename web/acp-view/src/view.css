@@ -248,6 +248,11 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .pop .it .p { font: var(--fs-mono) var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pop .gh { font-size: calc(var(--fs) - 3px); color: var(--faint); padding: 6px 9px 2px; }
 .pop .it small { margin-left: auto; color: var(--faint); font-size: calc(var(--fs) - 2.5px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
+/* Commands: a longer list that scrolls, wide enough for a description beside each name. */
+.pop.slash { width: 460px; max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain; }
+.pop.slash .it .p { flex: none; max-width: 55%; }
+.pop.slash .it small { max-width: none; min-width: 0; flex: 1; text-align: right; }
+.note-line { align-self: flex-start; font-size: calc(var(--fs) - 1.5px); color: var(--dim); padding: 0 12px 6px; }
 
 /* review beside the conversation */
 .review { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--hair); background: var(--bg); }

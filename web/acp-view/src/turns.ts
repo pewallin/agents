@@ -41,6 +41,27 @@ export function mergeChanges(fromAgent: FileChange[], fromGit: GitChange[] | und
   return merged;
 }
 
+/** Every file the conversation changed, for one review of it all: a file changed in several
+ *  turns spans git's snapshots from the first of them to the last when both have one (the span
+ *  holds every edit between), else shows the agent's edits one after another. */
+export function conversationChanges(turns: Array<Pick<Turn, "changes">>): FileChange[] {
+  const byPath = new Map<string, FileChange[]>();
+  for (const turn of turns) {
+    for (const change of turn.changes) byPath.set(change.path, [...(byPath.get(change.path) ?? []), change]);
+  }
+  return [...byPath.values()].map((changes) => {
+    if (changes.length === 1) return changes[0];
+    const first = changes[0];
+    const last = changes[changes.length - 1];
+    const added = changes.reduce((sum, change) => sum + change.added, 0);
+    const removed = changes.reduce((sum, change) => sum + change.removed, 0);
+    if (first.snapshot && last.snapshot) {
+      return { path: first.path, added, removed, edits: [], snapshot: { from: first.snapshot.from, to: last.snapshot.to } };
+    }
+    return { path: first.path, added, removed, edits: changes.flatMap((change) => change.edits) };
+  });
+}
+
 export interface Turn {
   id: string;
   user?: Extract<Item, { type: "user" }>;

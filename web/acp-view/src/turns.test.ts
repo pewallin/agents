@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySession, reduce, type SessionAction } from "./session-state";
-import { buildTurns, changesOf, countLines, describeCall, duration, oneLine, shortPath } from "./turns";
+import { buildTurns, changesOf, conversationChanges, countLines, describeCall, duration, oneLine, shortPath } from "./turns";
 import { commentsMessage, diffRows } from "./review";
 
 const text = (t: string) => ({ type: "text" as const, text: t });
@@ -112,5 +112,20 @@ describe("changedLines", () => {
 describe("countLines at the end of a file", () => {
   it("counts a line appended after a last line without its newline as one added line", () => {
     expect(countLines("one\ntwo", "one\ntwo\nthree")).toEqual({ added: 1, removed: 0 });
+  });
+});
+
+describe("the conversation's changes", () => {
+  it("joins a file changed in several turns, spanning git's snapshots when the first and last have one", () => {
+    const edit = (newText: string) => ({ oldText: null, newText });
+    const turns = [
+      { changes: [{ path: "a.ts", added: 2, removed: 0, edits: [edit("x")], snapshot: { from: "t0", to: "t1" } }, { path: "b.ts", added: 1, removed: 0, edits: [edit("b")] }] },
+      { changes: [] },
+      { changes: [{ path: "a.ts", added: 1, removed: 1, edits: [edit("y")], snapshot: { from: "t2", to: "t3" } }, { path: "b.ts", added: 3, removed: 1, edits: [edit("c")] }] },
+    ];
+    expect(conversationChanges(turns)).toEqual([
+      { path: "a.ts", added: 3, removed: 1, edits: [], snapshot: { from: "t0", to: "t3" } },
+      { path: "b.ts", added: 4, removed: 1, edits: [edit("b"), edit("c")] },
+    ]);
   });
 });
