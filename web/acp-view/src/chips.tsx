@@ -5,6 +5,7 @@
 // directory (src/acp-peek.ts); what is not found stays plain code.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { diffLines } from "diff";
+import { useCoordination, workerNamed } from "./coordination";
 import type { FileChange } from "./turns";
 
 export type ChipTarget =
@@ -137,7 +138,10 @@ const ASKING_STATES = new Set(["approval", "question", "attention"]);
 
 /** A chip for what a name stands for, or the fallback while it is not known to stand for anything. */
 export function NamedChip({ name, label, fallback }: { name: string; label?: ReactNode; fallback: ReactNode }) {
-  const target = useResolved(name);
+  // A worker's task name stands for its pane (in a coordinator's or a worker's view).
+  const worker = useCoordination((state) => workerNamed(state, name));
+  const target = useResolved(worker ? null : name);
+  if (worker) return <Chip target={{ kind: "pane", id: worker.pane, state: worker.status }} label={label ?? name} />;
   if (!target) return <>{fallback}</>;
   return <Chip target={target} label={label} />;
 }

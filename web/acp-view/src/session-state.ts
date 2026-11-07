@@ -82,6 +82,8 @@ export interface SessionState {
   liveSinceIdle?: boolean;
   /** Turns the view stopped (by the id of their user item): they say so. */
   stoppedTurns?: string[];
+  /** The last line the agents CLI typed into the pane's terminal, for the turn it starts. */
+  typedInTerminal?: { text: string; at: number };
 }
 
 export const emptySession = (): SessionState => ({
@@ -106,6 +108,7 @@ export type SessionAction =
   | { type: "permissionRequested"; request: PermissionRequest }
   | { type: "permissionAnswered"; id: string }
   | { type: "agentState"; state: string | null }
+  | { type: "typedInTerminal"; text: string; at: number }
   /** The view stops the turn in progress, its own or one the pane's TUI started. */
   | { type: "stopped" }
   | { type: "reset" };
@@ -206,11 +209,14 @@ function startsTurn(state: SessionState, update: SessionUpdate, at: number | und
   if (update.sessionUpdate === "user_message_chunk") return { ...state, externalTurnPending: false };
   if (!work) return state;
   const id = `external-${state.nextLocalId}`;
+  // The line the agents CLI just typed into the terminal is what started it.
+  const typed = state.typedInTerminal && at !== undefined && at - state.typedInTerminal.at < 30_000 ? state.typedInTerminal.text : "";
   return {
     ...state,
     externalTurnPending: false,
+    typedInTerminal: typed ? undefined : state.typedInTerminal,
     nextLocalId: state.nextLocalId + 1,
-    items: [...state.items, { type: "user", id, text: "", images: 0, external: true, at }],
+    items: [...state.items, { type: "user", id, text: typed, images: 0, external: true, at }],
   };
 }
 
@@ -296,6 +302,8 @@ export function reduce(state: SessionState, action: SessionAction): SessionState
     }
     case "agentState":
       return state.agentState === action.state ? state : { ...state, agentState: action.state };
+    case "typedInTerminal":
+      return { ...state, typedInTerminal: { text: action.text, at: action.at } };
     case "reset":
       return emptySession();
   }

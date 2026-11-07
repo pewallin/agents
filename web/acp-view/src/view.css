@@ -456,3 +456,26 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 /* a command's output, beside the pane */
 .output-page .col { max-width: none; }
 .full-output { margin: 0; font: var(--fs-mono)/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+
+/* coordination: wake-ups, briefs and the agent's own coordination commands as quiet event rows */
+.event { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--dim); font-size: calc(var(--fs) - .5px); }
+.event .spark { width: 11px; height: 11px; color: var(--hue); flex: none; }
+.event .what { color: var(--fg2); }
+.event .dim, .worker-line .dim { color: var(--dim); }
+.event.delivery { padding: 6px 10px; border-radius: 9px; background: color-mix(in srgb, var(--hue) 8%, transparent); }
+.trail .event.agent-event { font-size: calc(var(--fs) - 1px); }
+.event.failed .what { color: var(--red); }
+.brief { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 10px; border-radius: 12px; background: color-mix(in srgb, var(--hue) 7%, transparent); }
+.brief-body { color: var(--fg2); font-size: calc(var(--fs) - .5px); }
+.brief-body.folded { -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent); mask-image: linear-gradient(to bottom, #000 60%, transparent); }
+.brief-body .you-more { margin: 4px 0 0; }
+.worker-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--dim); font-size: calc(var(--fs) - 1px); padding-bottom: 4px; border-bottom: 1px solid var(--hair); }
+.worker-line .spark { width: 11px; height: 11px; color: var(--hue); }
+.needs-you { display: flex; flex-direction: column; gap: 6px; }
+.event.need { padding: 7px 10px; border-radius: 9px; background: color-mix(in srgb, var(--orange) 10%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--orange) 45%, transparent); }
+.event.need .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 25%, transparent); flex: none; }
+.event.need .what { flex: 1; }
+.you.external.with-text { color: var(--fg2); font-size: inherit; background: var(--tint); padding: 8px 13px; border-radius: 14px; align-self: flex-end; max-width: 84%; }
+.you.external .from { display: block; font-size: calc(var(--fs) - 2.5px); color: var(--dim); margin-bottom: 2px; }
+.trail.coordination { margin-top: -6px; border-left-color: color-mix(in srgb, var(--hue) 40%, transparent); }
+.brief > .you-more { align-self: flex-start; margin: 0; }

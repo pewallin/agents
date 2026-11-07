@@ -1,7 +1,15 @@
 // How much of a turn's work the view shows (cycled with ⌃O, remembered per pane), and the one
 // line a finished turn's steps fold into.
 import type { ToolCall } from "./session-state";
+import { parseAgentCommand } from "./coordination";
 import { duration, toolOutput, type Turn } from "./turns";
+
+/** An agent's own coordination command: it has a row of its own, it is not one of "N commands". */
+function isCoordinationCommand(call: ToolCall): boolean {
+  const input = (call.rawInput ?? {}) as { command?: unknown };
+  const command = Array.isArray(input.command) ? input.command.join(" ") : typeof input.command === "string" ? input.command : "";
+  return parseAgentCommand(command) !== null;
+}
 
 export type DetailLevel = "results" | "steps" | "everything";
 export const DETAIL_LEVELS: DetailLevel[] = ["results", "steps", "everything"];
@@ -68,7 +76,7 @@ export function turnSummary(turn: Turn): string {
   if (edits) parts.push(`${edits} ${edits === 1 ? "edit" : "edits"}`);
   const searches = calls.filter((call) => call.kind === "search").length;
   if (searches) parts.push(`${searches} ${searches === 1 ? "search" : "searches"}`);
-  const commands = calls.filter((call) => call.kind === "execute");
+  const commands = calls.filter((call) => call.kind === "execute" && !isCoordinationCommand(call));
   let tests: { passed: number; failed: number } | null = null;
   for (const call of commands) tests = testResult(toolOutput(call)) ?? tests;
   if (tests) parts.push(tests.failed ? `${tests.failed} ${tests.failed === 1 ? "test" : "tests"} failed` : `${tests.passed} ${tests.passed === 1 ? "test" : "tests"} passed`);

@@ -18,7 +18,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
-import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, inside, linkInfo, paneStates, peekFile, readBeads, resolveNames, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
+import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, readBeads, resolveNames, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
 
 export interface AcpHostMetadata {
   url: string;
@@ -948,7 +948,7 @@ function handleBridge(
 }
 
 /** What the view's chips and peeks ask the host (src/acp-peek.ts). */
-const PEEK_PATHS = ["/api/resolve", "/api/peek", "/api/raw", "/api/git", "/api/commit", "/api/bead", "/api/link", "/api/open-page", "/api/output"];
+const PEEK_PATHS = ["/api/resolve", "/api/peek", "/api/raw", "/api/git", "/api/commit", "/api/bead", "/api/link", "/api/open-page", "/api/output", "/api/text", "/api/typed"];
 
 const RAW_TYPES: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
@@ -959,7 +959,7 @@ function handlePeek(
   request: IncomingMessage,
   response: ServerResponse,
   url: URL,
-  context: { cwd: string; token: string; paneId: string; origin: string; appControl: AppControlTarget; reviews: ReviewStore; log: (message: string) => void },
+  context: { cwd: string; token: string; paneId: string; origin: string; appControl: AppControlTarget; reviews: ReviewStore; events: Set<ServerResponse>; log: (message: string) => void },
   fail: (status: number) => (error: unknown) => void,
 ): boolean {
   const path = url.pathname;
@@ -980,8 +980,24 @@ function handlePeek(
     else sendJson(response, 404, { message: "no such text file in the pane's directory" });
     return true;
   }
+  if (path === "/api/text" && request.method === "GET") {
+    const text = readText(cwd, param("path"));
+    sendJson(response, text === null ? 404 : 200, text === null ? { message: "no such text file" } : { text });
+    return true;
+  }
+  // A line the agents CLI typed into the pane's terminal: the views show it with the turn it starts.
+  if (path === "/api/typed" && request.method === "POST") {
+    readJson(request, 64 * 1024).then((body) => {
+      const text = String((body as { text?: unknown })?.text ?? "").trim();
+      if (!text) { sendJson(response, 400, { message: "text is needed" }); return; }
+      const event = `event: typed\ndata: ${JSON.stringify({ text })}\n\n`;
+      for (const listener of context.events) listener.write(event);
+      sendJson(response, 200, { delivered: context.events.size });
+    }, fail(400));
+    return true;
+  }
   if (path === "/api/raw" && request.method === "GET") {
-    const file = inside(cwd, param("path"));
+    const file = insideAllowed(cwd, param("path"));
     const type = file ? RAW_TYPES[extname(file).toLowerCase()] : undefined;
     const stat = file ? statSync(file, { throwIfNoEntry: false }) : undefined;
     if (!file || !type || !IMAGE_EXTENSIONS.has(extname(file).toLowerCase()) || !stat?.isFile() || stat.size > 32 * 1024 * 1024) {

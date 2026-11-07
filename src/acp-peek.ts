@@ -5,7 +5,7 @@
 // written with a temporary index.
 import { execFile } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".heic", ".tif", ".tiff"]);
@@ -26,6 +26,17 @@ function run(command: string, args: string[], cwd: string, env?: NodeJS.ProcessE
 
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, maxBuffer?: number): Promise<string> {
   return run("git", ["-c", "core.quotepath=off", ...args], cwd, env, maxBuffer);
+}
+
+/** Where coordinators keep their programs (briefs, reports, messages): the view reads those too. */
+export function programsRoot(): string {
+  return join(homedir(), ".agents", "programs");
+}
+
+/** The real path of an absolute path in the coordination's programs, or a path inside the pane's
+ *  directory; else null. */
+export function insideAllowed(cwd: string, path: string): string | null {
+  return inside(cwd, path) ?? (isAbsolute(path) && existsSync(programsRoot()) ? inside(programsRoot(), path) : null);
 }
 
 /** The real path of `path` when it is inside `root` (the pane's directory), else null. */
@@ -84,7 +95,7 @@ export async function resolveNames(names: string[], context: ResolveContext): Pr
     }
     if (!looksLikePath(name)) continue;
     const expanded = name.replace(/^file:\/\//, "").replace(/^\.\//, "");
-    let path = inside(context.cwd, expanded);
+    let path = insideAllowed(context.cwd, expanded);
     if (!path && !expanded.includes("/") && !isAbsolute(expanded)) {
       projectFiles ??= await context.files();
       const matches = projectFiles.filter((file) => file === expanded || file.endsWith(`/${expanded}`));
@@ -94,14 +105,15 @@ export async function resolveNames(names: string[], context: ResolveContext): Pr
     const stat = statSync(path, { throwIfNoEntry: false });
     if (!stat) continue;
     const kind = stat.isDirectory() ? "dir" : IMAGE_EXTENSIONS.has(extname(path).toLowerCase()) ? "image" : "file";
-    result[raw] = { kind, path, rel: relative(realpathSync(context.cwd), path) || basename(path), ...(line ? { line } : {}) };
+    const rel = relative(realpathSync(context.cwd), path);
+    result[raw] = { kind, path, rel: rel && !rel.startsWith("..") ? rel : path.replace(homedir(), "~"), ...(line ? { line } : {}) };
   }
   return result;
 }
 
 /** Lines of a text file around a line (or its start). */
 export function peekFile(cwd: string, name: string, line?: number, around = 6): { path: string; rel: string; start: number; lines: string[]; total: number; line?: number } | null {
-  const path = inside(cwd, name);
+  const path = insideAllowed(cwd, name);
   if (!path) return null;
   const stat = statSync(path, { throwIfNoEntry: false });
   if (!stat?.isFile() || stat.size > 8 * 1024 * 1024) return null;
@@ -111,7 +123,17 @@ export function peekFile(cwd: string, name: string, line?: number, around = 6): 
   const center = line && line > 0 ? Math.min(line, all.length) : 1;
   const start = line ? Math.max(1, center - around) : 1;
   const end = Math.min(all.length, line ? center + around : around * 2);
-  return { path, rel: relative(realpathSync(cwd), path), start, lines: all.slice(start - 1, end).map((text) => text.slice(0, 400)), total: all.length, ...(line ? { line: center } : {}) };
+  const rel = relative(realpathSync(cwd), path);
+  return { path, rel: rel && !rel.startsWith("..") ? rel : path.replace(homedir(), "~"), start, lines: all.slice(start - 1, end).map((text) => text.slice(0, 400)), total: all.length, ...(line ? { line: center } : {}) };
+}
+
+/** A text file's whole text (a brief, a report), up to 256 KB. */
+export function readText(cwd: string, name: string): string | null {
+  const path = insideAllowed(cwd, name);
+  const stat = path ? statSync(path, { throwIfNoEntry: false }) : undefined;
+  if (!path || !stat?.isFile() || stat.size > 256 * 1024) return null;
+  const buffer = readFileSync(path);
+  return buffer.subarray(0, 8000).includes(0) ? null : buffer.toString("utf8");
 }
 
 // --- a turn's changes, from git ------------------------------------------------------------

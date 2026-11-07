@@ -17,6 +17,8 @@ import { buildTurns, changesOf, conversationChanges, describeCall, duration, mer
 import { Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { quoted } from "./compose";
+import { AgentEventLine, BriefRow, DeliveryRow, NeedsYouRows, WorkerLine } from "./coordination-view";
+import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { DETAIL_TITLES, failedCalls, lastLines, nextDetailLevel, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import "./view.css";
@@ -229,6 +231,13 @@ const DetailContext = createContext<{ level: DetailLevel; openOutput: (title: st
 const FILE_KINDS = new Set(["read", "edit", "delete", "move"]);
 
 function ToolLine({ call, cwd, failure = false }: { call: ToolCall; cwd: string; failure?: boolean }) {
+  // An agent's own coordination command (spawn, send, report, close) shows as what it did.
+  const agentEvent = call.kind === "execute" ? parseAgentCommand(commandOf(call) ?? "", toolOutput(call)) : null;
+  if (agentEvent) return <AgentEventLine event={agentEvent} failed={call.status === "failed"} />;
+  return <PlainToolLine call={call} cwd={cwd} failure={failure} />;
+}
+
+function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; failure: boolean }) {
   const { level, openOutput } = useContext(DetailContext);
   const [open, setOpen] = useState(level === "everything");
   useEffect(() => { if (level === "everything") setOpen(true); }, [level]);
@@ -310,6 +319,9 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
     ? "Working"
     : stopped ? `Stopped${timed ? ` after ${duration(turn.endedAt! - turn.startedAt!)}` : ""}` : turnSummary(turn);
   const failures = isOpen ? [] : failedCalls(turn);
+  // Coordination (workers started, steered, reported to, closed) shows whatever the level.
+  const coordinationCalls = isOpen ? [] : turn.steps.flatMap((step) =>
+    step.type === "tool" && step.call.kind === "execute" && step.call.status !== "failed" && parseAgentCommand(commandOf(step.call) ?? "") ? [step.call] : []);
   return (
     <>
       <details className="quiet" open={isOpen} onToggle={(event) => { if (!working && level !== "everything") setOpen((event.target as HTMLDetailsElement).open); }}>
@@ -318,6 +330,11 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
           {turn.steps.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} />)}
         </div>
       </details>
+      {coordinationCalls.length > 0 && (
+        <div className="trail coordination">
+          {coordinationCalls.map((call) => <ToolLine key={call.id} call={call} cwd={cwd} />)}
+        </div>
+      )}
       {failures.length > 0 && (
         <div className="trail failures">
           {failures.map((call) => <ToolLine key={call.id} call={call} cwd={cwd} failure />)}
@@ -405,15 +422,28 @@ function YouMessage({ text, pending, at }: { text: string; pending?: boolean; at
   );
 }
 
+/** What started a turn: your message, or what the coordination put there (a wake-up, a brief),
+ *  or a turn started in the terminal (with its text when the agents CLI passed it on). */
+function UserItem({ user }: { user: NonNullable<Turn["user"]> }) {
+  const delivery = parseDelivery(user.text);
+  if (delivery) return <DeliveryRow summary={delivery.summary} file={delivery.file} at={user.at} />;
+  const brief = parseWorkerPrompt(user.text);
+  if (brief) return <BriefRow task={brief.task} brief={brief.brief} prompt={user.text} respawn={brief.respawn} />;
+  if (user.external) {
+    return user.text
+      ? <div className="you external with-text"><span className="from">From the terminal</span>{user.text}</div>
+      : <div className="you external">Sent from the terminal</div>;
+  }
+  return <YouMessage text={user.text} pending={user.local} at={user.at} />;
+}
+
 function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void; onSend: (text: string) => void }) {
   const streaming = last && working;
   const stopped = useSession((s) => s.stoppedTurns?.includes(turn.id) ?? false);
   const answerText = useMemo(() => turn.answer.map((item) => item.text).join("\n"), [turn.answer]);
   return (
     <TurnChangesContext.Provider value={turn.changes}>
-      {turn.user && (turn.user.external
-        ? <div className="you external">Sent from the terminal</div>
-        : <YouMessage text={turn.user.text} pending={turn.user.local} at={turn.user.at} />)}
+      {turn.user && <UserItem user={turn.user} />}
       <Activity turn={turn} working={streaming && turn.answer.length === 0} stopped={stopped} cwd={cwd} />
       {turn.answer.length > 0 && (
         <div className="say">
@@ -464,7 +494,7 @@ function optionLabel(option: PermissionRequest["options"][number], agentName: st
   }
 }
 
-function commandOf(call: PermissionRequest["toolCall"]): string | undefined {
+function commandOf(call: { rawInput?: unknown }): string | undefined {
   const input = (call.rawInput ?? {}) as Record<string, unknown>;
   if (Array.isArray(input.command)) return input.command.join(" ");
   if (typeof input.command === "string") return input.command;
@@ -1109,6 +1139,12 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
       .then((value) => dispatch({ type: "agentState", state: value.agentState ?? null }), () => {});
     void followAgentState();
     events.addEventListener("open", () => void followAgentState());
+    // A line the agents CLI typed into the pane's terminal (a wake-up for a Codex coordinator):
+    // the turn it starts shows its text, which Codex does not pass on.
+    events.addEventListener("typed", (event) => {
+      const { text } = JSON.parse((event as MessageEvent<string>).data) as { text: string };
+      dispatch({ type: "typedInTerminal", text, at: Date.now() });
+    });
     events.addEventListener("agent-state", (event) => {
       const { state } = JSON.parse((event as MessageEvent<string>).data) as { state: string | null };
       dispatch({ type: "agentState", state });
@@ -1225,6 +1261,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
         }}>
           <div className="col">
+            <WorkerLine />
             {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
               <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working} cwd={info.cwd}
@@ -1232,6 +1269,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
                 onSend={(text) => void (working ? session.steer : session.prompt)([{ type: "text", text }])} />
             ))}
             {working && permissions.length === 0 && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
+            <NeedsYouRows />
             {permissions.map((request, index) => (
               <Ask key={request.id} request={request} agentName={info.agent.name} session={session} focused={index === 0} cwd={info.cwd} />
             ))}

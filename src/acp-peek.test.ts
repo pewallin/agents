@@ -124,3 +124,23 @@ describe("git command summaries", () => {
     expect(await gitCommandSummary(root, "ls")).toBeNull();
   });
 });
+
+describe("the coordination's files", () => {
+  it("reads briefs and reports in the programs folder, and nothing else outside the pane's directory", async () => {
+    const { readText } = await import("./acp-peek.js");
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "acp-home-")));
+    const previous = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      mkdirSync(join(home, ".agents/programs/app/tasks/ui"), { recursive: true });
+      writeFileSync(join(home, ".agents/programs/app/tasks/ui/brief.md"), "# Task: ui\n\n## Brief\n\nFix it.\n");
+      writeFileSync(join(home, "secret.txt"), "no");
+      expect(readText(root, join(home, ".agents/programs/app/tasks/ui/brief.md"))).toContain("Fix it.");
+      expect(readText(root, join(home, "secret.txt"))).toBeNull();
+      expect(readText(root, "README.md")).toBe("# Hello\n");
+    } finally {
+      process.env.HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
