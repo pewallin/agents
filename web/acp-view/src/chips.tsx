@@ -47,16 +47,39 @@ function flush() {
   if (!host || names.length === 0) return;
   const callbacks = new Map(names.map((name) => [name, waiting.get(name)!]));
   for (const name of names) waiting.delete(name);
-  host.hostJson<{ resolved: Record<string, Resolution> }>("/api/resolve", { names }).then(
-    (value) => {
+  host.hostJson<{ resolved: Record<string, Resolution> }>("/api/resolve", { names })
+    .then((value) => value.resolved ?? {}, () => ({}) as Record<string, Resolution>)
+    // What the host does not know (or a host too old to say) the app may: it resolves names by
+    // the terminal's rules, the coordinators' program folders included.
+    .then(async (found) => {
+      const unknown = names.filter((name) => !found[name]);
+      if (unknown.length > 0) {
+        const fromApp = await askApp(unknown);
+        for (const name of unknown) if (fromApp[name]) found[name] = fromApp[name];
+      }
+      return found;
+    })
+    .then((found) => {
       for (const name of names) {
-        const result = value.resolved?.[name] ?? null;
+        const result = found[name] ?? null;
         resolved.set(name, result);
         for (const callback of callbacks.get(name) ?? []) callback(result);
       }
-    },
-    () => { for (const name of names) for (const callback of callbacks.get(name) ?? []) callback(null); },
-  );
+    });
+}
+
+/** The app's answer for names (Agents Next only): {} anywhere else, or when it does not answer. */
+export async function askApp(names: string[]): Promise<Record<string, Resolution>> {
+  const handler = typeof window !== "undefined"
+    ? (window as unknown as { webkit?: { messageHandlers?: { agentsNextACPResolve?: { postMessage: (body: unknown) => Promise<unknown> } } } }).webkit?.messageHandlers?.agentsNextACPResolve
+    : undefined;
+  if (!handler) return {};
+  try {
+    const answer = await handler.postMessage({ names });
+    return answer && typeof answer === "object" ? answer as Record<string, Resolution> : {};
+  } catch {
+    return {};
+  }
 }
 
 /** What a name the agent wrote stands for, as the host finds it; undefined while it asks. */

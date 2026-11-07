@@ -529,7 +529,8 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 
 /* A path in a code block that exists: a link as in the text, without changing the code's colours. */
 .cpath { cursor: pointer; text-decoration: underline dotted; text-decoration-color: var(--faint); text-underline-offset: 3px; }
-.cpath:hover { color: var(--acc); text-decoration-style: solid; text-decoration-color: var(--acc); }
+.cpath { border-radius: 4px; transition: background .12s, box-shadow .12s; }
+.cpath:hover { color: var(--acc); text-decoration-style: solid; text-decoration-color: var(--acc); background: var(--tint2); box-shadow: 0 0 0 2px var(--tint2); }
 .cpath:hover span { color: inherit; }
 
 /* In a turn under way, what the agent says between its steps reads as its writing does: the text
