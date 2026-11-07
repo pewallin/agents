@@ -932,7 +932,7 @@ function handleBridge(
     readJson(request).then((body) => {
       const id = String((body as { id?: unknown }).id ?? "");
       if (context.reviews.get(id) === undefined) { sendJson(response, 404, { message: "no such review" }); return; }
-      const page = `${context.origin}/review/${id}#token=${encodeURIComponent(context.token)}`;
+      const page = hostPage(context, `/review/${id}`);
       return openPageBeside(context.appControl, context.paneId, page).then(
         () => sendJson(response, 200, { opened: true }),
         (error: unknown) => {
@@ -945,6 +945,13 @@ function handleBridge(
   }
   response.writeHead(405).end();
   return true;
+}
+
+/** One of the host's own pages for the pane (a review, an output, a bead), as the app opens it
+ *  beside the pane: `agents-next=acp-page` tells Agents Next to give it the view's look and the
+ *  pane's backdrop (ACPViewLook.isHostPage), the token stays in the fragment. */
+export function hostPage(context: { origin: string; token: string }, path: string): string {
+  return `${context.origin}${path}?agents-next=acp-page#token=${encodeURIComponent(context.token)}`;
 }
 
 /** What the view's chips and peeks ask the host (src/acp-peek.ts). */
@@ -1027,7 +1034,7 @@ function handlePeek(
       const { title, text } = (body ?? {}) as { title?: unknown; text?: unknown };
       if (typeof text !== "string") { sendJson(response, 400, { message: "text is needed" }); return; }
       const id = context.reviews.put({ kind: "output", title: typeof title === "string" ? title : "Output", text });
-      await openPageBeside(context.appControl, context.paneId, `${context.origin}/output/${id}#token=${encodeURIComponent(context.token)}`);
+      await openPageBeside(context.appControl, context.paneId, hostPage(context, `/output/${id}`));
       sendJson(response, 200, { id });
     }).catch(fail(503));
     return true;
@@ -1074,7 +1081,7 @@ function handlePeek(
     readJson(request).then(async (body) => {
       const target = String((body as { url?: unknown })?.url ?? "");
       // A web page, or one of the host's own pages for the pane (a bead), with the pane's token.
-      const own = target.startsWith("/bead/") ? `${context.origin}${target}#token=${encodeURIComponent(context.token)}` : null;
+      const own = target.startsWith("/bead/") ? hostPage(context, target) : null;
       if (!own && !/^https?:\/\//i.test(target)) { sendJson(response, 400, { message: "a web address is needed" }); return; }
       await openPageBeside(context.appControl, context.paneId, own ?? target);
       sendJson(response, 200, { opened: true });

@@ -300,6 +300,8 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .pill kbd { opacity: .6; font-size: calc(var(--fs) - 3px); font-family: inherit; }
 
 .review-page .review { border-left: 0; }
+/* A review opened as a pane of its own in Agents Next sits on the pane's backdrop, as the view does. */
+:root[data-agents-next="native"] .review-page .review { background: transparent; }
 
 /* narrow: the review takes the whole view, the column tightens */
 @media (max-width: 860px) {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { AcpActivity, OPEN_ELSEWHERE_CODE, OPEN_ELSEWHERE_REASON, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, rankFiles, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
+import { AcpActivity, OPEN_ELSEWHERE_CODE, OPEN_ELSEWHERE_REASON, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, hostPage, rankFiles, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
 
 // A stand-in agent: answers each JSON-RPC line with an echo of its method.
 const ECHO_AGENT = `
@@ -413,5 +413,12 @@ describe("acp-host", () => {
 
     const opened = await fetch(`${h.url}/api/open-review`, { method: "POST", headers: auth, body: JSON.stringify({ id }) });
     expect(opened.status).toBe(503);
+  });
+
+  it("marks the pages it opens beside the pane for the app's look, the token in the fragment", () => {
+    const page = new URL(hostPage({ origin: "http://127.0.0.1:4100", token: "a+b" }, "/review/r1"));
+    expect(page.pathname).toBe("/review/r1");
+    expect(page.searchParams.get("agents-next")).toBe("acp-page");
+    expect(new URLSearchParams(page.hash.slice(1)).get("token")).toBe("a+b");
   });
 });
