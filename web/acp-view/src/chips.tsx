@@ -85,6 +85,37 @@ export function useResolved(name: string | null): Resolution | undefined {
   return value;
 }
 
+/** What each of many names stands for (a code block's paths), in the same batches as the chips';
+ *  a name not answered yet is missing from the map. */
+export function useResolvedNames(names: string[]): Map<string, Resolution> {
+  const host = useContext(ChipHostContext);
+  const key = names.join("\n");
+  const [values, setValues] = useState<Map<string, Resolution>>(() => new Map(names.flatMap((name) => {
+    const now = resolved.get(name);
+    return now === undefined ? [] : [[name, now] as const];
+  })));
+  useEffect(() => {
+    if (!host || names.length === 0) return;
+    let live = true;
+    const found = new Map<string, Resolution>();
+    let asked = false;
+    for (const name of names) {
+      const now = resolved.get(name);
+      if (now !== undefined) { found.set(name, now); continue; }
+      asked = true;
+      currentHost = host;
+      const list = waiting.get(name) ?? [];
+      list.push((result) => { if (!live) return; found.set(name, result); setValues(new Map(found)); });
+      waiting.set(name, list);
+    }
+    setValues(new Map(found));
+    if (asked) flushTimer ??= setTimeout(flush, 30);
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, host]);
+  return values;
+}
+
 function immediate(name: string): Resolution | undefined {
   if (/^https?:\/\/\S+$/i.test(name)) return { kind: "url", url: name };
   return resolved.get(name);

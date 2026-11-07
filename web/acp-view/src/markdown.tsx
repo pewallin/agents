@@ -80,7 +80,9 @@ const controls = { code: { copy: true, download: false }, table: false, mermaid:
 /** Streamdown's own plugins, then the one that finds paths in the prose. */
 const rehypePlugins = [...Object.values(defaultRehypePlugins), rehypePathRefs] as Parameters<typeof Streamdown>[0]["rehypePlugins"];
 
-export default function Markdown({ text, streaming }: { text: string; streaming: boolean }) {
+/** `streaming`: the text is still coming (Streamdown's streaming mode); `fade`: its new words
+ *  fade in (by default while it streams). */
+export default function Markdown({ text, streaming, fade = streaming }: { text: string; streaming: boolean; fade?: boolean }) {
   const [plugins, setPlugins] = useState<Plugins | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
@@ -89,7 +91,7 @@ export default function Markdown({ text, streaming }: { text: string; streaming:
   }, []);
   return (
     <Streamdown mode={streaming ? "streaming" : "static"} isAnimating={streaming} plugins={plugins}
-      animated={streaming ? STREAMING_FADE : false}
+      animated={fade ? STREAMING_FADE : false}
       components={components} controls={controls} rehypePlugins={rehypePlugins} linkSafety={{ enabled: false }}>
       {text}
     </Streamdown>

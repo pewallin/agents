@@ -286,28 +286,63 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
           onClick={() => OPEN_REVIEW_BESIDE && openOutput(title, output)}>{output.length > 6000 ? `${output.slice(0, 6000)}\n…` : output}</pre>
       )}
       {/* The step under way shows its last lines live. A failure is one line; its output opens on a click. */}
-      {!open && running && output && level !== "results" && (
-        <pre className="out tail">{lastLines(output, 3).join("\n")}</pre>
-      )}
+      {!open && output && level !== "results" && <LiveTail text={lastLines(output, 3).join("\n")} running={running} />}
     </>
   );
+}
+
+const REDUCED_MOTION = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** A running step's last lines. When the step ends they fold away over a quarter of a second
+ *  rather than vanish, so what is below does not jump (at once with Reduce Motion). */
+function LiveTail({ text, running }: { text: string; running: boolean }) {
+  const [shown, setShown] = useState(running);
+  const [closing, setClosing] = useState(false);
+  useEffect(() => {
+    if (running) { setShown(true); setClosing(false); return; }
+    if (!shown) return;
+    if (REDUCED_MOTION) { setShown(false); return; }
+    setClosing(true);
+    const timer = setTimeout(() => { setShown(false); setClosing(false); }, 260);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+  if (!shown) return null;
+  return <pre className={`out tail${closing ? " closing" : ""}`} aria-hidden={closing}>{text}</pre>;
 }
 
 function changesForCall(call: ToolCall): FileChange[] {
   return changesOf([call]);
 }
 
-function StepLine({ step, cwd }: { step: Step; cwd: string }) {
+function StepLine({ step, cwd, live = false }: { step: Step; cwd: string; live?: boolean }) {
   // Thinking and what the agent says along the way are markdown, as its answers are: Codex's
-  // reasoning headers (**Checking row counts**) are a quiet bold line, `code` is code.
+  // reasoning headers (**Checking row counts**) are a quiet bold line, `code` is code. In a turn
+  // under way they render as the text being written does, so one that was being written when
+  // the next step started stays exactly as it was.
   if (step.type === "thought" || step.type === "remark") {
     return (
       <div className={step.type === "thought" ? "think" : "remark"}>
-        <Suspense fallback={<p>{step.text}</p>}><Markdown text={step.text} streaming={false} /></Suspense>
+        <Suspense fallback={<p>{step.text}</p>}><Markdown text={step.text} streaming={live} fade={false} /></Suspense>
       </div>
     );
   }
   return <ToolLine call={step.call} cwd={cwd} />;
+}
+
+/** What the agent is writing after its last step, in a turn under way: where it will stay if
+ *  another step follows (a remark), in the same element, so the next step changes nothing about
+ *  it. It becomes the answer below the steps when the turn ends. */
+function LiveText({ items }: { items: Turn["answer"] }) {
+  return (
+    <>
+      {items.filter((item) => item.text.trim()).map((item) => (
+        <div key={`remark-${item.id}`} className="remark">
+          <Suspense fallback={<p>{item.text}</p>}><Markdown text={item.text} streaming fade /></Suspense>
+        </div>
+      ))}
+    </>
+  );
 }
 
 function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolean; stopped: boolean; cwd: string }) {
@@ -323,8 +358,13 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
   // a finished turn folds into one line (Everything keeps it open).
   if (working && level === "results") {
     const remarks = turn.steps.filter((step) => step.type === "remark");
-    return remarks.length > 0
-      ? <div className="trail remarks">{remarks.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} />)}</div>
+    return remarks.length > 0 || turn.answer.length > 0
+      ? (
+        <div className="trail remarks live-turn">
+          {remarks.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} live />)}
+          <LiveText items={turn.answer} />
+        </div>
+      )
       : null;
   }
   const isOpen = level === "everything" || (working && level === "steps") || open;
@@ -341,8 +381,9 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
     <>
       <details className="quiet" open={isOpen} onToggle={(event) => { if (!working && level !== "everything") setOpen((event.target as HTMLDetailsElement).open); }}>
         <summary>{label}{failedCount > 0 && <span className="fail-count"> · {failedCount} failed</span>} <Chevron /></summary>
-        <div className="trail">
-          {turn.steps.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} />)}
+        <div className={`trail${working ? " live-turn" : ""}`}>
+          {turn.steps.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} live={working} />)}
+          {working && <LiveText items={turn.answer} />}
         </div>
       </details>
       {coordinationCalls.length > 0 && (
@@ -461,7 +502,8 @@ function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; 
     <TurnChangesContext.Provider value={turn.changes}>
       {turn.user && <UserItem user={turn.user} />}
       <Activity turn={turn} working={streaming} stopped={stopped} cwd={cwd} />
-      {turn.answer.length > 0 && (
+      {/* While the agent works after a step, what it writes is in the steps (Activity) until the turn ends. */}
+      {turn.answer.length > 0 && !(streaming && turn.steps.length > 0) && (
         <div className="say">
           {turn.answer.map((item, index) => (
             <Suspense key={item.id} fallback={<p className="plain">{item.text}</p>}>

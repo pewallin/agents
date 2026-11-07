@@ -129,3 +129,13 @@ describe("the conversation's changes", () => {
     ]);
   });
 });
+
+describe("tool output", async () => {
+  const { unfenced } = await import("./turns");
+  it("drops one fence around the whole output, as Claude writes it", () => {
+    expect(unfenced("```\nExit code 1\ncat: x: No such file\n```")).toBe("Exit code 1\ncat: x: No such file");
+    expect(unfenced("```console\n$ ls\na\n```\n")).toBe("$ ls\na");
+    expect(unfenced("plain\n```\nnot all\n```")).toBe("plain\n```\nnot all\n```");
+    expect(unfenced("```\na\n```\ntext\n```\nb\n```")).toBe("```\na\n```\ntext\n```\nb\n```");
+  });
+});

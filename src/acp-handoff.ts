@@ -452,20 +452,21 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   };
 
 
-  const handOff = async (id: string): Promise<{ status: number; message?: string; session?: string | null }> => {
+  // `retry`: the refusal passes by itself (the agent is busy or switching): the app waits and asks again.
+  const handOff = async (id: string): Promise<{ status: number; message?: string; session?: string | null; retry?: boolean }> => {
     if (mode === "view") {
       const current = sessionId ?? startedSession ?? null;
       return id === "current" || id === current
         ? { status: 200, session: current }
         : { status: 409, message: `The view has another ${agent.name} session.` };
     }
-    if (mode !== "tui") return { status: 409, message: `${agent.name} is switching; try again.` };
+    if (mode !== "tui") return { status: 409, message: `${agent.name} is switching; try again.`, retry: true };
     const state = reportedAgentState(agent.stateAgent, paneId);
     if (state && BUSY_STATES.has(state)) {
-      return { status: 409, message: `${agent.name} is ${state === "working" ? "working" : "waiting for an answer"} in the terminal; switch when it is idle.` };
+      return { status: 409, message: `${agent.name} is ${state === "working" ? "working" : "waiting for an answer"} in the terminal; switch when it is idle.`, retry: true };
     }
     if (id === "current" && tuiSessionUnknown) {
-      return { status: 409, message: `${agent.name} has not said which session it has open; switch once it has run a turn.` };
+      return { status: 409, message: `${agent.name} has not said which session it has open; switch once it has run a turn.`, retry: true };
     }
     mode = "switching";
     status(`Stopping ${agent.name} in the terminal…`);

@@ -82,7 +82,7 @@ export interface AcpHandoffControl {
   /** Takes the session over from the TUI: answers 409 with a reason while the agent works. */
   /** Gives the view the session (or "current": the one the TUI has, none if it has none yet). The
    *  answer names the session the view opens; a null session is none: the view starts one. */
-  handOff(sessionId: string): Promise<{ status: number; message?: string; session?: string | null }>;
+  handOff(sessionId: string): Promise<{ status: number; message?: string; session?: string | null; retry?: boolean }>;
   giveBack(): Promise<void>;
 }
 
@@ -1118,7 +1118,7 @@ function handleControl(
       }
       const result = await handoff.handOff(sessionId);
       response.writeHead(result.status, { "Content-Type": "application/json", "Cache-Control": "no-store" })
-        .end(JSON.stringify({ message: result.message ?? "", session: result.session ?? null }));
+        .end(JSON.stringify({ message: result.message ?? "", session: result.session ?? null, ...(result.retry ? { retry: true } : {}) }));
     } catch (error) {
       response.writeHead(500, { "Content-Type": "application/json" })
         .end(JSON.stringify({ message: error instanceof Error ? error.message : String(error) }));

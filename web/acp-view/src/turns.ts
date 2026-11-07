@@ -200,9 +200,15 @@ export function shortPath(path: string, cwd?: string): string {
   return parts.length > 3 ? parts.slice(-3).join("/") : path;
 }
 
+/** Output an agent wrapped in one markdown fence (Claude's ```\n…\n```), without the fence. */
+export function unfenced(text: string): string {
+  const match = text.match(/^\s*(`{3,}|~{3,})[^\n`]*\n([\s\S]*?)\n?\1\s*$/);
+  return match && !match[2].includes(match[1]) ? match[2] : text;
+}
+
 export function toolOutput(call: ToolCall): string {
   const text = call.content
-    .map((entry) => (entry.type === "content" && entry.content.type === "text" ? entry.content.text : ""))
+    .map((entry) => (entry.type === "content" && entry.content.type === "text" ? unfenced(entry.content.text) : ""))
     .filter(Boolean)
     .join("\n");
   if (text) return text;

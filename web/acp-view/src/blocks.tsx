@@ -1,8 +1,10 @@
-// The agent's richer blocks: code with the file it belongs to in a header, Copy and Open Beside;
+// The agent's richer blocks: code with the file it belongs to in a header, Copy and Open Beside,
+// and the paths in it that exist as links;
 // notes (GitHub's > [!NOTE] and "Note:" quotes) as a quiet callout. Tables, headings and lists
 // are Streamdown's, styled in view.css.
-import { Children, cloneElement, isValidElement, useContext, useEffect, useState, type ReactElement, type ReactNode } from "react";
-import { ChipHostContext, useResolved } from "./chips";
+import { Children, cloneElement, isValidElement, useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { ChipHostContext, useResolved, useResolvedNames, type ChipHost, type ChipTarget } from "./chips";
+import { pathTokens } from "./paths";
 import { highlightLines, languageNamed, type Lines } from "./highlight";
 
 /** The file a fenced block names in its info string: ```swift AgentsNext/UI/Foo.swift,
@@ -23,6 +25,60 @@ function codeText(children: ReactNode): string {
 }
 
 /** A fenced code block. Inline code is the chips' (markdown.tsx). */
+type CodeToken = { content: string; color?: string; dark?: string };
+
+function tokenSpan(token: CodeToken, key: number | string) {
+  return token.color || token.dark
+    ? <span key={key} style={{ "--c": token.color, "--cd": token.dark } as React.CSSProperties}>{token.content}</span>
+    : <span key={key}>{token.content}</span>;
+}
+
+/** One line of a code block: its highlighted tokens, with each path that exists wrapped as a
+ *  link (a click opens it as a chip does; the tokens are split where the path starts and ends). */
+export function CodeLine({ tokens, found, host }: { tokens: CodeToken[]; found: Map<string, ChipTarget | null>; host: ChipHost | null }) {
+  const text = tokens.map((token) => token.content).join("");
+  const links = found.size === 0 ? [] : pathTokens(text).flatMap((token) => {
+    const target = found.get(token.token);
+    return target && target.kind !== "commit" && target.kind !== "bead" ? [{ ...token, target }] : [];
+  });
+  if (links.length === 0) return <>{tokens.map((token, at) => tokenSpan(token, at))}</>;
+  const out: ReactNode[] = [];
+  let group: ReactNode[] = [];
+  let link: (typeof links)[number] | undefined;
+  let at = 0;
+  const close = () => {
+    if (!link) return;
+    const target = link.target;
+    out.push(
+      <span key={`l${link.start}`} className="cpath" role="link" title="Open beside the pane (⌥ in the editor)"
+        data-path={target.kind === "file" || target.kind === "image" || target.kind === "dir" ? `${target.path}${target.line ? `:${target.line}` : ""}` : undefined}
+        onClick={(event) => {
+          if (window.getSelection()?.toString()) return;
+          event.preventDefault();
+          host?.open(target, { alternate: event.altKey, command: event.metaKey });
+        }}>{group}</span>,
+    );
+    group = [];
+    link = undefined;
+  };
+  tokens.forEach((token, index) => {
+    let start = 0;
+    while (start < token.content.length) {
+      const position = at + start;
+      if (link && position >= link.end) close();
+      if (!link) link = links.find((candidate) => position >= candidate.start && position < candidate.end);
+      const boundary = link ? link.end : (links.find((candidate) => candidate.start > position)?.start ?? Infinity);
+      const end = Math.min(token.content.length, boundary - at);
+      const piece = tokenSpan({ ...token, content: token.content.slice(start, end) }, `${index}-${start}`);
+      if (link) group.push(piece); else out.push(piece);
+      start = end;
+    }
+    at += token.content.length;
+  });
+  close();
+  return <>{out}</>;
+}
+
 export function CodeBlock({ className, node, children }: { className?: string; node?: { properties?: { metastring?: string } }; children?: ReactNode }) {
   const language = className?.match(/language-([^\s]+)/)?.[1];
   const named = fileOfMeta(node?.properties?.metastring);
@@ -55,6 +111,9 @@ export function CodeBlock({ className, node, children }: { className?: string; n
     setTimeout(() => setCopied(false), 1400);
   };
   const openable = file && (file.kind === "file" || file.kind === "image") ? file : null;
+  // Paths in the code that exist are links, as in the text (at most the first 40 a block names).
+  const candidates = useMemo(() => [...new Set(code.split("\n").flatMap((line) => pathTokens(line).map((token) => token.token)))].slice(0, 40), [code]);
+  const paths = useResolvedNames(candidates);
   return (
     <div className="code" data-language={language}>
       <div className="ch">
@@ -67,11 +126,9 @@ export function CodeBlock({ className, node, children }: { className?: string; n
         <button type="button" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button>
         {openable && <button type="button" onClick={(event) => host?.open(openable, { alternate: event.altKey })}>Open Beside</button>}
       </div>
-      <pre><code>{lines
-        ? lines.map((line, index) => (
-          <span key={index} className="cline">{line.map((token, at) => <span key={at} style={{ "--c": token.color, "--cd": token.dark } as React.CSSProperties}>{token.content}</span>)}{"\n"}</span>
-        ))
-        : code}</code></pre>
+      <pre><code>{(lines ?? code.split("\n").map((text) => [{ content: text }])).map((line, index) => (
+        <span key={index} className="cline"><CodeLine tokens={line} found={paths} host={host} />{"\n"}</span>
+      ))}</code></pre>
     </div>
   );
 }

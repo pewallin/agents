@@ -132,7 +132,10 @@ describe("acp-host", () => {
       agentCommand: { command: process.execPath, args: ["-e", ECHO_AGENT], env: process.env },
       handoff: {
         inView: () => inView,
-        handOff: async (id) => { handed.push(id); inView = true; return { status: 200 }; },
+        handOff: async (id) => {
+          if (id === "busy") return { status: 409, message: "Test is working in the terminal; switch when it is idle.", retry: true };
+          handed.push(id); inView = true; return { status: 200 };
+        },
         giveBack: async () => { inView = false; },
       },
     });
@@ -151,6 +154,10 @@ describe("acp-host", () => {
     });
     expect((await post("/api/handoff", { session: "s1" }, "wrong")).status).toBe(401);
     expect((await post("/api/handoff", { session: "bad id!" })).status).toBe(400);
+    // A refusal that passes by itself says so: the app waits and asks again.
+    const busy = await post("/api/handoff", { session: "busy" });
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toMatchObject({ retry: true });
     expect((await post("/api/handoff", { session: "s1" })).status).toBe(200);
     expect(handed).toEqual(["s1"]);
     const opened = await new Promise<string>((resolve) => {

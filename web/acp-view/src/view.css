@@ -427,7 +427,9 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .trail .ln.failure .t { color: var(--red); }
 .trail.failures { margin-top: -6px; }
 .quiet summary .fail-count { color: color-mix(in srgb, var(--red) 60%, var(--faint)); }
-.trail .out.tail { max-height: none; color: var(--dim); margin: 0 0 2px; }
+.trail .out.tail { max-height: 5.4em; overflow: hidden; color: var(--dim); margin: 0 0 2px; transition: max-height .24s ease, opacity .2s ease, margin .24s ease; }
+.trail .out.tail.closing { max-height: 0; opacity: 0; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .trail .out.tail { transition: none; } }
 .trail .out.can-beside { cursor: zoom-in; }
 .trail .out.can-beside:hover { color: var(--fg2); }
 
@@ -524,3 +526,13 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .att .qx:hover { color: var(--fg); background: var(--tint); }
 .att .qx svg { width: 9px; height: 9px; margin: 0; color: inherit; }
 .you-images { display: block; margin-top: 4px; font-size: calc(var(--fs) - 2px); color: var(--dim); }
+
+/* A path in a code block that exists: a link as in the text, without changing the code's colours. */
+.code .cpath { cursor: pointer; text-decoration: underline dotted; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+.code .cpath:hover { text-decoration-style: solid; text-decoration-color: var(--acc); }
+
+/* In a turn under way, what the agent says between its steps reads as its writing does: the text
+   it is writing now and the remarks before it look the same, so nothing restyles when the next
+   step starts. Once the turn is done they are quiet notes in the folded steps. */
+.trail.live-turn .remark { color: var(--fg); max-width: 100ch; }
+.trail.live-turn .remark strong { color: inherit; }
