@@ -25,6 +25,8 @@ export interface ReviewPayload {
   agentName: string;
   /** The file the page opens at. */
   focus?: string;
+  /** A commit's message, for a review of a commit. */
+  message?: string;
   /** No agent to send comments to. */
   readOnly: true;
 }
@@ -176,7 +178,8 @@ export async function runReviewCommand(args: string[]): Promise<number> {
   try {
     const changes = collectChanges({ cwd, base, commit, paths });
     if (changes.length === 0) throw new Error("no changes to review");
-    const url = await openReview({ changes, cwd, agentName: label, focus, readOnly: true });
+    const message = commit ? git(cwd, ["log", "-1", "--format=%B", commit])?.trim() || undefined : undefined;
+    const url = await openReview({ changes, cwd, agentName: label, focus, message, readOnly: true });
     console.log(args.includes("--json") ? JSON.stringify({ ok: true, url }) : url);
     return 0;
   } catch (error) {

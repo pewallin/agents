@@ -27,6 +27,7 @@
   --codebg: rgba(0, 0, 0, .035); --field: rgba(255, 255, 255, .86); --pop: rgba(244, 244, 246, .92);
   --ink-on: #ffffff;
   --add: rgba(26, 127, 55, .10); --del: rgba(207, 34, 46, .09);
+  --add-x: rgba(26, 127, 55, .24); --del-x: rgba(207, 34, 46, .20);
   --green: #1a7f37; --red: #cf222e; --orange: #e3840b; --ok: #23964f;
   --shadow: 0 8px 24px -10px rgba(0, 0, 0, .25);
   --blur: blur(22px) saturate(1.4);
@@ -43,6 +44,7 @@
   --codebg: rgba(0, 0, 0, .22); --field: rgba(44, 44, 48, .88); --pop: rgba(40, 40, 44, .92);
   --ink-on: #2a2a2d;
   --add: rgba(86, 211, 100, .12); --del: rgba(255, 123, 114, .12);
+  --add-x: rgba(86, 211, 100, .30); --del-x: rgba(255, 123, 114, .30);
   --green: #56d364; --red: #ff7b72; --orange: #ff9f0a; --ok: #41c26f;
   --shadow: 0 8px 24px -10px rgba(0, 0, 0, .5);
   color-scheme: dark;
@@ -269,37 +271,86 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .pop.slash .it small { max-width: none; min-width: 0; flex: 1; text-align: right; }
 .note-line { align-self: flex-start; font-size: calc(var(--fs) - 1.5px); color: var(--dim); padding: 0 12px 6px; }
 
-/* review beside the conversation */
+/* review beside the conversation: a head with the files and their counts, then every file in one
+   scroll under a header that stays at the top while its diff passes */
 .review { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--hair); background: var(--bg); }
-.rhead { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 18px 0; font-size: calc(var(--fs) - 1px); }
-.rhead .rtitle { font-weight: 600; }
-.rhead .d { color: var(--dim); }
-.rclose { all: unset; cursor: default; margin-left: auto; color: var(--dim); width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; }
+.rhead { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 8px 18px; font-size: calc(var(--fs) - 1px); border-bottom: 1px solid var(--hair); }
+.rtop { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rhead .rtitle { font-weight: 600; flex: none; }
+.rhead .d { color: var(--dim); white-space: nowrap; }
+.rhead .rwhat { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.rtop .sp, .fh .sp, .rfoot .sp { flex: 1; }
+.stat { flex: none; font: calc(var(--fs-mono) - 1px) var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stat .add { color: var(--green); }
+.stat .del { color: var(--red); }
+.rclose { all: unset; cursor: default; color: var(--dim); width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; flex: none; }
 .rclose:hover { background: var(--tint); color: var(--fg); }
-.rbar { flex: none; display: flex; align-items: center; gap: 14px; padding: 8px 18px; font-size: calc(var(--fs) - 1px); color: var(--dim); overflow-x: auto; }
-.rbar .f { all: unset; cursor: default; font: var(--fs-mono) var(--mono); white-space: nowrap; }
-.rbar .f.on, .rbar .f:hover { color: var(--fg); }
-.rbar .r { margin-left: auto; font-variant-numeric: tabular-nums; flex: none; }
-.dv { flex: 1; min-height: 0; overflow: auto; font: calc(var(--fs-mono) - .5px)/1.7 var(--mono); padding: 0 6px; }
-.dv table { border-collapse: collapse; width: 100%; }
-.dv td { padding: 0 10px; white-space: pre; vertical-align: top; }
-.dv td.n { width: 1%; text-align: right; color: var(--faint); user-select: none; padding: 0 8px; }
+.chev { flex: none; color: var(--faint); transition: transform .12s ease; }
+.chev.open { transform: rotate(90deg); }
+.chev.down { transform: rotate(90deg); }
+.chev.down.open { transform: rotate(-90deg); }
+/* The files, to jump to one. */
+.fmenu { position: relative; flex: none; }
+.fbtn { all: unset; cursor: default; display: inline-flex; align-items: center; gap: 4px; color: var(--dim); padding: 2px 6px; margin: -2px -2px; border-radius: 6px; white-space: nowrap; }
+.fbtn:hover, .fbtn.on { background: var(--tint); color: var(--fg); }
+.flist { position: absolute; top: calc(100% + 6px); left: -6px; z-index: 5; width: max-content; min-width: 260px; max-width: min(560px, 80vw); max-height: min(420px, 60vh); overflow-y: auto; display: flex; flex-direction: column; padding: 5px; border-radius: 10px; background: var(--pop); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); box-shadow: 0 0 0 1px var(--edge), var(--shadow); }
+.fi { all: unset; cursor: default; display: flex; align-items: baseline; gap: 8px; padding: 5px 9px; border-radius: 7px; color: var(--fg2); min-width: 0; }
+.fi:hover, .fi.on { background: var(--tint2); color: var(--fg); }
+.fi .fn, .fh .fn { font: var(--fs-mono) var(--mono); white-space: nowrap; }
+.fi .fd, .fh .fd { font: calc(var(--fs-mono) - 1px) var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; direction: rtl; text-align: left; }
+.fi .stat { margin-left: auto; padding-left: 12px; }
+/* A commit's message: its first lines, the rest on a click. */
+.rmsg { color: var(--fg2); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-width: 860px; }
+.rmsg.long { cursor: default; }
+.rmsg.long:hover { color: var(--fg); }
+.rmsg.open { -webkit-line-clamp: unset; display: block; max-height: 40vh; overflow-y: auto; }
+/* The files. */
+.dv { position: relative; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; font: calc(var(--fs-mono) - .5px)/1.65 var(--mono); padding: 0 0 24px; }
+.rf + .rf { border-top: 1px solid var(--hair); }
+.fh { position: sticky; top: 0; z-index: 2; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 14px 0 12px; font-size: calc(var(--fs) - 1px); background: var(--bg); border-bottom: 1px solid var(--hair); cursor: default; user-select: none; min-width: 0; }
+:root[data-agents-next="native"] .review-page .fh { background: var(--field); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.fh:hover .fn { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+.fh .fn { color: var(--fg); font-weight: 500; flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
+.rf.shut .fh { border-bottom-color: transparent; }
+.ftag { flex: none; font-size: calc(var(--fs) - 3px); color: var(--dim); background: var(--tint); padding: 1px 6px; border-radius: 5px; }
+.fempty { padding: 12px 18px; color: var(--faint); font-size: calc(var(--fs) - 1.5px); font-family: -apple-system, system-ui, sans-serif; }
+.rend { padding: 18px; text-align: center; color: var(--faint); font: calc(var(--fs) - 2px) -apple-system, system-ui, sans-serif; }
+.dv table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.dv td { padding: 0 10px 0 0; vertical-align: top; }
+/* Long lines wrap: a review beside an agent is narrow, and a line read in two parts beats one scrolled. */
+.dv td.tx { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.dv td.n { width: 5.2ch; box-sizing: content-box; text-align: right; color: var(--faint); user-select: none; padding: 0 6px 0 8px; font-variant-numeric: tabular-nums; }
+.dv td.n.old { opacity: .55; }
 .dv td.n.can { cursor: default; }
-.dv td.n.can:hover { color: var(--acc); }
-.dv td.code span { color: var(--c, inherit); }
-:root[data-theme="dark"] .dv td.code span { color: var(--cd, inherit); }
+.dv td.n.can:hover { color: var(--acc); opacity: 1; }
+.dv td.s { width: 1.6ch; padding: 0 6px 0 0; text-align: center; user-select: none; }
+.dv tr.a td.s { color: var(--green); }
+.dv tr.d td.s { color: var(--red); }
+.dv td.tx span { color: var(--c, inherit); }
+:root[data-theme="dark"] .dv td.tx span { color: var(--cd, inherit); }
 .dv tr.a { background: var(--add); }
 .dv tr.d { background: var(--del); }
-.dv tr.h td { color: var(--faint); padding: 4px 10px; }
-.dv tr.cm td { padding: 6px 10px 10px; white-space: normal; }
+.dv tr.a td.n { box-shadow: inset 2px 0 0 var(--green); }
+.dv tr.d td.n { box-shadow: inset 2px 0 0 var(--red); }
+/* The words that changed in a line paired with one on the other side. */
+.dv tr.a .x { background: var(--add-x); border-radius: 2px; }
+.dv tr.d .x { background: var(--del-x); border-radius: 2px; }
+.dv tr.h td { color: var(--faint); padding: 6px 10px 2px 0; font-family: -apple-system, system-ui, sans-serif; font-size: calc(var(--fs) - 2px); }
+.dv tr.gap td { color: var(--faint); background: var(--tint); font: calc(var(--fs) - 2.5px)/24px -apple-system, system-ui, sans-serif; cursor: default; user-select: none; }
+.dv tr.gap td.n { font-family: var(--mono); }
+.dv tr.gap:hover td { color: var(--fg2); background: var(--tint2); }
+.dv tr.cm td { padding: 6px 10px 10px 0; white-space: normal; }
 .cbox { max-width: 480px; background: var(--field); border-radius: 12px; box-shadow: var(--shadow), 0 0 0 1px var(--hair); padding: 9px 12px; font: calc(var(--fs) - 0.5px)/1.5 -apple-system, system-ui, sans-serif; display: flex; flex-direction: column; gap: 6px; }
-.cbox.done { box-shadow: none; background: var(--tint); }
+.cbox.done { box-shadow: none; background: var(--tint); flex-direction: row; align-items: flex-start; }
+.cbox.done span { flex: 1; white-space: pre-wrap; }
+.cbox .cx { all: unset; cursor: default; color: var(--faint); font-size: 11px; line-height: 20px; visibility: hidden; }
+.cbox.done:hover .cx { visibility: visible; }
+.cbox .cx:hover { color: var(--fg); }
 .cbox textarea { all: unset; display: block; width: 100%; white-space: pre-wrap; }
 .cbox .acts { display: flex; justify-content: flex-end; gap: 12px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
 .cbox .acts button { all: unset; cursor: default; }
 .cbox .acts .b { color: var(--acc); font-weight: 500; }
-.rfoot { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 18px 14px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
-.rfoot .sp { flex: 1; }
+.rfoot { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 18px 14px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); border-top: 1px solid var(--hair); }
 .pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 13px; border-radius: 14px; background: var(--fg); color: var(--field); font-size: calc(var(--fs) - 1.5px); font-weight: 500; border: 0; cursor: default; }
 .pill:disabled { background: var(--tint2); color: var(--faint); cursor: default; }
 .pill kbd { opacity: .6; font-size: calc(var(--fs) - 3px); font-family: inherit; }

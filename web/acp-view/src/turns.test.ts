@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emptySession, reduce, type SessionAction } from "./session-state";
 import { buildTurns, changesOf, conversationChanges, countLines, describeCall, duration, oneLine, shortPath } from "./turns";
-import { commentsMessage, diffRows } from "./review";
+import { changedWords, commentsMessage, diffRows, linePieces, splitPath } from "./review";
 
 const text = (t: string) => ({ type: "text" as const, text: t });
 
@@ -78,7 +78,36 @@ describe("review", () => {
     expect(rows.filter((row) => row.kind === "del").map((row) => [row.oldLine, row.text])).toEqual([[10, "l10"]]);
     expect(rows.filter((row) => row.kind === "add").map((row) => [row.newLine, row.text])).toEqual([[10, "L10"]]);
     expect(rows.filter((row) => row.kind === "same")).toHaveLength(6);
-    expect(rows.at(0)?.kind).toBe("same");
+    // The lines before and after fold into gaps that hold them.
+    expect(rows.at(0)?.kind).toBe("gap");
+    expect(rows.at(0)?.hidden?.map((row) => row.text)).toEqual(["l1", "l2", "l3", "l4", "l5", "l6"]);
+    expect(rows.at(-1)?.hidden).toHaveLength(7);
+  });
+
+  it("shows a run of unchanged lines too short to fold", () => {
+    const old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n";
+    const rows = diffRows(old, old.replace("b\n", "B\n").replace("i\n", "I\n"));
+    expect(rows.some((row) => row.kind === "gap")).toBe(false);
+  });
+
+  it("marks the words that changed in a line paired with its old version", () => {
+    const rows = diffRows("let total = count + 1;\n", "let total = count + 2;\n");
+    expect(rows.find((row) => row.kind === "del")?.marks).toEqual([[20, 21]]);
+    expect(rows.find((row) => row.kind === "add")?.marks).toEqual([[20, 21]]);
+    expect(changedWords("return a;", "throw new Error(message);")).toBeNull();
+  });
+
+  it("names a file by its name and its folder, whole for git's paths", () => {
+    expect(splitPath("web/acp-view/src/main.tsx", "/repo")).toEqual({ name: "main.tsx", dir: "web/acp-view/src" });
+    expect(splitPath("/repo/src/a.ts", "/repo")).toEqual({ name: "a.ts", dir: "src" });
+    expect(splitPath("README.md", "/repo")).toEqual({ name: "README.md", dir: "" });
+  });
+
+  it("splits a line's colours where its changed words start and end", () => {
+    const pieces = linePieces("let x = 2;", [{ content: "let", color: "k" }, { content: " x = 2;", color: "t" }], [[2, 5]]);
+    expect(pieces.map((piece) => [piece.content, piece.color, !!piece.marked])).toEqual([
+      ["le", "k", false], ["t", "k", true], [" x", "t", true], [" = 2;", "t", false],
+    ]);
   });
 
   it("turns line comments into one message for the agent", () => {

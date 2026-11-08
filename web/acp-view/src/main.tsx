@@ -1846,7 +1846,7 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
  *  opened it, through the host. */
 function ReviewPage({ id }: { id: string }) {
   // `readOnly`: changes no agent made (`agents review`, for Agents Next's Changes), to read only.
-  type Review = { changes: FileChange[]; cwd: string; agentName: string; focus?: string; readOnly?: boolean };
+  type Review = { changes: FileChange[]; cwd: string; agentName: string; focus?: string; message?: string; readOnly?: boolean };
   const [review, setReview] = useState<Review | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "sent" | "missing">("loading");
   useEffect(() => {
@@ -1863,7 +1863,7 @@ function ReviewPage({ id }: { id: string }) {
   if (state === "sent") return <Notice>The comments were sent to {review.agentName}. The pane can be closed.</Notice>;
   return (
     <div className="view review-page">
-      <ReviewPane changes={review.changes} cwd={review.cwd} agentName={review.agentName} focus={review.focus}
+      <ReviewPane changes={review.changes} cwd={review.cwd} agentName={review.agentName} focus={review.focus} message={review.message}
         onSend={review.readOnly ? undefined : (text) => {
           void fetch(`/api/review/${encodeURIComponent(id)}/send`, {
             method: "POST",
