@@ -251,6 +251,11 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 @media (prefers-reduced-motion: reduce) { .go.fly svg { animation: none; } }
 .icon { all: unset; cursor: default; width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: var(--dim); flex: none; }
 .icon:hover { background: var(--tint); }
+.icon.mic.rec { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+.icon.mic.err { color: var(--orange); }
+.icon.mic:disabled { opacity: .7; }
+.mic-wait { width: 10px; height: 10px; border-radius: 50%; border: 1.4px solid currentColor; border-right-color: transparent; animation: mic-spin .8s linear infinite; }
+@keyframes mic-spin { to { transform: rotate(360deg); } }
 .icon svg { width: 14px; height: 14px; }
 .pop { display: flex; position: absolute; left: 8px; bottom: calc(100% + 6px); width: 330px; max-width: calc(100% - 16px); background: var(--pop); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); border-radius: 10px; box-shadow: 0 0 0 1px var(--edge), var(--shadow); padding: 5px; flex-direction: column; font-size: calc(var(--fs) - 1px); z-index: 3; }
 .pop .it { display: flex; gap: 8px; align-items: center; padding: 5px 9px; border-radius: 7px; color: var(--fg2); cursor: default; }

@@ -7,6 +7,7 @@
 // The look: a reading column, the agent's text straight on the page, its work as quiet gray lines
 // that open on demand, one floating field to write in.
 import { StrictMode, createContext, lazy, Suspense, useCallback, type ComponentProps, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
@@ -753,6 +754,35 @@ function inMacApp(): boolean {
   return Boolean((window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }).webkit?.messageHandlers?.agentsNextACPLink);
 }
 
+type DictationState = "idle" | "recording" | "transcribing";
+
+/** Dictation by Agents Next: the field's microphone asks the app to record, the app's chosen
+ *  transcription provider writes it down, and the words come back into the field. Its state and
+ *  its text arrive as `agents-next-dictation` events; outside the app there is no microphone. */
+function useAppDictation(onText: (text: string) => void): { available: boolean; state: DictationState; error: string | null; toggle: () => void } {
+  const handler = (window as unknown as { webkit?: { messageHandlers?: Record<string, { postMessage: (body: unknown) => void } | undefined> } }).webkit?.messageHandlers?.agentsNextDictation;
+  const [state, setState] = useState<DictationState>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const onTextRef = useRef(onText);
+  onTextRef.current = onText;
+  useEffect(() => {
+    const onEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{ state?: DictationState; text?: string; error?: string }>).detail ?? {};
+      if (detail.state) setState(detail.state);
+      setError(detail.error ?? null);
+      if (detail.text) onTextRef.current(detail.text);
+    };
+    window.addEventListener("agents-next-dictation", onEvent);
+    return () => window.removeEventListener("agents-next-dictation", onEvent);
+  }, []);
+  return {
+    available: Boolean(handler),
+    state,
+    error,
+    toggle: () => handler?.postMessage({ action: "toggle" }),
+  };
+}
+
 type SlashItem = { kind: "command"; command: SlashCommand } | { kind: "choice"; choice: Choice; current: boolean };
 
 /** What @ can add: the project's files, and the other panes of the pane's tmux session. */
@@ -882,6 +912,15 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     window.addEventListener("agents-next-quote", onQuote);
     return () => window.removeEventListener("agents-next-quote", onQuote);
   }, []);
+  const dictation = useAppDictation((text) => {
+    setDraft((current) => withDictation(current, text));
+    requestAnimationFrame(() => {
+      const element = input.current;
+      if (!element) return;
+      element.focus();
+      element.setSelectionRange(element.value.length, element.value.length);
+    });
+  });
   // Messages for after the turn, kept by the pane's host (a reload keeps them, every view of the
   // pane shows the same), and how the agent takes a message during its turn.
   const queue = useHostQueue();
@@ -1317,6 +1356,17 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
               {DETAIL_TITLES[level]}
             </button>
             <span className="sp" />
+            {dictation.available && (
+              <button className={`icon mic${dictation.state === "recording" ? " rec" : ""}${dictation.error ? " err" : ""}`} type="button"
+                aria-label={dictation.state === "recording" ? "Stop dictating" : "Dictate"}
+                title={dictation.error ?? (dictation.state === "recording" ? "Stop, and write it into the field (⇧⌘M)" : dictation.state === "transcribing" ? "Writing it down…" : "Dictate (⇧⌘M)")}
+                disabled={dictation.state === "transcribing"}
+                onClick={dictation.toggle}>
+                {dictation.state === "transcribing"
+                  ? <span className="mic-wait" aria-hidden="true" />
+                  : <svg viewBox="0 0 14 14" aria-hidden="true"><rect x="5" y="1.6" width="4" height="7" rx="2" fill={dictation.state === "recording" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.3" /><path d="M3 6.8a4 4 0 0 0 8 0M7 10.8v1.8" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>}
+              </button>
+            )}
             {percent !== undefined && <Ring percent={percent} />}
             {busy && !draft.trim()
               ? <button className="go stop" type="button" aria-label="Stop" onClick={() => void session.cancel()}>
