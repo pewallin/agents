@@ -22,7 +22,7 @@ import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment 
 import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine, WorkerStrip } from "./coordination-view";
 import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
-import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, isOpened, lastLines, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
+import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import "./view.css";
 
 // Markdown (Streamdown) and code highlighting load after the first paint.
@@ -242,9 +242,9 @@ function ToolLine({ call, cwd, failure = false }: { call: ToolCall; cwd: string;
 function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; failure: boolean }) {
   const { level, openOutput } = useContext(DetailContext);
   // Open or closed is the reader's, kept by the step's id: updates and the step's end keep it.
-  const [open, setOpenState] = useState(() => isOpened(call.id, level));
-  const setOpen = (value: boolean) => { setOpenedStep(call.id, value); setOpenState(value); };
-  useEffect(() => { if (level === "everything") setOpenState(true); }, [level]);
+  const chosen = useOpenedSteps((state) => state.opened[call.id]);
+  const open = chosen ?? level === "everything";
+  const setOpen = (value: boolean) => setOpenedStep(call.id, value);
   const { verb, target } = describeCall(call, cwd);
   const output = toolOutput(call);
   const diffCount = call.content.some((entry) => entry.type === "diff");
@@ -544,19 +544,41 @@ function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; 
 
 /** The step the agent is on, as one shimmering line. */
 function CurrentStep({ turn, now, cwd }: { turn: Turn | undefined; now: number; cwd: string }) {
+  const { openOutput } = useContext(DetailContext);
   const step = turn?.steps.at(-1);
   let text = "Thinking";
   let since = turn?.startedAt;
+  // The step under way opens here as in the steps: one open state for both, by its id. One the
+  // reader opened stays here, open, when it ends, until the agent takes its next step.
+  const last = turn && turn.answer.length === 0 && step?.type === "tool" ? step.call : null;
+  const lastRunning = last !== null && last.status !== "completed" && last.status !== "failed";
+  const lastOpen = useOpenedSteps((state) => (last ? state.opened[last.id] === true : false));
+  const call = last && (lastRunning || lastOpen) ? last : null;
+  const open = call !== null && lastOpen;
   if (turn && turn.answer.length > 0) text = "Writing";
-  else if (step?.type === "tool" && step.call.status !== "completed" && step.call.status !== "failed") {
-    const { verb, target } = describeCall(step.call, cwd);
-    text = `${PRESENT[verb] ?? verb} ${target}`.trim();
-    since = step.call.startedAt ?? since;
+  else if (call) {
+    const { verb, target } = describeCall(call, cwd);
+    text = `${lastRunning ? PRESENT[verb] ?? verb : verb} ${target}`.trim();
+    since = lastRunning ? call.startedAt ?? since : since;
   }
+  const output = call ? toolOutput(call) : "";
+  const toggle = () => call && setOpenedStep(call.id, !open);
   return (
-    <div className="current">
-      <span className="shim"><span className="txt">{text}</span>{since !== undefined && <span className="m">{duration(now - since)}</span>}</span>
-    </div>
+    <>
+      <div className={`current${call ? " can-open" : ""}`} role={call ? "button" : undefined} tabIndex={call ? 0 : undefined}
+        aria-expanded={call ? open : undefined} title={call ? (open ? "Hide the output" : "Show the command's output") : undefined}
+        onClick={toggle} onKeyDown={(event) => { if (call && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); toggle(); } }}>
+        <span className="shim"><span className="txt">{text}</span>{since !== undefined && <span className="m">{duration(now - since)}</span>}</span>
+        {call && <Chevron />}
+      </div>
+      {call && open && (
+        <div className="trail current-out">
+          {output
+            ? <StepOutput text={output} running={lastRunning} onOpenBeside={() => openOutput(text, output)} />
+            : <div className="out none">{lastRunning ? "Running · no output yet" : "No output"}</div>}
+        </div>
+      )}
+    </>
   );
 }
 

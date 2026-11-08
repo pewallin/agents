@@ -1,5 +1,6 @@
 // How much of a turn's work the view shows (cycled with ⌃O, remembered per pane), and the one
 // line a finished turn's steps fold into.
+import { create } from "zustand";
 import type { ToolCall } from "./session-state";
 import { parseAgentCommand } from "./coordination";
 import { duration, toolOutput, type Turn } from "./turns";
@@ -105,15 +106,15 @@ export function lastLines(text: string, count = 3): string[] {
 }
 
 /** Steps the reader opened, by tool call id: a step stays open while its output arrives, when it
- *  ends, and when the view draws it again. */
-const opened = new Map<string, boolean>();
+ *  ends, and when the view draws it again, in the steps and on the running step's line alike. */
+export const useOpenedSteps = create<{ opened: Record<string, boolean> }>(() => ({ opened: {} }));
 
 export function isOpened(id: string, level: DetailLevel): boolean {
-  return opened.get(id) ?? level === "everything";
+  return useOpenedSteps.getState().opened[id] ?? level === "everything";
 }
 
 export function setOpened(id: string, value: boolean): void {
-  opened.set(id, value);
+  useOpenedSteps.setState((state) => ({ opened: { ...state.opened, [id]: value } }));
 }
 
 /** Whether a step opens: one that is running always does (its command, and its output as it

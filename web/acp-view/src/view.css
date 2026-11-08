@@ -546,3 +546,10 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 
 /* An opened step with nothing to show yet (or ever). */
 .trail .out.none { color: var(--faint); font-style: italic; white-space: normal; }
+
+/* The running step's line opens its output in place, as the "Worked" line opens the steps. */
+.current.can-open { align-items: center; gap: 4px; align-self: flex-start; cursor: pointer; border-radius: 6px; padding: 1px 6px; margin-left: -6px; }
+.current.can-open:hover { background: var(--tint); }
+.current.can-open > svg { width: 10px; height: 10px; color: var(--faint); transition: transform .15s; }
+.current.can-open[aria-expanded="true"] > svg { transform: rotate(90deg); }
+.trail.current-out { margin-top: -8px; }

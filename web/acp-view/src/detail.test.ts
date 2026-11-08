@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canExpand, endingFailure, failedCalls, isOpened, lastLines, nextDetailLevel, setOpened, testResult, turnSummary } from "./detail";
+import { canExpand, endingFailure, failedCalls, isOpened, lastLines, nextDetailLevel, setOpened, testResult, turnSummary, useOpenedSteps } from "./detail";
 import { exitCode, type Turn } from "./turns";
 
 describe("testResult", () => {
@@ -73,6 +73,7 @@ describe("opening a step", () => {
     expect(isOpened("call-1", "steps")).toBe(false);
     expect(isOpened("call-1", "everything")).toBe(true);
     setOpened("call-1", true);
+    expect(useOpenedSteps.getState().opened["call-1"]).toBe(true);
     expect(isOpened("call-1", "steps")).toBe(true);
     setOpened("call-1", false);
     expect(isOpened("call-1", "everything")).toBe(false);
