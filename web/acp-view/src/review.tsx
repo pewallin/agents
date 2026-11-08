@@ -48,15 +48,19 @@ export function commentsMessage(comments: Array<Omit<Comment, "edit">>, cwd: str
   return `Comments on the changes:\n${lines.join("\n")}`;
 }
 
-export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
+export function ReviewPane({ changes, cwd, agentName, onClose, onSend, focus }: {
   changes: FileChange[];
   cwd: string;
+  /** The agent the comments go to; for a review with no agent, what it is of ("against main"). */
   agentName: string;
   /** Absent when the review is a pane of its own: the app closes it. */
   onClose?: () => void;
-  onSend: (text: string) => void;
+  /** Absent for changes no agent made (Agents Next's Changes): the diff is only to read. */
+  onSend?: (text: string) => void;
+  /** The file it opens at. */
+  focus?: string;
 }) {
-  const [fileIndex, setFileIndex] = useState(0);
+  const [fileIndex, setFileIndex] = useState(() => Math.max(0, changes.findIndex((change) => change.path === focus)));
   const [comments, setComments] = useState<Comment[]>([]);
   const [editing, setEditing] = useState<{ path: string; edit: number; line: number; code: string } | null>(null);
   const [text, setText] = useState("");
@@ -78,7 +82,7 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
   useEffect(() => { box.current?.focus(); }, [editing]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Enter" && event.metaKey && comments.length > 0 && !editing) {
+      if (event.key === "Enter" && event.metaKey && comments.length > 0 && !editing && onSend) {
         event.preventDefault();
         onSend(commentsMessage(comments, cwd));
       } else if (event.key === "Escape" && !editing && onClose) {
@@ -126,7 +130,7 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
                       tokens={row.kind === "del"
                         ? colours[edit]?.old?.[(row.oldLine ?? 0) - 1]
                         : colours[edit]?.next?.[(row.newLine ?? 0) - 1]}
-                      onComment={line && row.kind !== "del" && row.kind !== "gap" ? () => { setEditing({ path: change.path, edit, line, code: row.text }); setText(""); } : undefined}>
+                      onComment={onSend && line && row.kind !== "del" && row.kind !== "gap" ? () => { setEditing({ path: change.path, edit, line, code: row.text }); setText(""); } : undefined}>
                       {here.map((comment, n) => (
                         <tr className="cm" key={`c${n}`}><td className="n" /><td><div className="cbox done">{comment.text}</div></td></tr>
                       ))}
@@ -151,13 +155,15 @@ export function ReviewPane({ changes, cwd, agentName, onClose, onSend }: {
           </tbody>
         </table>
       </div>
-      <div className="rfoot">
-        <span>{comments.length === 0 ? "Click a line number to comment" : comments.length === 1 ? "1 comment" : `${comments.length} comments`}</span>
-        <span className="sp" />
-        <button className="pill" type="button" disabled={comments.length === 0} onClick={() => onSend(commentsMessage(comments, cwd))}>
-          Send to {agentName} <kbd>⌘⏎</kbd>
-        </button>
-      </div>
+      {onSend && (
+        <div className="rfoot">
+          <span>{comments.length === 0 ? "Click a line number to comment" : comments.length === 1 ? "1 comment" : `${comments.length} comments`}</span>
+          <span className="sp" />
+          <button className="pill" type="button" disabled={comments.length === 0} onClick={() => onSend(commentsMessage(comments, cwd))}>
+            Send to {agentName} <kbd>⌘⏎</kbd>
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

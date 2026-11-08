@@ -1845,20 +1845,26 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
 /** A review opened as a pane of its own (/review/<id>): its comments go back to the view that
  *  opened it, through the host. */
 function ReviewPage({ id }: { id: string }) {
-  const [review, setReview] = useState<{ changes: FileChange[]; cwd: string; agentName: string } | null>(null);
+  // `readOnly`: changes no agent made (`agents review`, for Agents Next's Changes), to read only.
+  type Review = { changes: FileChange[]; cwd: string; agentName: string; focus?: string; readOnly?: boolean };
+  const [review, setReview] = useState<Review | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "sent" | "missing">("loading");
   useEffect(() => {
-    hostJson<{ changes: FileChange[]; cwd: string; agentName: string }>(`/api/review/${encodeURIComponent(id)}`)
-      .then((value) => { setReview(value); setState("ready"); document.title = `Changes – ${value.agentName}`; })
+    hostJson<Review>(`/api/review/${encodeURIComponent(id)}`)
+      .then((value) => {
+        setReview(value);
+        setState("ready");
+        document.title = value.readOnly ? (value.focus ?? value.changes[0]?.path ?? "Changes").split("/").pop()! : `Changes – ${value.agentName}`;
+      })
       .catch(() => setState("missing"));
   }, [id]);
-  if (state === "missing") return <Notice>The review is gone. Open it again from the agent's view.</Notice>;
+  if (state === "missing") return <Notice>The review is gone. Open it again from the agent's view or Changes.</Notice>;
   if (!review) return <Notice>Opening the review…</Notice>;
   if (state === "sent") return <Notice>The comments were sent to {review.agentName}. The pane can be closed.</Notice>;
   return (
     <div className="view review-page">
-      <ReviewPane changes={review.changes} cwd={review.cwd} agentName={review.agentName}
-        onSend={(text) => {
+      <ReviewPane changes={review.changes} cwd={review.cwd} agentName={review.agentName} focus={review.focus}
+        onSend={review.readOnly ? undefined : (text) => {
           void fetch(`/api/review/${encodeURIComponent(id)}/send`, {
             method: "POST",
             headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

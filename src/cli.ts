@@ -125,6 +125,15 @@ if (firstArg === "acp-prompt") {
   const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
   process.exit(await runAcpPrompt(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp")));
 }
+// Changes no agent made, shown in the ACP view's review (Agents Next's Changes panel).
+if (firstArg === "review") {
+  process.exit(await (await import("./review-server.js")).runReviewCommand(args.slice(1)));
+}
+if (firstArg === "review-server") {
+  const { acpViewRoot } = await import("./acp-host-cli.js");
+  await (await import("./review-server.js")).runReviewServer(acpViewRoot());
+  await new Promise(() => {});
+}
 if (firstArg === "acp-session") {
   const { runAcpSessionCommand } = await import("./acp-host-cli.js");
   const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
