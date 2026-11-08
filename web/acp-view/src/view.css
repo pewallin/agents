@@ -543,3 +543,6 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 
 /* What a click and a ⌘-click on the link do, under its peek. */
 .peek-hint { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hair); font-size: calc(var(--fs) - 2.5px); color: var(--faint); }
+
+/* An opened step with nothing to show yet (or ever). */
+.trail .out.none { color: var(--faint); font-style: italic; white-space: normal; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { endingFailure, failedCalls, lastLines, nextDetailLevel, testResult, turnSummary } from "./detail";
+import { canExpand, endingFailure, failedCalls, isOpened, lastLines, nextDetailLevel, setOpened, testResult, turnSummary } from "./detail";
 import { exitCode, type Turn } from "./turns";
 
 describe("testResult", () => {
@@ -57,5 +57,24 @@ describe("failures", () => {
     expect(exitCode({ id: "1", content: [], locations: [], rawOutput: { exit_code: 2 } } as never)).toBe(2);
     expect(exitCode({ id: "1", content: [{ type: "content", content: { type: "text", text: "Exit code 1\nerror: no such file" } }], locations: [] } as never)).toBe(1);
     expect(exitCode({ id: "1", content: [], locations: [] } as never)).toBeNull();
+  });
+});
+
+describe("opening a step", () => {
+  it("opens a running step whatever it has to show, a finished one when it has something", () => {
+    expect(canExpand({ status: "in_progress" }, "", false)).toBe(true);
+    expect(canExpand({ status: "pending" }, "", false)).toBe(true);
+    expect(canExpand({ status: "completed" }, "", false)).toBe(false);
+    expect(canExpand({ status: "completed" }, "out", false)).toBe(true);
+    expect(canExpand({ status: "completed" }, "", true)).toBe(true);
+  });
+
+  it("keeps a step the reader opened open by its id, as output comes and when it ends", () => {
+    expect(isOpened("call-1", "steps")).toBe(false);
+    expect(isOpened("call-1", "everything")).toBe(true);
+    setOpened("call-1", true);
+    expect(isOpened("call-1", "steps")).toBe(true);
+    setOpened("call-1", false);
+    expect(isOpened("call-1", "everything")).toBe(false);
   });
 });

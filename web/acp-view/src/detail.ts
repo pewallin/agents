@@ -103,3 +103,21 @@ export function endingFailure(turn: Turn): ToolCall | null {
 export function lastLines(text: string, count = 3): string[] {
   return text.replace(/\s+$/, "").split("\n").filter((line) => line.trim()).slice(-count);
 }
+
+/** Steps the reader opened, by tool call id: a step stays open while its output arrives, when it
+ *  ends, and when the view draws it again. */
+const opened = new Map<string, boolean>();
+
+export function isOpened(id: string, level: DetailLevel): boolean {
+  return opened.get(id) ?? level === "everything";
+}
+
+export function setOpened(id: string, value: boolean): void {
+  opened.set(id, value);
+}
+
+/** Whether a step opens: one that is running always does (its command, and its output as it
+ *  comes, or that none came yet), a finished one when it has output or a longer command. */
+export function canExpand(call: Pick<ToolCall, "status">, output: string, longCommand: boolean): boolean {
+  return call.status === "pending" || call.status === "in_progress" || Boolean(output) || longCommand;
+}

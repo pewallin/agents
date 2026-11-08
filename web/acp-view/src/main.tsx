@@ -22,7 +22,7 @@ import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment 
 import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine, WorkerStrip } from "./coordination-view";
 import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
-import { DETAIL_TITLES, endingFailure, failedCalls, lastLines, nextDetailLevel, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
+import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, isOpened, lastLines, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import "./view.css";
 
 // Markdown (Streamdown) and code highlighting load after the first paint.
@@ -241,8 +241,10 @@ function ToolLine({ call, cwd, failure = false }: { call: ToolCall; cwd: string;
 
 function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; failure: boolean }) {
   const { level, openOutput } = useContext(DetailContext);
-  const [open, setOpen] = useState(level === "everything");
-  useEffect(() => { if (level === "everything") setOpen(true); }, [level]);
+  // Open or closed is the reader's, kept by the step's id: updates and the step's end keep it.
+  const [open, setOpenState] = useState(() => isOpened(call.id, level));
+  const setOpen = (value: boolean) => { setOpenedStep(call.id, value); setOpenState(value); };
+  useEffect(() => { if (level === "everything") setOpenState(true); }, [level]);
   const { verb, target } = describeCall(call, cwd);
   const output = toolOutput(call);
   const diffCount = call.content.some((entry) => entry.type === "diff");
@@ -264,7 +266,7 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
   // The row shows one line of the command or title; a longer one opens in full.
   const line = oneLine(target.replace(/`([^`]*)`/g, "$1"));
   const whole = line !== target.trim() ? target : null;
-  const canOpen = Boolean(output) || whole !== null;
+  const canOpen = canExpand(call, output, whole !== null);
   // The files a read or an edit acted on, as chips.
   const files = call.kind && FILE_KINDS.has(call.kind)
     ? [...new Set([...call.content.flatMap((entry) => (entry.type === "diff" ? [entry.path] : [])), ...call.locations.map((location) => location.path)])].slice(0, 3)
@@ -282,13 +284,29 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
         {meta !== null && <span className="m">{meta}</span>}
       </div>
       {open && whole && <pre className="out cmd"><LinkedText text={whole} /></pre>}
-      {open && output && (
-        <pre className={`out${OPEN_REVIEW_BESIDE ? " can-beside" : ""}`} title={OPEN_REVIEW_BESIDE ? "Open beside the pane" : undefined}
-          onClick={() => OPEN_REVIEW_BESIDE && !window.getSelection()?.toString() && openOutput(title, output)}><LinkedText text={output.length > 6000 ? `${output.slice(0, 6000)}\n…` : output} /></pre>
-      )}
+      {open && output && <StepOutput text={output} running={running} onOpenBeside={() => openOutput(title, output)} />}
+      {open && !output && <div className="out none">{running ? "Running · no output yet" : "No output"}</div>}
       {/* The step under way shows its last lines live. A failure is one line; its output opens on a click. */}
       {!open && output && level !== "results" && <LiveTail text={lastLines(output, 3).join("\n")} running={running} />}
     </>
+  );
+}
+
+/** A step's output, opened: while the step runs it grows as output comes and keeps its end in
+ *  sight (unless the reader scrolled up in it); a click opens all of it beside the pane. */
+function StepOutput({ text, running, onOpenBeside }: { text: string; running: boolean; onOpenBeside: () => void }) {
+  const box = useRef<HTMLPreElement>(null);
+  const atEnd = useRef(true);
+  // A running step keeps its last 6000 characters in sight; a finished one its first.
+  const shown = text.length <= 6000 ? text : running ? `…\n${text.slice(-6000)}` : `${text.slice(0, 6000)}\n…`;
+  useLayoutEffect(() => {
+    const element = box.current;
+    if (element && running && atEnd.current) element.scrollTop = element.scrollHeight;
+  }, [shown, running]);
+  return (
+    <pre ref={box} className={`out${OPEN_REVIEW_BESIDE ? " can-beside" : ""}`} title={OPEN_REVIEW_BESIDE ? "Open beside the pane" : undefined}
+      onScroll={(event) => { const element = event.currentTarget; atEnd.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24; }}
+      onClick={() => OPEN_REVIEW_BESIDE && !window.getSelection()?.toString() && onOpenBeside()}><LinkedText text={shown} /></pre>
   );
 }
 
