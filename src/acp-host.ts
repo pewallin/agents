@@ -56,6 +56,9 @@ export interface AcpHostOptions {
   appControl?: AppControlTarget;
   /** Keep one agent process started ahead of the next client. */
   warmSpare?: boolean;
+  /** The warm spare may open the host's own session (startHostedSession); otherwise that session
+   *  gets a process started for it. */
+  spareCanHost?: boolean;
   port?: number;
   /** The address and token of a host of this pane that ended without closing (it crashed): a
    *  view still open on it reconnects to this one. */
@@ -571,15 +574,17 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       // A process of its own, started now: a spare started beside the TUI can be stuck on the
       // agent's store the TUI held (OpenCode answers no prompt then). And no spare beside it: the
       // views attach to this one, and two of some agents starting at once fight over their store
-      // (OpenCode: "database is locked").
-      if (spare) {
+      // (OpenCode: "database is locked"). An agent whose spare holds nothing until a session
+      // opens (Claude) opens it in the spare, which has loaded already.
+      if (spare && !options.spareCanHost) {
         children.delete(spare);
         spare.stdin?.end();
         spare.kill("SIGTERM");
         spare = undefined;
       }
+      const warm = spare;
       const child = takeAgent(false);
-      log(`the host starts a session of its own, agent ${child.pid}`);
+      log(`the host starts a session of its own, agent ${child.pid}${child === warm ? " (started ahead)" : ""}`);
       const session = new HostedSession(child, {
         onAgentLine: (line) => {
           diagnostics.message(0, "agent→host", line);
@@ -1219,5 +1224,16 @@ function handleHttp(
       "Content-Security-Policy": "default-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' data: agents-next-thumbnail:; frame-ancestors 'none'",
     }),
   });
-  response.end(request.method === "HEAD" ? undefined : readFileSync(filePath));
+  if (request.method === "HEAD") { response.end(); return; }
+  // The page's first frame names the agent (the field's "Ask Claude"), before it asks the host.
+  response.end(isAsset ? readFileSync(filePath) : withAgentName(readFileSync(filePath, "utf8"), context.agent.name));
+}
+
+/** The app shell with the agent's name in a meta tag the page reads at once. */
+export function withAgentName(html: string, name: string): string {
+  const escaped = name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const meta = `<meta name="acp-agent" content="${escaped}">`;
+  return /<head[^>]*>/i.test(html)
+    ? html.replace(/<head[^>]*>/i, (head) => `${head}${meta}`)
+    : html.replace(/^(<!doctype[^>]*>)?/i, (doctype) => `${doctype}${meta}`);
 }

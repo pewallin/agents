@@ -553,3 +553,21 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .current.can-open > svg { width: 10px; height: 10px; color: var(--faint); transition: transform .15s; }
 .current.can-open[aria-expanded="true"] > svg { transform: rotate(90deg); }
 .trail.current-out { margin-top: -8px; }
+
+/* While the view opens (Opening in main.tsx, and the app's own frame before the host is up,
+   acpViewStartingHTML in Agents Next): the field in its place, empty, with one quiet line that
+   says what the view waits for. It fades in only after a moment, so a quick open shows none. */
+.opening .input { cursor: default; }
+.opening .icon:hover { background: none; }
+.opening-line { display: inline-flex; align-items: center; gap: 7px; padding: 0 3px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  opacity: 0; animation: opening-in .3s ease .3s forwards; }
+:root[data-waited="true"] .opening-line { animation: none; opacity: 1; }
+.opening-line .pulse { flex: none; width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: opening-pulse 1.6s ease-in-out infinite; }
+@keyframes opening-in { to { opacity: 1; } }
+@keyframes opening-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+/* The conversation comes in once, above the field, when it has opened. */
+.col.arrive { animation: arrive .22s ease-out both; }
+@keyframes arrive { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .opening-line, .opening-line .pulse, .col.arrive { animation: none; opacity: 1; transform: none; }
+}

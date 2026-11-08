@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { AcpActivity, OPEN_ELSEWHERE_CODE, OPEN_ELSEWHERE_REASON, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, hostPage, rankFiles, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
+import { AcpActivity, OPEN_ELSEWHERE_CODE, OPEN_ELSEWHERE_REASON, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, hostPage, rankFiles, readAcpHostMetadata, startAcpHost, withAgentName, type AcpHost } from "./acp-host.js";
 
 // A stand-in agent: answers each JSON-RPC line with an echo of its method.
 const ECHO_AGENT = `
@@ -68,7 +68,10 @@ describe("acp-host", () => {
     const shell = await fetch(`${h.url}/thread/abc`);
     expect(shell.status).toBe(200);
     expect(shell.headers.get("cache-control")).toBe("no-cache");
-    expect(await shell.text()).toContain("<title>acp</title>");
+    const html = await shell.text();
+    expect(html).toContain("<title>acp</title>");
+    // The page's first frame names the agent.
+    expect(html).toContain('<meta name="acp-agent" content="Test">');
 
     const asset = await fetch(`${h.url}/assets/app-abc123.js`);
     expect(asset.status).toBe(200);
@@ -76,6 +79,13 @@ describe("acp-host", () => {
 
     expect((await fetch(`${h.url}/assets/..%2f..%2fsecret.txt`)).status).toBe(404);
     expect((await fetch(`${h.url}/assets/missing.js`)).status).toBe(404);
+  });
+
+  it("puts the agent's name in the app shell, escaped, with or without a head", () => {
+    expect(withAgentName("<!doctype html><html><head><title>t</title></head></html>", "Claude"))
+      .toBe('<!doctype html><html><head><meta name="acp-agent" content="Claude"><title>t</title></head></html>');
+    expect(withAgentName("<!doctype html><title>t</title>", 'A "b" <c>'))
+      .toBe('<!doctype html><meta name="acp-agent" content="A &quot;b&quot; &lt;c>"><title>t</title>');
   });
 
   it("refuses another host name, which a rebound DNS name would send", async () => {

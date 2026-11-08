@@ -6,7 +6,7 @@
 //
 // The look: a reading column, the agent's text straight on the page, its work as quiet gray lines
 // that open on demand, one floating field to write in.
-import { StrictMode, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { StrictMode, createContext, lazy, Suspense, useCallback, type ComponentProps, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
@@ -25,8 +25,16 @@ import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, opti
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import "./view.css";
 
-// Markdown (Streamdown) and code highlighting load after the first paint.
-const Markdown = lazy(() => import("./markdown"));
+// Markdown (Streamdown) and code highlighting load beside the session, after the first paint:
+// a conversation shows once both are there, so its text and code never show raw first.
+let markdownModule: typeof import("./markdown") | null = null;
+const markdownReady = import("./markdown").then(async (module) => { await module.ready; markdownModule = module; return module; });
+const LazyMarkdown = lazy(() => markdownReady);
+/** Markdown at once when it has loaded (no Suspense fallback for a frame), lazily before. */
+function Markdown(props: ComponentProps<typeof LazyMarkdown>) {
+  const Loaded = markdownModule?.default;
+  return Loaded ? <Loaded {...props} /> : <LazyMarkdown {...props} />;
+}
 
 const started = performance.now();
 const timings: Record<string, number> = {};
@@ -60,6 +68,11 @@ function readToken(): string | null {
 
 const sessionId = decodeURIComponent(location.pathname.match(/^\/thread\/([^/]+)/)?.[1] ?? "") || null;
 const token = readToken();
+/** The agent's name as the host serves the page (acp-host.ts withAgentName): the first frame has it. */
+const AGENT_NAME = document.querySelector<HTMLMetaElement>('meta[name="acp-agent"]')?.content || null;
+/** The app showed its own "opening" frame before this page (waited=1): the page goes on showing
+ *  it as it was, without fading its line in again. */
+if (new URLSearchParams(location.hash.slice(1)).get("waited") === "1") document.documentElement.dataset.waited = "true";
 const themeParam = new URLSearchParams(location.search).get("theme");
 const darkQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
 /** In Agents Next the app sets the look (data-theme and the rest, see view.css) before the page
@@ -110,8 +123,11 @@ function ScrollThumb({ target }: { target: React.RefObject<HTMLDivElement | null
       const top = (scrollTop / (scrollHeight - clientHeight)) * (clientHeight - height);
       setGeometry({ top, height });
     };
+    // The view opens at the end of the conversation: that first scroll shows no thumb.
+    const quietUntil = performance.now() + 600;
     const onScroll = () => {
       measure();
+      if (performance.now() < quietUntil) return;
       setShown(true);
       clearTimeout(hide);
       hide = setTimeout(() => setShown(false), 1000);
@@ -145,6 +161,43 @@ function ScrollThumb({ target }: { target: React.RefObject<HTMLDivElement | null
 
 function Notice({ children }: { children: ReactNode }) {
   return <div className="notice">{children}</div>;
+}
+
+/** What the view says while it opens: the session it loads, or the agent it starts. */
+function openingText(name: string | null = AGENT_NAME): string {
+  return sessionId && sessionId !== "current" ? "Loading the session…" : `Starting ${name ?? "the agent"}…`;
+}
+
+/**
+ * The view while it opens: the field where it will be, empty, and one quiet line in it saying
+ * what the view waits for. The conversation then comes in above the field and nothing moves.
+ * Agents Next shows the same frame before the host is up (acpViewStartingHTML in
+ * WorkspaceWebSurfaceView.swift), so its page and this one meet without a jump.
+ */
+function Opening({ text = openingText() }: { text?: string }) {
+  return (
+    <div className="view opening" data-acp-opening="true">
+      <div className="main">
+        <div className="scroll-wrap"><div className="scroll" /></div>
+        <div className="dock"><div className="inner">
+          <div className="box">
+            <textarea className="input" rows={1} disabled tabIndex={-1}
+              placeholder={AGENT_NAME ? `Ask ${AGENT_NAME}, @ for files and panes, / for commands` : ""} />
+            <div className="row">
+              <span className="icon" aria-hidden="true">
+                <svg viewBox="0 0 14 14"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+              </span>
+              <span className="opening-line" role="status"><i className="pulse" />{text}</span>
+              <span className="sp" />
+              <span className="go off" aria-hidden="true">
+                <svg viewBox="0 0 14 14"><path d="M7 11.5v-9M3 6.5l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              </span>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  );
 }
 
 interface HostDiagnosticsReport {
@@ -1449,7 +1502,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           const element = event.currentTarget;
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
         }}>
-          <div className="col">
+          <div className="col arrive">
             <WorkerLine />
             {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
@@ -1560,8 +1613,9 @@ function SessionGate({ info }: { info: HostInfo }) {
         try {
           return await hostJson<{ sessionId: string | null; persisted?: boolean; busy?: boolean }>("/api/session");
         } catch (error) {
-          if (attempt >= 60) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          // Asked often: the view opens the moment the host has the session (within 30 s).
+          if (attempt >= 300) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
       }
     };
@@ -1584,10 +1638,10 @@ function SessionGate({ info }: { info: HostInfo }) {
     void untilIdle(waiting, () => stopped).then(() => { if (!stopped) setResolved({ id: waiting, persisted: true }); });
     return () => { stopped = true; };
   }, [waiting]);
-  if (!resolved) return <Notice>Opening the session…</Notice>;
+  if (!resolved) return <Opening text={openingText(info.agent.name)} />;
   if (resolved.startsNew) return <SessionView info={info} sessionId={null} />;
   if (!resolved.id) return <Notice>The pane has no {info.agent.name} session yet{resolved.problem ? ` (${resolved.problem})` : ""}.</Notice>;
-  if (waiting) return <Notice>{info.agent.name} is working; the session shows when it is done.</Notice>;
+  if (waiting) return <Opening text={`${info.agent.name} is working; the session shows when it is done`} />;
   if (resolved.persisted === false) {
     return <FirstPrompt info={info} sessionId={resolved.id} onStarted={() => setResolved({ id: resolved.id, persisted: true })} />;
   }
@@ -1682,8 +1736,8 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
     let cancelled = false;
     setError(null);
     setLoaded(false);
-    session.load()
-      .then((loadedSession) => {
+    Promise.all([session.load(), markdownReady.catch(() => undefined)])
+      .then(([loadedSession]) => {
         if (cancelled) return;
         // A reload opens the session the view started.
         if (!sessionId) history.replaceState(null, "", `/thread/${encodeURIComponent(loadedSession.sessionId)}${location.search}${location.hash}`);
@@ -1734,7 +1788,7 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
     return <ErrorNotice title={error.title} error={error.detail} agentName={info.agent.name}
       onRetry={() => setReconnects((count) => count + 1)} />;
   }
-  if (!session || !loaded) return <Notice>Opening the session…</Notice>;
+  if (!session || !loaded) return <Opening text={openingText(info.agent.name)} />;
   return <Conversation session={session} info={info} />;
 }
 
@@ -1823,7 +1877,7 @@ function App() {
   if (beadId) return <BeadPage id={beadId} />;
   if (outputId) return <OutputPage id={outputId} />;
   if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
-  if (!info) return <Notice>Connecting…</Notice>;
+  if (!info) return <Opening />;
   return <SessionGate info={info} />;
 }
 

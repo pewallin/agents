@@ -135,3 +135,30 @@ describe("the host's own session", () => {
     }
   });
 });
+
+describe("a spare that can open the host's session", () => {
+  it("opens it in the process started ahead", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acp-hosted-"));
+    mkdirSync(join(dir, "web"));
+    writeFileSync(join(dir, "web", "index.html"), "<!doctype html>");
+    const lines: string[] = [];
+    const host = await startAcpHost({
+      paneId: "%9",
+      agent: { id: "test-acp", name: "Test" },
+      runtimeTempDir: join(dir, "rt"),
+      webRoot: join(dir, "web"),
+      cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", FAKE_AGENT], env: process.env },
+      warmSpare: true,
+      spareCanHost: true,
+      log: (line) => lines.push(line),
+    });
+    try {
+      expect(await host.startHostedSession()).toBe("s1");
+      expect(lines.some((line) => /starts a session of its own, agent \d+ \(started ahead\)/.test(line))).toBe(true);
+    } finally {
+      await host.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

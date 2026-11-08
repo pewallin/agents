@@ -1,6 +1,6 @@
 // Agent text as markdown: Streamdown, which renders unfinished blocks while a reply streams.
-// Code highlighting (Shiki, through @streamdown/code) is loaded after the first paint and then
-// shared by every message.
+// Code highlighting (Shiki, through @streamdown/code) loads with this module, which the view
+// loads beside the session after its first paint, and is shared by every message.
 import { useEffect, useState, type ReactNode } from "react";
 import { defaultRehypePlugins, Streamdown } from "streamdown";
 // The fade-in of words as a reply streams (Streamdown's animate plugin and its keyframes).
@@ -11,13 +11,12 @@ import { rehypePathRefs } from "./paths";
 
 type Plugins = NonNullable<Parameters<typeof Streamdown>[0]["plugins"]>;
 
-let codePlugin: Promise<Plugins> | undefined;
-function loadCodePlugin(): Promise<Plugins> {
-  codePlugin ??= new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
-    .then(() => import("@streamdown/code"))
-    .then((module) => ({ code: module.code }) as Plugins);
-  return codePlugin;
-}
+const codePlugin: Promise<Plugins | undefined> = import("@streamdown/code")
+  .then((module) => ({ code: module.code }) as Plugins, () => undefined);
+let loadedPlugins: Plugins | undefined;
+/** Resolves once code highlighting is there: a conversation shown after it has its code blocks
+ *  in their final form from the first frame. */
+export const ready: Promise<void> = codePlugin.then((plugins) => { loadedPlugins = plugins; });
 
 function textOf(children: ReactNode): string | null {
   if (typeof children === "string") return children;
@@ -83,12 +82,13 @@ const rehypePlugins = [...Object.values(defaultRehypePlugins), rehypePathRefs] a
 /** `streaming`: the text is still coming (Streamdown's streaming mode); `fade`: its new words
  *  fade in (by default while it streams). */
 export default function Markdown({ text, streaming, fade = streaming }: { text: string; streaming: boolean; fade?: boolean }) {
-  const [plugins, setPlugins] = useState<Plugins | undefined>(undefined);
+  const [plugins, setPlugins] = useState<Plugins | undefined>(() => loadedPlugins);
   useEffect(() => {
+    if (plugins) return;
     let cancelled = false;
-    void loadCodePlugin().then((loaded) => { if (!cancelled) setPlugins(loaded); });
+    void codePlugin.then((loaded) => { if (!cancelled) setPlugins(loaded); });
     return () => { cancelled = true; };
-  }, []);
+  }, [plugins]);
   return (
     <Streamdown mode={streaming ? "streaming" : "static"} isAnimating={streaming} plugins={plugins}
       animated={fade ? STREAMING_FADE : false}

@@ -71,6 +71,10 @@ export interface AcpAgentEntry {
   sessionLocks?(): Array<{ sessionId: string; path: string }>;
   /** The agent's own logs, whose last lines go into the view's diagnostics. */
   logFiles?(): string[];
+  /** Hand-off agents: whether an adapter process started ahead of time (the host's warm spare)
+   *  can open the host's own session. Its adapter must hold nothing of the agent's store until a
+   *  session opens: then the view opens without waiting for the adapter to start. */
+  spareCanHost?: boolean;
   /** Hand-off agents that name a session before writing it: whether it has been written. A
    *  session never written has nothing to load, so the view starts one of its own. */
   sessionWritten?(sessionId: string): boolean;
@@ -253,6 +257,8 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     name: "Claude",
     stateAgent: "claude",
     tested: false,
+    // Claude Code starts only when the adapter opens a session: a spare holds nothing.
+    spareCanHost: true,
     // The adapter drives the user's own Claude Code, so it has the same login and settings.
     command({ tuiCommand }) {
       const claude = executableOf(tuiCommand, "claude");

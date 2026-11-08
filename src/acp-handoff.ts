@@ -564,7 +564,10 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         webRoot: input.host.webRoot,
         cwd,
         agentCommand: input.host.agentCommand,
-        warmSpare: true,
+        // The host's own session is the only one its views use: a spare helps only an agent
+        // whose spare can open it.
+        warmSpare: agent.spareCanHost === true,
+        spareCanHost: agent.spareCanHost === true,
         agentLogFiles: agent.logFiles?.(),
         agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
         onActivity: reportViewActivity(agent.stateAgent, paneId),
