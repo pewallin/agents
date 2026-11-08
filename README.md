@@ -1,208 +1,253 @@
 # agents
 
-Monitor and manage AI coding agents across tmux sessions (with zellij support in beta).
+A CLI that finds AI coding agents running in tmux panes, tracks their state through the agents'
+own hooks, launches and restores agent workspaces, and serves a per-pane ACP web view of each
+agent's session. It is the runtime layer of the Agents Next app, which ships a compiled build of
+it, and works on its own as a terminal dashboard.
 
-- Live dashboard with status, preview, and grid view
-- Hook-based reporting for claude, copilot, pi, opencode, and kiro
-- Conservative process/runtime status for agents without hooks
-- Agent workspaces with profiles, helper panes, and quick jump-back
+tmux is the primary backend. zellij (0.44+) is in beta and needs the WASM bridge plugin in
+`bridge-plugin/`; grid view and helper zones are tmux-only.
 
 ## Install
 
-```bash
-git clone https://github.com/pewallin/agents.git
-cd agents
-npm install && npm run build && npm link
-agents setup          # install reporting hooks
-agents                # live dashboard
-```
-
-## Remote bootstrap
-
-For a fresh remote host, run the bootstrap script in dry-run mode first. The
-script prints the commands it would run and exits without changing the host:
+From source (Node 22+):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \
-  | bash -s -- --dry-run
+git clone https://github.com/pewallin/agents.git && cd agents
+npm install && npm run build
+npm run build:web     # only needed for the ACP view (dist-web/acp-view)
+npm link
+agents setup          # install hooks for the agents found on this machine
+agents                # dashboard; outside tmux it creates/attaches an `agents` session
 ```
 
-For app integration, use the JSON plan:
+As a single executable (no Node needed at runtime):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \
-  | bash -s -- --dry-run --json
+npm run build:binary                     # this platform → dist-bin/<platform>/
+npm run build:binary -- --target all     # darwin-arm64, darwin-x64, linux-x64, linux-arm64
 ```
 
-Apply the approved plan with:
+Ship the whole `dist-bin/<platform>/` directory: hooks point at its `extensions/`, and the ACP
+host serves its `acp-view/`. Agents Next installs this build to `~/.agents/agents-cli/app` and
+links `~/.local/bin/agents` to it after the user agrees.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \
-  | bash -s -- --yes
-```
+For remote hosts, see [Remote hosts](#remote-hosts).
 
-The default profile checks or installs `tmux`, Node/npm, git, `agents`, `nvim`,
-`micro`, `lazygit`, and `yazi`, then starts a tmux `agents` session if no tmux
-server is running. Use `--no-tools` to skip the editor/helper tools. The script
-does not use `sudo`; when Homebrew is unavailable it reports blocked actions
-instead of escalating privileges. The agents install is cloned to
-`~/.agents/agents-cli/source`, exposed through `~/.local/bin/agents`, and writes
-`~/.agents/agents-app/install.json` for app-managed detection.
+## Supported agents
 
-App-managed bootstrap should pass `--expected-agents-commit <sha>` for the
-bundled agents CLI commit. This lets the plan update stale remotes even when the
-package semver is unchanged.
+| Agent | `agents setup` installs | ACP view |
+| --- | --- | --- |
+| Claude Code | hooks in `~/.claude/settings.json` | hand-off, bundled `claude-agent-acp` |
+| Codex | `~/.codex/hooks.json`, `[features] hooks = true` in `config.toml` | live, bundled `codex-acp` on the pane's app-server |
+| Copilot CLI | extension in `~/.copilot/extensions/agents-reporting/` | hand-off, Copilot's ACP mode (needs a version with `session/load`) |
+| Pi | extension in `~/.pi/agent/extensions/agents-reporting/` | hand-off, `pi-acp` from PATH or npx |
+| OpenCode | plugin linked into `~/.config/opencode/`, entry in its `config.json` | hand-off, `opencode acp` |
+| Kiro CLI | `~/.kiro/agents/agents-reporting.json`, made the default agent if none is set | hand-off, `kiro-cli acp` |
+| Hermes | shell hooks in `~/.hermes/config.yaml`, allowlisted | none |
+| Cursor | nothing (process detection only) | none |
 
-## Use as Library
+`setup` skips an agent whose config directory doesn't exist. It is idempotent; `agents uninstall`
+removes everything it added (including the Codex feature flag) and leaves other settings as
+they were. Kiro reports only while the `agents-reporting` agent is active (`kiro-cli chat
+--agent agents-reporting` if another default is configured).
 
-For local testing from another Node project:
+## How status works
 
-```bash
-cd /path/to/other-project
-npm link agents
-```
+Hooks and extensions call `agents report --agent <name> --state <state> --session $TMUX_PANE`
+with optional detail, intent, response preview, model, context-window and spend fields. Each
+report lands in `~/.agents/agents-app/state/<agent>-<pane>.json`.
 
-```ts
-import { launchWorkspace, listAgents } from "agents";
+The scanner lists tmux panes, walks each pane's process tree for known agent binaries (also
+behind `node`/`bun`/`npx` wrappers), and merges in the state files. It never reads terminal
+content. Agents without hooks get an activity-only status from tmux's window activity.
 
-launchWorkspace({
-  profile: "codex",
-  overrides: ["--yolo"],
-  agentOnly: true,
-  cwd: process.cwd(),
-});
+| Indicator | Status | Meaning |
+| --- | --- | --- |
+| `⚠` | attention | permission prompt waiting |
+| `?` | question | the agent asked the user something |
+| `●` | working | turn in progress |
+| `◐` | stalled | Codex stream disconnected, or a hookless agent with output in the last 2 min |
+| `○` | idle | |
 
-console.log(listAgents());
-```
+Hooks run the CLI recorded in `~/.agents/agents-app/hook-runtime.env` (a binary, or a node plus
+`cli.js`) and log failures to `logs/hooks.log`. `agents doctor` checks each integration's
+installed events against what it should have, runs the hook lookup with a minimal PATH, and warns
+when another `agents` version shadows this one on PATH.
+
+When the integration files change, any `agents` command re-runs `setup --quiet` in the
+background, but only if `setup` was run before, this install is the one recorded in
+`hook-runtime.env`, and it isn't a binary outside `~/.agents/agents-cli/`. An explicit `agents
+setup` always takes the hooks over. `AGENTS_NO_AUTO_SETUP=1` turns auto-setup off.
 
 ## Commands
 
+Dashboard and inspection:
+
 ```
-agents                  Live dashboard (default)
-agents ls               One-shot agent list
-agents ws               Create workspace using configured default profile
-agents ws claude        Create workspace using named profile
-agents ws --list-profiles  List available launch profiles
-agents back             Jump back after enter-from-dashboard
-agents setup            Install hooks/extensions
-agents uninstall        Remove hooks/extensions
-agents resurrect ...    tmux-resurrect integration helpers
+agents [watch [seconds]]    Live dashboard (default command)
+agents ls [--json]          One-shot list; interactive picker on a TTY
+agents runtime --json       Reconciled runtime state per pane (--pane %N, repeatable)
+agents history              Past sessions per agent and cwd (--agent, --cwd, --pane, --limit, --json)
+agents usage --json         Provider quota windows (Codex, Claude, Copilot, Kiro)
+agents doctor [--json]      Integration coverage and hook runtime checks
 ```
 
-If launched outside tmux, `agents` auto-creates and attaches a tmux session.
+Workspaces and sessions:
 
-## Dashboard
+```
+agents ws [profile] [args...]   New tmux window: agent pane plus the profile's layout
+                                (-n name, -l layout, --agent-only, --tmux-session, --json, --list-profiles)
+agents back                     Jump back to where you were before the last jump from the dashboard
+agents resume --pane %N         Respawn a pane's agent on a session: --session <id> | --session-path
+                                | --new-session [--prompt]; --profile, --agent; --force if not idle
+```
+
+Integrations:
+
+```
+agents setup | uninstall    Install / remove hooks and extensions
+agents report ...           State reporting, called by hooks
+agents bundle <dir>         Write an app-installable bundle directory
+```
+
+ACP view (see [ACP view](#acp-view)):
+
+```
+agents codex-session --command '<codex cmd>'    Run Codex on a pane-local app-server plus its ACP host
+agents acp-session --agent <id> --tui '<cmd>'   Run a TUI with a hand-off ACP host
+agents acp-restart --pane %N [--check]          Move a running agent into its ACP wrapper, same session
+agents acp-prompt --pane %N [--steer] < text    Prompt or steer the session the pane's host holds
+agents review [--cwd <repo>] [--base <rev> | --commit <sha>] [--path <file>]... [--focus <file>]
+                                                Read-only review page for changes no agent made
+```
+
+Also: `agents done list|record|update` (persisted Done events and pinned sessions, used by the
+app), `agents target|checkout|session ...` (see [Remote hosts](#remote-hosts)) and `agents
+resurrect ...` (see [tmux-resurrect](#tmux-resurrect)). Every command has `--help`.
+
+### Dashboard keys
 
 | Key | Action |
-|-----|--------|
-| `j/k` / `↑↓` | Navigate |
-| `enter` | Jump to the real agent window |
-| `tab` / `space` | Focus agent in preview/grid |
-| `click` | Select / preview agent |
-| `p` / `P` | Toggle preview (horizontal / vertical) |
-| `g` / `G` | Grid view (session / all sessions) |
-| `h` | Cycle helper layouts |
-| `n` | New workspace from selected agent cwd/session |
-| `x` | Kill selected workspace |
-| `q` | Quit and restore panes |
+| --- | --- |
+| `j`/`k`, `↑`/`↓` | Move selection |
+| `enter` | Jump to the agent's window |
+| `tab`, `space`, click | Focus the agent in preview or grid |
+| `p` / `P` | Preview beside the dashboard (horizontal / vertical) |
+| `g` / `G` | Grid of the session's agents / all agents |
+| `h` | Cycle helper layouts in the preview |
+| `s` | Collapse the dashboard to a narrow sidebar |
+| `S` | Summary view |
+| `n` | New workspace from the selected agent's cwd and session |
+| `x` | Kill the selected workspace |
+| `?` | Key help |
+| `q` | Quit and put panes back |
 
-Add `bind -n M-b run-shell "node ~/code/agents/dist/cli.js back 2>/dev/null || tmux last-window"` to `~/.tmux.conf` for instant jump-back.
+The preview swaps the agent's pane into the dashboard's window (`tmux swap-pane`) and swaps it
+back on exit. For a global jump-back key: `bind -n M-b run-shell "agents back || tmux
+last-window"`.
 
-## Config
+## Configuration
 
-`~/.agents/config.json` — all fields optional, sensible defaults built in.
+`~/.agents/agents-app/config.json` (override with `AGENTS_CONFIG_PATH`). Everything is optional;
+without a file there is one `claude` profile and built-in `default` and `small` layouts.
 
 ```json
 {
-  "profiles": {
-    "claude": {
-      "command": "claude",
-      "workspace": "default"
-    },
-    "copilot": {
-      "command": "copilot",
-      "workspace": "default"
-    },
-    "pi": {
-      "command": "pi",
-      "workspace": "small"
-    },
-    "opencode": {
-      "command": "opencode",
-      "workspace": "default"
-    },
-    "kiro": {
-      "command": "kiro-cli chat --tui --agent agents-reporting",
-      "workspace": "default"
-    },
-    "hermes": {
-      "command": "hermes",
-      "workspace": "default"
-    }
-  },
   "defaultProfile": "claude",
-  "helpers": {
-    "default": [
-      { "process": "lazygit", "split": "left", "size": "20%" },
-      { "process": "yazi", "split": "below", "of": "lazygit", "size": "35%" },
-      { "process": "bv", "split": "right", "size": "25%" }
-    ],
-    "small": [
-      { "process": "lazygit", "split": "right", "size": "25%" },
-      { "process": "bv", "split": "below", "of": "lazygit", "size": "40%" }
-    ]
+  "profiles": {
+    "claude": { "command": "claude", "workspace": "default" },
+    "codex":  { "command": "codex", "workspace": "small", "env": { "FOO": "1" } },
+    "kiro":   { "command": "kiro-cli chat --tui --agent agents-reporting" }
   },
   "workspace": {
     "default": [
       { "command": "lazygit", "split": "left", "size": "23%" },
       { "command": "yazi", "split": "below", "of": "lazygit", "size": "30%" },
-      { "command": "bv", "split": "right", "size": "25%" },
-      { "command": "$SHELL", "split": "below", "of": "bv", "size": "18%" }
+      { "command": "$SHELL", "split": "right", "size": "25%" }
     ],
-    "small": [
-      { "command": "lazygit", "split": "right", "size": "35%" },
-      { "command": "bv", "split": "below", "of": "lazygit", "size": "40%" }
+    "small": [{ "command": "lazygit", "split": "right", "size": "35%" }]
+  },
+  "helpers": {
+    "default": [
+      { "process": "lazygit", "split": "left", "size": "20%" },
+      { "process": "yazi", "split": "below", "of": "lazygit", "size": "35%" }
     ]
   }
 }
 ```
 
-Profiles define agent launch commands. Each profile can set a `workspace` layout, window `name`, and `env`. Profile `env` is exported in the launched agent shell before the profile command runs. `defaultCommand` still works as a fallback.
+- **profiles**: `command`, `workspace` (layout name), `name` (window name), `env` (exported before
+  the command), `resume_args`, `alternate_screen` (`false` turns off tmux's alternate screen for
+  the pane). Nothing adds auto-approve flags; put them in `command` only if you accept that a
+  prompt injection then runs commands as you.
+- **workspace**: panes `agents ws` creates around the agent pane. `split` is relative to `of`
+  (default: the agent pane); `size` is a tmux `-l` value.
+- **helpers**: panes from the agent's own window, matched by `process`, that the dashboard shows
+  around the preview (`h` cycles layouts).
 
-## Recommended tmux setup
+`agents ws` starts the agent through the shell, so exiting it leaves a usable shell;
+`--agent-only --direct-agent-launch` execs it directly instead.
 
-Agents treats tmux as the runtime source of truth. To persist and restore agent sessions across reboots, use [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) and [tmux-continuum](https://github.com/tmux-plugins/tmux-continuum).
+## ACP view
 
-`agents ws` launches the main agent pane through the shell by default so you can exit back to the shell and reuse the pane. For tmux-only agent panes, `agents ws --agent-only --direct-agent-launch` uses a direct exec-style launch instead.
+Each agent pane can have an ACP host: a server on 127.0.0.1 that serves the React client in
+`web/acp-view` and starts one ACP adapter process per WebSocket client. The WebSocket needs the
+pane's token, a matching Origin and Host; the token and address are in a 0600 metadata file under
+`~/.agents/agents-app/runtime/tmp`, which is where Agents Next finds them.
 
-### Install
+There are two modes:
+
+- **Live (Codex).** `agents codex-session` starts `codex app-server` for the pane on a loopback
+  WebSocket, runs the TUI against it with `--remote`, and gives `codex-acp` this CLI as
+  `CODEX_PATH`, which proxies to the same app-server. TUI and view share one thread.
+- **Hand-off (everyone else).** `agents acp-session --tui` runs the agent's TUI under a
+  supervisor. When the view takes the session, the TUI stops (refused while the agent works) and
+  the pane shows a plain transcript. Enter in the pane gives it back, and the TUI resumes the same
+  session id with its original options.
+
+`agents resume` wraps agents in these automatically; `agents acp-restart` converts an agent that
+was started without one, on the same session.
+
+The host also keeps a per-pane message queue that survives reloads, routes steering (ACP
+`_session/steering` for Codex and Claude, the steer inbox for Pi, queued otherwise), and serves
+file, commit and bead peeks restricted to the pane's directory. It snapshots each turn's changes
+with a temporary git index, so the user's index, stashes and branches are untouched.
+
+`agents review` opens the same review page the view shows beside an agent, for changes no
+agent made: the working tree against `--base` (default `HEAD`, untracked files included) or one
+commit. It is read-only and prints the page's URL (`--json` for `{ok, url}`). The page comes from one loopback server per user, started in the background on
+first use and stopped after 30 minutes without a request; Agents Next's Changes panel uses it.
+
+Details and per-agent parity: [docs/acp-view-client.md](docs/acp-view-client.md),
+[docs/steer-inbox.md](docs/steer-inbox.md).
+
+## Coordinator support
+
+Agents Next's coordinator tooling (`agents-app-control`) lives in the app; this repo provides the
+agent-side pieces:
+
+- The Claude `PostToolUse` hook and the Pi extension read the pane's steer inbox, so a
+  coordinator's `agent send --mode steer` reaches a working agent between tool calls without
+  typing into the terminal.
+- After a compaction, the Claude and Codex `SessionStart` hooks give a pane marked
+  `@agents_role=coordinator` its protocol back as context.
+
+## tmux-resurrect
+
+tmux is the source of truth, so persistence across reboots goes through
+[tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) and
+[tmux-continuum](https://github.com/tmux-plugins/tmux-continuum):
 
 ```bash
-# Install TPM (tmux plugin manager)
-git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
-```
-
-Add to `~/.tmux.conf`:
-
-```bash
-# Plugins
-set -g @plugin 'tmux-plugins/tpm'
 set -g @plugin 'tmux-plugins/tmux-resurrect'
 set -g @plugin 'tmux-plugins/tmux-continuum'
-
-# Restore on tmux server start
-set -g @continuum-save-interval '15'
 set -g @continuum-restore 'on'
 
-# Headless autosave for tmux-continuum
-run-shell -b '~/.tmux/continuum-headless.sh ensure'
-
-# Rewrite saved agent commands to explicit session ids when agents state has them.
+# Pin saved agent commands to explicit session ids where agents knows them.
 set -g @resurrect-hook-post-save-layout 'agents resurrect normalize'
 
-# Optional: restore agent CLIs through agents so known session ids beat "latest in cwd" fallbacks.
-# If you already customize @resurrect-processes, merge these entries into your list.
-# Utilities and editors still preserve their original args via *.
+# Restore agent CLIs through agents (merge into an existing @resurrect-processes).
 set -g @resurrect-processes '\
   "~claude -> agents resurrect agent claude *" \
   "~codex -> agents resurrect agent codex *" \
@@ -210,60 +255,79 @@ set -g @resurrect-processes '\
   "~opencode -> agents resurrect agent opencode *" \
   "~pi -> agents resurrect agent pi *" \
   "~kiro-cli -> agents resurrect agent kiro *" \
-  "~bv -> bv *" \
-  "~lazygit -> lazygit *" \
-  "~nvim -> nvim -S Session.vim *" \
-  "~vim -> vim -S Session.vim *" \
-  "~yazi -> yazi *" \
-  "~zsh -> zsh *"'
-
-# Load TPM (keep at the bottom of tmux.conf)
-run '~/.tmux/plugins/tpm/tpm'
+  "~lazygit -> lazygit *" "~yazi -> yazi *"'
 ```
 
-Then press `prefix + I` inside tmux to install the plugins.
+`agents resurrect agent` rebuilds the command from the saved argv plus agents state and resumes
+a concrete session id when it can. When several Codex panes in one cwd were saved as `resume
+--last`, the newest session goes to one pane and the others start fresh rather than share it.
+The `capture-metadata`, `apply-metadata`, `reconcile-metadata` and `processes` subcommands do
+the same from Agents Next's pane metadata sidecar.
 
-### How it works
+## Remote hosts
 
-`tmux-resurrect` saves all sessions, windows, panes, layouts, and working directories. The post-save hook rewrites the saved pane command to an explicit agent session id when `agents` can map the saved pane back to live state. The `@resurrect-processes` setting tells tmux-resurrect which programs to restore and what command to use. The `~` prefix enables fuzzy matching against the saved command string. For agent CLIs, the recommended restore commands go through `agents resurrect agent`: it uses the saved process argv plus agents state to resume a concrete session id when possible. This is separate from `agents resume`, which respawns an already-live pane from the dashboard/app. If multiple Codex sessions share a cwd and the saved command only says `resume --last`, one pane is mapped to the newest known session id and later ambiguous panes in that cwd start fresh instead of attaching to the same latest session. The `*` is still useful for utilities and editors where preserving the original arguments is desirable. `tmux-continuum` still handles restore on tmux server start, but autosave should be driven by a headless helper such as `~/.tmux/continuum-headless.sh` so app-managed sessions can keep `status off`.
+`scripts/bootstrap-remote.sh` prepares a host. It plans by default and changes nothing until
+`--yes`:
 
-After a reboot, restore happens the first time tmux starts — the app may prompt you to start tmux if no server is running yet.
+```bash
+curl -fsSL https://raw.githubusercontent.com/pewallin/agents/main/scripts/bootstrap-remote.sh \
+  | bash -s -- --dry-run [--json]      # then: --yes
+```
 
-## Agent flags
+It checks or installs tmux (≥ 3.3), Node, git, agents (cloned to `~/.agents/agents-cli/source`,
+wrapper at `~/.local/bin/agents`) and, unless `--no-tools`, nvim, micro, lazygit and yazi, then
+starts an `agents` tmux session if no server runs. It never uses sudo; without Homebrew it
+reports blocked steps instead. The app passes `--expected-agents-commit <sha>` so a stale
+remote is updated even when the semver matches.
 
-Flags for running agents without approval prompts and for resuming sessions.
+`agents target list` returns `local` plus the SSH hosts in
+`~/.agents/agents-app/app/config/remote-hosts.json` (written by the app). `agents checkout
+create --name <seed>` makes a worktree at `<repo parent>/.shape-worktrees/<repo>/<name>` on a
+`shape/<name>` branch, locally or on a target (with a local landing checkout when asked).
+`agents session start|resume|list` run agents in those checkouts. All of them take `--json` and
+return structured errors with the failing phase.
 
-No auto-approve flag is on by default. An agent started with one runs any command it
-decides on, so a prompt injection in a repository, an issue or a web page runs as you. Add
-one to a profile's command only where you accept that. A resumed session keeps the flags it
-was started with and gets none added.
+## Files and environment
 
-| Agent | Continue session | Auto-approve | Notes |
-|-------|-----------------|--------------|-------|
-| claude | `--continue` | `--dangerously-skip-permissions` | Resumes most recent session in cwd |
-| codex | `resume <session-id>` or `resume --last` fallback | `--yolo` | `resume` is a subcommand, not a flag |
-| copilot | `--continue` | `--yolo` | Also has `--resume[=id]` for specific sessions |
-| opencode | `--continue` | — | No auto-approve flag |
-| pi | `--continue` | `--yolo` | Also has `--resume` for interactive picker |
-| kiro | `--resume` or `--resume-id <id>` | `--trust-all-tools` | `agents setup` sets `agents-reporting` as the default agent when no Kiro default exists; use `--agent agents-reporting` when another default is configured |
+Everything lives under `~/.agents/agents-app/` (`AGENTS_HOME`, or
+`$AGENTS_SHARED_HOME/$AGENTS_PRODUCT_DIRNAME`, defaults `~/.agents` and `agents-app`):
 
-The recommended tmux setup above restores agent CLIs with explicit resume/YOLO flags and still preserves original args for utility panes via `*`.
+| Path | Contents |
+| --- | --- |
+| `config.json` | profiles and layouts |
+| `state/`, `state-contrib/` | per-pane agent state; auxiliary reporter state |
+| `hook-runtime.env`, `.setup-hash` | which CLI the hooks run; setup fingerprint |
+| `logs/hooks.log` | hook failures |
+| `runtime/tmp/` | ACP host metadata, steer inboxes, Codex app-server endpoints |
+| `state/review-server.json` | the review server's port and token |
+| `runtime/state-events.jsonl` | state change events |
+| `recent-done.json` | Done events and pinned sessions |
 
-## Status Detection
+Each path also has its own override (`AGENTS_STATE_DIR`, `AGENTS_LOG_DIR`, `AGENTS_TMP_DIR`, …;
+see `src/paths.ts`). `AGENTS_USAGE_PROVIDERS=codex,claude` limits `agents usage`, which otherwise
+reads `~/.codexbar/config.json` and the CLIs on PATH.
 
-Hooks report state for claude, codex, copilot, pi, opencode, kiro, and hermes. Kiro reports only when the `agents-reporting` agent config is active, either as the default from `agents setup` or via `kiro-cli chat --agent agents-reporting`. Hermes reports through shell hooks in `~/.hermes/config.yaml`; `agents setup` installs those hooks and allowlists only the agents reporting script. Agents without hooks are detected by process name but do not inspect terminal content for state.
+## Library
 
-| Indicator | Meaning |
-|-----------|---------|
-| `⚠ attention` | Needs user input (permission prompt) |
-| `? question` | Agent asked a question |
-| `● working` | Actively processing |
-| `◐ stalled?` | No output 30s–2m |
-| `○ idle` | Idle |
+```ts
+import { listAgents, listAgentRuntimeStates, launchWorkspace } from "agents";
 
-## Detected Agents
+launchWorkspace({ profile: "codex", agentOnly: true, cwd: process.cwd() });
+console.log(listAgents());
+```
 
-`claude` `copilot` `opencode` `codex` `pi` `kiro`/`kiro-cli` `cursor` `hermes`
+`src/lib.ts` also exports session history and resume, Done events, and the target / checkout /
+session runtime.
+
+## Development
+
+```bash
+npm run dev:watch     # dashboard with hot reload
+npm test              # vitest
+npm run build         # tsc → dist/
+```
+
+Architecture, conventions and how to add an agent: [AGENTS.md](AGENTS.md).
 
 ## License
 
