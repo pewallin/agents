@@ -17,6 +17,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execFileSync, spawn } from "child_process";
 import { findOnPath } from "./shell.js";
+import { appendHooksLog } from "./report-binding.js";
 import { getAgentsHome, getLogsDir, getResourceRoot, getSelfArgv, getSetupHashPath, isCompiledBinary, isUninstalledBinary } from "./paths.js";
 import { doctorMcp, kiroMcpInstalled, setupMcp, uninstallMcp, type McpDoctorResult } from "./mcp-setup.js";
 import {
@@ -511,7 +512,9 @@ function uninstallCodex(): SetupResult {
     try {
       const flag = removeCodexHooksFlag(readFileSync(CODEX_CONFIG_PATH, "utf-8"));
       if (flag.changed) writeFileSync(CODEX_CONFIG_PATH, flag.text);
-    } catch {}
+    } catch (error) {
+      appendHooksLog(`setup could not update ${CODEX_CONFIG_PATH}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return { agent: "codex", action: "uninstalled", detail: "removed hooks from ~/.codex/hooks.json" };
@@ -733,7 +736,9 @@ function uninstallOpencode(): SetupResult {
         }
         writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
       }
-    } catch {}
+    } catch (error) {
+      appendHooksLog(`setup could not update ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   // Remove symlink/directory from node_modules
@@ -749,7 +754,9 @@ function uninstallOpencode(): SetupResult {
         for (const f of readdirSync(target)) unlinkSync(join(target, f));
         rmdirSync(target);
       }
-    } catch {}
+    } catch (error) {
+      appendHooksLog(`setup could not remove ${target}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return { agent: "opencode", action: removed ? "uninstalled" : "not-installed",
@@ -814,7 +821,9 @@ function refreshKiroAgent(): void {
     if (!isOurKiroAgentConfig(existing)) return;
     const next = kiroAgentConfig();
     if (JSON.stringify(existing) !== JSON.stringify(next)) writeFileSync(KIRO_AGENT_PATH, JSON.stringify(next, null, 2) + "\n");
-  } catch {}
+  } catch (error) {
+    appendHooksLog(`setup could not refresh ${KIRO_AGENT_PATH}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /** `agents setup --mcp`: the agents MCP server in every installed harness. */
@@ -1435,7 +1444,9 @@ export function writeHookRuntime(): void {
   try {
     mkdirSync(getAgentsHome(), { recursive: true });
     writeFileSync(hookRuntimePath(), text);
-  } catch {}
+  } catch (error) {
+    appendHooksLog(`setup could not write ${hookRuntimePath()}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /** The `agents` a shell would run when it is another version than this CLI, e.g. an old
@@ -1909,5 +1920,7 @@ function saveSetupHash(): void {
   try {
     mkdirSync(getAgentsHome(), { recursive: true });
     writeFileSync(HASH_FILE, computeSetupHash());
-  } catch {}
+  } catch (error) {
+    appendHooksLog(`setup could not write ${HASH_FILE}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }

@@ -131,7 +131,8 @@ export function logRejectedSharedAppServerReport(envPane: string | undefined, cl
     + " (a Codex started with --no-daemon or through agents codex-session reports its own pane)");
 }
 
-function appendHooksLog(line: string): void {
+/** One line in logs/hooks.log, which `agents doctor` shows as recent hook failures. */
+export function appendHooksLog(line: string): void {
   try {
     const dir = getLogsDir();
     mkdirSync(dir, { recursive: true });
