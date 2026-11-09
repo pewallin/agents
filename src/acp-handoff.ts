@@ -569,6 +569,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         cwd,
         agentCommand: input.host.agentCommand,
         launchSettings: input.host.launchSettings,
+        offersAllowAll: agent.offersAllowAll === true,
         // The host's own session is the only one its views use: a spare helps only an agent
         // whose spare can open it.
         warmSpare: agent.spareCanHost === true,

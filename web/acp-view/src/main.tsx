@@ -10,8 +10,9 @@ import { StrictMode, createContext, lazy, Suspense, useCallback, type ComponentP
 import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
-import type { ContentBlock } from "@agentclientprotocol/sdk";
-import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession } from "./acp-connection";
+import type { ContentBlock, SessionConfigOption } from "@agentclientprotocol/sdk";
+import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type AllowAll } from "./acp-connection";
+import { choicesOf, currentName, settingLabel, settingTitle, splitOptions } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
@@ -876,8 +877,6 @@ function Ring({ percent }: { percent: number }) {
   );
 }
 
-type SelectChoice = { value?: string; name: string; options?: Array<{ value: string; name: string }> };
-const SHOWN_CATEGORIES = new Set(["mode", "model", "thought_level"]);
 
 function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   session: AcpSession; info: HostInfo; now: number; onHeight: (height: number) => void; level: DetailLevel; onCycleLevel: () => void;
@@ -1159,7 +1158,8 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     });
   };
 
-  const options = configOptions.filter((option) => option.type === "select" && (!option.category || SHOWN_CATEGORIES.has(option.category)));
+  const { row: options, more: moreOptions } = splitOptions(configOptions);
+  const allowAll = useAllowAll(session);
   const showModes = modes && modes.availableModes.length > 1 && !configOptions.some((option) => option.category === "mode");
   const percent = usage && usage.size > 0 ? (usage.used / usage.size) * 100 : undefined;
   const busy = prompting || working;
@@ -1336,21 +1336,25 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
                 </select>
               </label>
             )}
-            {options.map((option) => {
-              if (option.type !== "select") return null;
-              const choices: Array<{ value?: string; name: string }> = (option.options as SelectChoice[])
-                .flatMap((entry): Array<{ value?: string; name: string }> => entry.options ?? [entry]);
-              const current = choices.find((choice) => choice.value === option.currentValue)?.name ?? String(option.currentValue);
-              return (
-                <label className="opt" key={option.id} title={option.description ?? option.name}>
-                  {current} <Down />
-                  <select value={String(option.currentValue)} aria-label={option.name}
-                    onChange={(event) => void session.setConfigOption(option.id, event.target.value)}>
-                    {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.name}</option>)}
-                  </select>
-                </label>
-              );
-            })}
+            {options.map((option) => (
+              <label className="opt" key={option.id} title={settingTitle(option, info.agent.id)}>
+                <span className="lb">{settingLabel(option, info.agent.id)}</span> {currentName(option)} <Down />
+                <select value={String(option.currentValue)} aria-label={settingLabel(option, info.agent.id)}
+                  onChange={(event) => void session.setConfigOption(option.id, event.target.value)}>
+                  {choicesOf(option).map((choice) => <option key={choice.value} value={choice.value}>{choice.name}</option>)}
+                </select>
+              </label>
+            ))}
+            {allowAll.offered && (
+              <button className={`opt level allow${allowAll.on ? " on" : ""}`} type="button" aria-pressed={allowAll.on}
+                title={allowAll.on
+                  ? "Tool calls run without asking, as the agent's command says. Click to be asked again."
+                  : "The agent asks before each tool call. Click to allow them all, as -a does in the terminal."}
+                onClick={() => void allowAll.set(!allowAll.on)}>
+                <span className="lb">Approvals</span> {allowAll.on ? "Allow all" : "Ask"}
+              </button>
+            )}
+            {moreOptions.length > 0 && <MoreOptions options={moreOptions} session={session} agentId={info.agent.id} />}
             <button className="opt level" type="button" title="How much of the work shows (⌃O)" onClick={onCycleLevel}>
               <svg viewBox="0 0 12 12" aria-hidden="true"><path d={level === "results" ? "M2 6h8" : level === "steps" ? "M2 4h8M2 8h5" : "M2 3h8M2 6h8M2 9h8"} fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
               {DETAIL_TITLES[level]}
@@ -1378,6 +1382,65 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
       </div>
     </div>
   );
+}
+
+/** The agent's other settings, under ⋯: each with what it sets and its choice. */
+function MoreOptions({ options, session, agentId }: { options: SessionConfigOption[]; session: AcpSession; agentId: string }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => { if (!box.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  return (
+    <div className="more" ref={box}>
+      <button className={`opt level${open ? " open" : ""}`} type="button" aria-label="More settings" aria-expanded={open}
+        title={options.map((option) => `${settingLabel(option, agentId)}: ${currentName(option)}`).join("\n")}
+        onClick={() => setOpen((value) => !value)}>
+        <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="2.5" cy="6" r="1.1" fill="currentColor" /><circle cx="6" cy="6" r="1.1" fill="currentColor" /><circle cx="9.5" cy="6" r="1.1" fill="currentColor" /></svg>
+      </button>
+      {open && (
+        <div className="pop more-pop" role="group" aria-label="More settings">
+          {options.map((option) => (
+            <label className="it" key={option.id} title={settingTitle(option, agentId)}>
+              <span>{settingLabel(option, agentId)}</span>
+              <span className="mv">{currentName(option)} <Down /></span>
+              <select value={String(option.currentValue)} aria-label={settingLabel(option, agentId)}
+                onChange={(event) => void session.setConfigOption(option.id, event.target.value)}>
+                {choicesOf(option).map((choice) => <option key={choice.value} value={choice.value}>{choice.name}</option>)}
+              </select>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Whether the host allows each tool call itself (Kiro's -a, OpenCode's --auto), and the switch. */
+function useAllowAll(session: AcpSession): AllowAll & { set: (on: boolean) => Promise<void> } {
+  const [state, setState] = useState<AllowAll>({ offered: false, on: false });
+  useEffect(() => {
+    let current = true;
+    session.onAllowAll((next) => { if (current) setState(next); });
+    void session.allowAll().then((next) => { if (current) setState(next); });
+    return () => { current = false; };
+  }, [session]);
+  return {
+    ...state,
+    set: async (on) => {
+      setState((previous) => ({ ...previous, on }));
+      try {
+        setState(await session.setAllowAll(on));
+      } catch {
+        setState((previous) => ({ ...previous, on: !on }));
+      }
+    },
+  };
 }
 
 /** Send, in ink: grey until there is something to send; the arrow flies off when it sends. */

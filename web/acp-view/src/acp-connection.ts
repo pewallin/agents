@@ -28,8 +28,23 @@ export interface AcpSession {
   answerPermission(id: string, optionId: string | null): void;
   setConfigOption(configId: string, value: string | boolean): Promise<void>;
   setMode(modeId: string): Promise<void>;
+  /** Whether the pane's host allows each tool call the agent asks about (`_agents/allow_all`):
+   *  offered for an agent whose command can run tools without asking (Kiro's -a, OpenCode's
+   *  --auto), on as the command says until the view turns it off. A host that does not answer
+   *  offers nothing. */
+  allowAll(): Promise<AllowAll>;
+  setAllowAll(on: boolean): Promise<AllowAll>;
+  /** Called when another view of the pane turns it on or off. */
+  onAllowAll(listener: (state: AllowAll) => void): void;
   closed: Promise<void>;
   close(): void;
+}
+
+export interface AllowAll { offered: boolean; on: boolean }
+
+function allowAllOf(value: unknown): AllowAll {
+  const state = value as { offered?: unknown; allowAll?: unknown } | null | undefined;
+  return { offered: state?.offered === true, on: state?.allowAll === true };
 }
 
 /** The session is open in another view; this one may take it over (`takeOver`). */
@@ -82,6 +97,7 @@ export function connectSession(options: {
   let sessionId = options.sessionId ?? "";
   const answers = new Map<string, (response: RequestPermissionResponse) => void>();
   let nextPermission = 1;
+  let allowAllListener: ((state: AllowAll) => void) | undefined;
 
   const app = client({})
     .onNotification("session/update", ({ params }) => {
@@ -90,6 +106,7 @@ export function connectSession(options: {
     })
     // The host's own notice (not ACP): a custom method needs its own params parser.
     .onNotification("_agents/taken_over", (params: unknown) => params, () => { options.onTakenOver?.(); })
+    .onNotification("_agents/allow_all", (params: unknown) => params, ({ params }) => { allowAllListener?.(allowAllOf(params)); })
     .onRequest("session/request_permission", ({ params }) => {
       const id = `permission-${nextPermission++}`;
       dispatch({ type: "permissionRequested", request: { id, toolCall: params.toolCall, options: params.options } });
@@ -187,6 +204,16 @@ export function connectSession(options: {
     async setMode(modeId) {
       await agent.request("session/set_mode", { sessionId, modeId });
       dispatch({ type: "update", update: { sessionUpdate: "current_mode_update", currentModeId: modeId } });
+    },
+    async allowAll() {
+      await ready.catch(() => undefined);
+      return allowAllOf(await agent.request("_agents/allow_all", {} as never).catch(() => undefined));
+    },
+    async setAllowAll(on) {
+      return allowAllOf(await agent.request("_agents/allow_all", { allowAll: on } as never));
+    },
+    onAllowAll(listener) {
+      allowAllListener = listener;
     },
     closed: connection.closed,
     close: () => connection.close(),

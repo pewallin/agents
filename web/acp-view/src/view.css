@@ -510,6 +510,21 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .opt.level { all: unset; display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 7px; white-space: nowrap; }
 .opt.level:hover { background: var(--tint); color: var(--fg); }
 .opt.level svg { width: 11px; height: 11px; }
+/* What each setting sets, before its choice: Agent, Model, Effort, Approvals. */
+.opt .lb { color: var(--faint); }
+.opt:hover .lb, .opt:focus-within .lb { color: var(--dim); }
+/* Tool calls run without asking: said in the warning colour, so it is not missed. */
+.opt.allow.on { color: var(--orange); }
+.opt.allow.on:hover { color: var(--orange); }
+.opt.allow.on .lb { color: color-mix(in srgb, var(--orange) 65%, transparent); }
+.more { position: relative; display: inline-flex; }
+.opt.level.open { background: var(--tint); color: var(--fg); }
+.pop.more-pop { left: auto; right: 0; width: max-content; min-width: 220px; max-width: min(340px, 90vw); }
+.pop.more-pop .it { position: relative; justify-content: space-between; gap: 18px; white-space: nowrap; }
+.pop.more-pop .it:hover, .pop.more-pop .it:focus-within { background: var(--tint2); color: var(--fg); }
+.pop.more-pop .mv { display: inline-flex; align-items: center; gap: 3px; color: var(--dim); }
+.pop.more-pop .mv svg { width: 9px; height: 9px; }
+.pop.more-pop select { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: default; font-size: calc(var(--fs) - 1px); }
 
 /* permission questions */
 .ask { box-shadow: 0 0 0 1px color-mix(in srgb, var(--orange) 55%, transparent); }

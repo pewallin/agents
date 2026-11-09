@@ -87,6 +87,9 @@ export interface AcpAgentEntry {
    *  running tools without asking) that the adapter takes no option for; the host sets it on each
    *  session (acp-launch-settings.ts). */
   launchSettings?(tuiCommand: string): AcpLaunchSettings | undefined;
+  /** Hand-off agents whose TUI can run tools without asking (Kiro's -a, OpenCode's --auto): the
+   *  view may turn the host's allowing every tool call on and off. */
+  offersAllowAll?: boolean;
 }
 
 function shellQuote(value: string): string {
@@ -296,6 +299,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "opencode"), args: ["acp"], env: { ...process.env } }),
     ...sessionOptions(["--session", "-s"], ["--continue", "-c", "--fork"], (id) => ["--session", id]),
     launchSettings: opencodeLaunchSettings,
+    offersAllowAll: true,
   },
   "pi-acp": {
     id: "pi-acp",
@@ -329,6 +333,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "kiro-cli"), args: kiroAcpArgs(tuiCommand), env: { ...process.env } }),
     ...sessionOptions(["--resume-id"], ["--resume"], (id) => ["--resume-id", id]),
     launchSettings: (tuiCommand) => kiroLaunchSettings(tuiCommand),
+    offersAllowAll: true,
     // Kiro keeps a lock beside a session while a process has it open (its TUI or an ACP agent),
     // and logs to $TMPDIR/kiro-log/kiro-chat.log (kiro.dev/docs/cli/acp).
     sessionLock: (sessionId) => kiroSessionLock(sessionId),

@@ -63,6 +63,10 @@ export interface AcpHostOptions {
   /** What the pane's TUI command sets on each session that the adapter takes no option for
    *  (acp-launch-settings.ts). */
   launchSettings?: AcpLaunchSettings;
+  /** The view may turn allowing every tool call on and off (`_agents/allow_all`): an agent whose
+   *  command can run tools without asking (Kiro's -a, OpenCode's --auto). It starts as
+   *  `launchSettings.allowAll` says. */
+  offersAllowAll?: boolean;
   port?: number;
   /** The address and token of a host of this pane that ended without closing (it crashed): a
    *  view still open on it reconnects to this one. */
@@ -419,6 +423,25 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
+  // What the command sets on each session, with allowing every tool call as the views have it now.
+  let allowAll = options.launchSettings?.allowAll === true;
+  const launchSettings: AcpLaunchSettings | undefined = options.launchSettings || options.offersAllowAll
+    ? { options: options.launchSettings?.options, get allowAll() { return allowAll; } }
+    : undefined;
+  /** The host's own request from a view (`_agents/allow_all`): its answer, or undefined for a
+   *  message that goes to the agent. Every view is told when one of them turns it on or off. */
+  const hostRequest = (line: string): string | undefined => {
+    const message = parseJson(line);
+    if (message?.method !== ALLOW_ALL_METHOD || (typeof message.id !== "string" && typeof message.id !== "number")) return undefined;
+    const wanted = (message.params as { allowAll?: unknown } | undefined)?.allowAll;
+    if (options.offersAllowAll && typeof wanted === "boolean" && wanted !== allowAll) {
+      allowAll = wanted;
+      log(`a view turned allowing every tool call ${allowAll ? "on" : "off"}`);
+      const notice = JSON.stringify({ jsonrpc: "2.0", method: ALLOW_ALL_METHOD, params: { offered: true, allowAll } });
+      for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(notice);
+    }
+    return JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { offered: options.offersAllowAll === true, allowAll: options.offersAllowAll === true && allowAll } });
+  };
   // One view per session: two adapters on one session answer each other's questions (codex-acp
   // cancels an approval of a turn it did not start). A second view is told the session is open
   // elsewhere; it takes it over only when asked to (?takeover=1), and the first view is told.
@@ -468,7 +491,12 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
             previous.ws.close(TAKEN_OVER_CLOSE_CODE, "the session is open in another view");
           },
         );
-        ws.on("message", (data, isBinary) => { if (!isBinary) attached.fromView(data.toString()); });
+        ws.on("message", (data, isBinary) => {
+          if (isBinary) return;
+          const own = hostRequest(data.toString());
+          if (own) ws.send(own);
+          else attached.fromView(data.toString());
+        });
         ws.on("close", (code) => {
           log(`view ${client} closed (${code})`);
           attached.detach();
@@ -484,7 +512,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       views.set(client, view);
       const child = takeAgent();
       log(`view ${client} connected${takesOver ? " (taking over)" : ""}, agent ${child.pid}`);
-      const launchSettings = options.launchSettings && new AcpLaunchSettingsApplier(options.launchSettings, (line) => {
+      const applier = launchSettings && new AcpLaunchSettingsApplier(launchSettings, (line) => {
         diagnostics.message(client, "host→agent", line);
         child.stdin?.write(`${line}\n`);
       }, log, (line) => {
@@ -492,7 +520,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         if (ws.readyState === ws.OPEN) ws.send(line);
       });
       const link = bridge(ws, child, log, {
-        launchSettings,
+        launchSettings: applier,
         onAgentLine: (line) => {
           diagnostics.message(client, "agent→view", line);
           view.sessions.agentLine(line);
@@ -502,6 +530,8 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         },
         onClientLine: (line) => {
           diagnostics.message(client, "view→agent", line);
+          const own = hostRequest(line);
+          if (own) return own;
           const loading = view.sessions.clientLine(line);
           if (loading) {
             const others = holders(client, loading.sessionId);
@@ -598,7 +628,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       const child = takeAgent(false);
       log(`the host starts a session of its own, agent ${child.pid}${child === warm ? " (started ahead)" : ""}`);
       const session = new HostedSession(child, {
-        launchSettings: options.launchSettings,
+        launchSettings,
         onAgentLine: (line) => {
           diagnostics.message(0, "agent→host", line);
           activity.agentLine(0, line);
@@ -693,6 +723,9 @@ export const OPEN_ELSEWHERE_REASON = "open-in-another-view";
 export const TAKEN_OVER_METHOD = "_agents/taken_over";
 /** The close code of a view whose session another view took over. */
 export const TAKEN_OVER_CLOSE_CODE = 4000;
+/** A view's request to the host: whether it allows every tool call, and turning that on or off;
+ *  and the notice every view gets when it changes. */
+export const ALLOW_ALL_METHOD = "_agents/allow_all";
 
 /** One WebSocket client to one agent process: a text frame is one JSON-RPC message, a stdout
  *  line is one frame back. */

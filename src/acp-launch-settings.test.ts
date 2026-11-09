@@ -233,6 +233,82 @@ describe("a host whose pane command sets the session", () => {
     expect(asked).toBe(true);
   });
 
+  it("lets a view turn allowing every tool call on and off where the agent offers it, and tells every view", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acp-allow-"));
+    mkdirSync(join(dir, "web"));
+    writeFileSync(join(dir, "web", "index.html"), "<!doctype html>");
+    const host = await startAcpHost({
+      paneId: "%8",
+      agent: { id: "test-acp", name: "Test" },
+      runtimeTempDir: join(dir, "rt"),
+      webRoot: join(dir, "web"),
+      cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", AGENT], env: process.env },
+      offersAllowAll: true,
+    });
+    const received: Array<Record<string, unknown>> = [];
+    const ws = new WebSocket(`${host.url.replace("http", "ws")}/acp?token=${encodeURIComponent(host.token)}`, { headers: { Origin: host.url } });
+    try {
+      await new Promise((resolve, reject) => { ws.once("open", resolve); ws.once("error", reject); });
+      ws.on("message", (data) => received.push(JSON.parse(data.toString()) as Record<string, unknown>));
+      const next = async (match: (message: Record<string, unknown>) => boolean) => {
+        for (let attempt = 0; attempt < 300; attempt += 1) {
+          const found = received.find(match);
+          if (found) return found;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        throw new Error(`no such message in ${JSON.stringify(received)}`);
+      };
+      const send = (message: Record<string, unknown>) => ws.send(JSON.stringify({ jsonrpc: "2.0", ...message }));
+      send({ id: 1, method: "_agents/allow_all", params: {} });
+      expect((await next((message) => message.id === 1)).result).toEqual({ offered: true, allowAll: false });
+      send({ id: 2, method: "session/new", params: { cwd: dir, mcpServers: [] } });
+      await next((message) => message.id === 2);
+      send({ id: 3, method: "session/prompt", params: { sessionId: "s1", prompt: [{ type: "text", text: "go" }] } });
+      const ask = await next((message) => message.method === "session/request_permission");
+      send({ id: ask.id as string, result: { outcome: { outcome: "selected", optionId: "no" } } });
+      await next((message) => message.id === 3);
+
+      send({ id: 4, method: "_agents/allow_all", params: { allowAll: true } });
+      expect((await next((message) => message.id === 4)).result).toEqual({ offered: true, allowAll: true });
+      expect(await next((message) => message.method === "_agents/allow_all")).toMatchObject({ params: { offered: true, allowAll: true } });
+      const asked = received.filter((message) => message.method === "session/request_permission").length;
+      send({ id: 5, method: "session/prompt", params: { sessionId: "s1", prompt: [{ type: "text", text: "go" }] } });
+      await next((message) => message.id === 5);
+      expect(received.filter((message) => message.method === "session/request_permission")).toHaveLength(asked);
+      expect(said(received)).toEqual(["default sonnet no", "default sonnet once"]);
+    } finally {
+      ws.close();
+      await host.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("offers no switch for an agent without it, and says so instead of asking the agent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acp-allow-"));
+    mkdirSync(join(dir, "web"));
+    writeFileSync(join(dir, "web", "index.html"), "<!doctype html>");
+    const host = await startAcpHost({
+      paneId: "%9",
+      agent: { id: "test-acp", name: "Test" },
+      runtimeTempDir: join(dir, "rt"),
+      webRoot: join(dir, "web"),
+      cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", AGENT], env: process.env },
+    });
+    const ws = new WebSocket(`${host.url.replace("http", "ws")}/acp?token=${encodeURIComponent(host.token)}`, { headers: { Origin: host.url } });
+    try {
+      await new Promise((resolve, reject) => { ws.once("open", resolve); ws.once("error", reject); });
+      const answer = new Promise<Record<string, unknown>>((resolve) => ws.once("message", (data) => resolve(JSON.parse(data.toString()) as Record<string, unknown>)));
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "_agents/allow_all", params: { allowAll: true } }));
+      expect((await answer).result).toEqual({ offered: false, allowAll: false });
+    } finally {
+      ws.close();
+      await host.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("sets the session the host holds, and a view that loads it later sees its settings", async () => {
     const child = spawn(process.execPath, ["-e", AGENT], { stdio: ["pipe", "pipe", "pipe"] });
     const session = new HostedSession(child, { launchSettings: { options: { mode: "bypassPermissions", model: "opus" } } });
