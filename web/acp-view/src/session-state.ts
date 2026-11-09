@@ -34,6 +34,8 @@ export interface ToolCall {
 /** One entry of the conversation, in order. A tool call is kept by id in `toolCalls`. */
 export type Item =
   | { type: "user"; id: string; text: string; images: number; local?: boolean; at?: number;
+      /** A prompt of ours the agent has answered, whether or not it echoed it. */
+      answered?: boolean;
       /** A turn another client started (the pane's TUI): Codex does not pass its prompt on. */
       external?: boolean }
   | { type: "agent"; id: string; text: string; at?: number;
@@ -245,11 +247,12 @@ export function applyUpdate(state: SessionState, update: SessionUpdate, eventAt?
     case "user_message_chunk":
       return appendChunk(state, "user", update.content, update.messageId, at);
     case "agent_message_chunk":
-      return appendChunk(state, "agent", update.content, update.messageId, at);
+      return appendChunk(delivered(state), "agent", update.content, update.messageId, at);
     case "agent_thought_chunk":
-      return appendChunk(state, "thought", update.content, update.messageId, at);
+      return appendChunk(delivered(state), "thought", update.content, update.messageId, at);
     case "tool_call":
     case "tool_call_update": {
+      state = delivered(state);
       const previous = state.toolCalls[update.toolCallId];
       const toolCalls = { ...state.toolCalls, [update.toolCallId]: mergeToolCall(previous, update, at) };
       const items = previous ? state.items : [...state.items, { type: "tool" as const, id: update.toolCallId, at }];
@@ -282,6 +285,13 @@ export function applyUpdate(state: SessionState, update: SessionUpdate, eventAt?
   }
 }
 
+/** Our prompt has reached the agent once it answers: Kiro never echoes it back, so without this
+ *  it stayed dimmed as unsent. It stays local, so an echo that comes later still confirms it. */
+function delivered(state: SessionState): SessionState {
+  if (!state.items.some((item) => item.type === "user" && item.local && !item.answered)) return state;
+  return { ...state, items: state.items.map((item) => (item.type === "user" && item.local && !item.answered ? { ...item, answered: true } : item)) };
+}
+
 export function reduce(state: SessionState, action: SessionAction): SessionState {
   switch (action.type) {
     case "update":
@@ -306,7 +316,7 @@ export function reduce(state: SessionState, action: SessionAction): SessionState
       };
     }
     case "promptEnded":
-      return { ...state, prompting: false, activity: "idle", permissions: [], liveSinceIdle: false };
+      return { ...delivered(state), prompting: false, activity: "idle", permissions: [], liveSinceIdle: false };
     case "permissionRequested":
       return { ...state, permissions: [...state.permissions, action.request] };
     case "permissionAnswered":

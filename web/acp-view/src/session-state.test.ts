@@ -14,6 +14,17 @@ describe("session state", () => {
     expect(state.items.map((item) => item.type === "agent" && item.text)).toEqual(["Hej där", "Nytt"]);
   });
 
+  it("takes our prompt as delivered once the agent answers, though it never echoes it (Kiro)", () => {
+    const state = run([
+      { type: "promptSent", text: "Kör", at: 5 },
+      { type: "update", update: { sessionUpdate: "agent_message_chunk", content: text("Ok"), messageId: "m1" } },
+    ]);
+    expect(state.items[0]).toMatchObject({ type: "user", text: "Kör", local: true, answered: true });
+    // A late echo still confirms it rather than adding it twice.
+    const echoed = run([{ type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Kör"), messageId: "u1" } }], state);
+    expect(echoed.items.filter((item) => item.type === "user")).toHaveLength(1);
+  });
+
   it("keeps a tool call by id and merges its updates, timing a live call", () => {
     const state = run([
       { type: "update", at: 1_000, update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Run tests", kind: "execute", status: "in_progress" } },

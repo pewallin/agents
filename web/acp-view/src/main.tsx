@@ -337,6 +337,7 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
         {files.length > 0
           ? <span className="t files">{files.map((path) => <NamedChip key={path} name={path} counts={false} fallback={<span>{shortPath(path, cwd)}</span>} />)}</span>
           : <span className="t" title={whole ? undefined : line}>{line}</span>}
+        {canOpen && <Chevron />}
         {meta !== null && <span className="m">{meta}</span>}
       </div>
       {open && whole && <pre className="out cmd"><LinkedText text={whole} /></pre>}
@@ -657,7 +658,7 @@ function UserItem({ user }: { user: NonNullable<Turn["user"]> }) {
       ? <div className="you external with-text"><span className="from">From the terminal</span>{user.text}</div>
       : <div className="you external">Sent from the terminal</div>;
   }
-  return <YouMessage text={user.text} pending={user.local} at={user.at} images={user.images} />;
+  return <YouMessage text={user.text} pending={user.local && !user.answered} at={user.at} images={user.images} />;
 }
 
 function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void; onSend: (text: string) => void }) {

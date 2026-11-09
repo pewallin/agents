@@ -166,9 +166,10 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 /* Thinking: one quiet line, "Thought  Checking row counts  4s", that opens on a click. */
 .trail .think { max-width: none; }
 .trail .think .ln .tp { font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.trail .think .ln .chev { flex: none; align-self: center; margin-left: -3px; opacity: 0; color: var(--faint); }
+/* A row that opens shows a chevron on hover, as the Worked line does. */
+.trail .ln > .chev { flex: none; align-self: center; margin-left: -3px; opacity: 0; color: var(--faint); }
+.trail .ln.can-open:hover > .chev, .trail .think.open .ln .chev { opacity: .8; }
 .trail .think .ln.can-open:hover .tp { color: var(--fg2); }
-.trail .think .ln.can-open:hover .chev, .trail .think.open .ln .chev { opacity: .8; }
 .trail .think.open .ln .chev { transform: rotate(90deg); }
 .trail .think-body { margin: 4px 0 8px; max-width: 72ch; }
 .trail .think p, .trail .remark p, .trail .think ul, .trail .remark ul, .trail .think ol, .trail .remark ol { margin: 0 0 4px; }
@@ -628,10 +629,11 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .trail.live-turn .remark.writing strong, .trail.remarks .remark strong { color: inherit; }
 /* What the agent said between steps, folded: its first words on one quiet line. */
 .trail .remark .ln .tp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.trail .remark .ln .chev { flex: none; align-self: center; margin-left: -3px; opacity: 0; color: var(--faint); }
-.trail .remark .ln.can-open:hover .tp { color: var(--fg2); }
-.trail .remark .ln.can-open:hover .chev { opacity: .8; }
-.trail .remark.open { cursor: default; margin: 2px 0 6px; }
+/* What the agent says stands apart from its steps: room above and below, a shade brighter. */
+.trail .remark { margin: 5px 0; }
+.trail .remark .ln .tp { color: var(--fg2); }
+.trail .remark .ln.can-open:hover .tp { color: var(--fg); }
+.trail .remark.open { cursor: default; color: var(--fg2); }
 
 /* What a click and a ⌘-click on the link do, under its peek. */
 .peek-hint { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hair); font-size: calc(var(--fs) - 2.5px); color: var(--faint); }
