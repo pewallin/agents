@@ -80,6 +80,11 @@ button, summary, .status, .row, .edits, .when, .chev { -webkit-user-select: none
 /* Only what scrolls under the field fades: the end of the conversation above it stays whole. */
 .scroll.under-dock { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) + 12px), transparent calc(100% - var(--dock-space, 150px) + 70px));
   mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) + 12px), transparent calc(100% - var(--dock-space, 150px) + 70px)); }
+/* With rows above the field (the workers, the plan) the conversation ends above the dock, so it
+   never runs under them. */
+:root:has(.dock .worker-strip, .dock .plan-line) .scroll.under-dock {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) - 22px), transparent calc(100% - var(--dock-space, 150px) + 4px));
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) - 22px), transparent calc(100% - var(--dock-space, 150px) + 4px)); }
 @media (prefers-reduced-motion: reduce) { [data-sd-animate] { animation: none !important; } }
 /* The page draws its own thumb (ScrollThumb): the native one stays on screen in a web view where
    scroll bars always show, so it fades a second after scrolling stops. */
