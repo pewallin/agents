@@ -652,7 +652,7 @@ function uninstallPi(): SetupResult {
 
 const OPENCODE_PLUGIN_NAME = "opencode-agents-reporting";
 
-function setupOpencode(): SetupResult {
+export function setupOpencode(): SetupResult {
   const configDir = join(homedir(), ".config", "opencode");
   if (!existsSync(configDir)) {
     return { agent: "opencode", action: "skipped", detail: "~/.config/opencode/ not found" };
@@ -698,7 +698,13 @@ function setupOpencode(): SetupResult {
   const configPath = join(configDir, "config.json");
   let config: any = {};
   if (existsSync(configPath)) {
-    try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
+    // A config that does not parse (comments, a trailing comma) is the user's: writing ours
+    // over it would drop everything in it.
+    try {
+      config = JSON.parse(readFileSync(configPath, "utf-8"));
+    } catch {
+      return { agent: "opencode", action: "skipped", detail: "could not parse ~/.config/opencode/config.json" };
+    }
   }
 
   const plugins: string[] = config.plugin || [];
