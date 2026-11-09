@@ -31,6 +31,11 @@ src/
   acp-host.ts       — an agent pane's ACP view host: static web client, one adapter per client
   acp-host-cli.ts   — `acp-session --agent <ACP registry id>` and its agent table (adapter, resume
                       command); the bundled `codex-acp` and `claude-acp` adapter commands
+  app-control/      — `agents app-control`: Agents Next's control socket and the coordination of
+                      agents (spawn, report, ask, send, supervisor, MCP server); the
+                      agents-app-control skill's scripts/agents-app-control launcher runs it
+                      (moved from that skill as JavaScript: its modules start `// @ts-nocheck`
+                      until each is typed; `self.ts` is typed)
   acp-handoff.ts    — `acp-session --tui`: an agent without a shared session runs its TUI under
                       a supervisor that hands the session to the ACP view and back
   components/

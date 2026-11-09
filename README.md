@@ -124,6 +124,10 @@ agents review [--cwd <repo>] [--base <rev> | --commit <sha>] [--path <file>]... 
                                                 Read-only review page for changes no agent made
 ```
 
+`agents app-control ...` is Agents Next's control socket and the coordination of agents
+(`agent spawn`, `report`, `ask`, `send`, the `agents` MCP server); agents run it through the
+agents-app-control skill (`scripts/agents-app-control`), whose SKILL.md documents it.
+
 Also: `agents done list|record|update` (persisted Done events and pinned sessions, used by the
 app), `agents target|checkout|session ...` (see [Remote hosts](#remote-hosts)) and `agents
 resurrect ...` (see [tmux-resurrect](#tmux-resurrect)). Every command has `--help`.

@@ -22,6 +22,7 @@ describe("coordination lines", () => {
     expect(parseAgentCommand(`agents-app-control agent send "Use the other fixture" --to ios-tests --mode steer`)).toEqual({ kind: "send", task: "ios-tests", steer: true });
     expect(parseAgentCommand(`'/x/agents-app-control' agent report "All 13 pass" --done`)).toEqual({ kind: "report", state: "done", line: "All 13 pass" });
     expect(parseAgentCommand(`agents-app-control agent close ios-tests ui`)).toEqual({ kind: "close", tasks: ["ios-tests", "ui"] });
+    expect(parseAgentCommand(`agents app-control agent close ios-tests`)).toEqual({ kind: "close", tasks: ["ios-tests"] });
     expect(parseAgentCommand(`git status`)).toBeNull();
     expect(describeAgentEvent({ kind: "send", task: "ios-tests", steer: true })).toBe("Steered ios-tests");
   });

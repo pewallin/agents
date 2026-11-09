@@ -108,7 +108,7 @@ export function shellWords(command: string): string[] {
 /** An agent's own coordination command (agents-app-control agent …), and what its output says. */
 export function parseAgentCommand(command: string, output = ""): AgentEvent | null {
   const words = shellWords(command);
-  const at = words.findIndex((word, index) => word === "agent" && /agents-app-control$|^agents$/.test((words[index - 1] ?? "").split("/").pop() ?? ""));
+  const at = words.findIndex((word, index) => word === "agent" && /agents-app-control$|^agents$|^app-control$/.test((words[index - 1] ?? "").split("/").pop() ?? ""));
   if (at < 0) return null;
   const sub = words[at + 1];
   const rest = words.slice(at + 2);

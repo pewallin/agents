@@ -77,6 +77,13 @@ if (shouldRunCodexAppServerProxy(args, process.env)) {
   process.exit(await runCodexAppServerWebSocketProxy());
 }
 
+// agents-app-control: the app's control socket and the coordination of agents (src/app-control).
+// Every result is one JSON line on stdout, so nothing else of the CLI may run before it.
+if (firstArg === "app-control") {
+  await (await import("./app-control/main.js")).runAppControl(args.slice(1));
+  process.exit(0);
+}
+
 // An agent pane's ACP web view: the host (`acp-session`, which codex-session starts for Codex)
 // and the bundled adapters (Codex, Claude) it starts per client. Neither needs the rest of the CLI, and an
 // adapter's stdout is its protocol channel.
