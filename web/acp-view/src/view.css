@@ -719,3 +719,10 @@ th, td { overflow-wrap: break-word; }
 .terminal-wait button.link { font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: pointer; }
 /* Last, so it wins over every class above: a control that is off takes no click. */
 button:disabled, select:disabled { cursor: default; }
+
+/* A run of tool calls on one line ("Ran 12 commands · read 3 files"), opened to their rows. */
+.trail .group .ln .gf { color: color-mix(in srgb, var(--red) 60%, var(--faint)); }
+.trail .group.open > .ln > .chev { opacity: .8; transform: rotate(90deg); }
+.trail .group .ln.can-open:hover .v { color: var(--fg2); }
+.trail .group-body { display: flex; flex-direction: column; gap: 3px; margin: 3px 0 4px 10px; padding-left: 10px; border-left: 1px solid var(--hair); }
+.trail.current-out.tail-out { margin-top: -6px; border-left: 0; padding-left: 0; }

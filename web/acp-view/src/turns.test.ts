@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySession, reduce, type SessionAction } from "./session-state";
-import { buildTurns, changesOf, conversationChanges, countLines, describeCall, duration, oneLine, shortPath, thoughtSummary } from "./turns";
+import { buildTurns, changesOf, conversationChanges, countLines, describeCall, duration, groupSteps, groupSummary, oneLine, shortPath, thoughtSummary } from "./turns";
 import { changedWords, commentsMessage, diffRows, linePieces, splitPath } from "./review";
 
 const text = (t: string) => ({ type: "text" as const, text: t });
@@ -53,6 +53,17 @@ describe("the activity trail", () => {
     const [turn] = buildTurns(state);
     expect(turn.changes).toEqual([expect.objectContaining({ path: "/repo/tmp/my notes.md", added: 2, removed: 0 })]);
     expect(describeCall(state.toolCalls.t1, "/repo")).toEqual({ verb: "Edited", target: "tmp/my notes.md" });
+  });
+
+  it("folds three or more looking steps in a row into one line; an edit or a thought ends the run", () => {
+    const tool = (id: string, kind: string) => ({ type: "tool" as const, id, call: { id, title: id, kind, status: "completed", content: [], locations: [] } as never });
+    const steps = [tool("a", "execute"), tool("b", "read"), tool("c", "execute"), tool("d", "edit"), tool("e", "execute"), tool("f", "execute"),
+      { type: "thought" as const, id: "t", text: "hm" }, tool("g", "search"), tool("h", "execute"), tool("i", "execute"), tool("j", "execute")];
+    const shown = groupSteps(steps, (call) => call.kind !== "edit");
+    expect(shown.map((step) => step.type === "group" ? `group:${step.calls.length}` : step.id)).toEqual(["group:3", "d", "e", "f", "t", "group:4"]);
+    const last = shown.at(-1)!;
+    expect(last.type === "group" && groupSummary(last.calls)).toBe("Ran 3 commands · searched 1 time");
+    expect(last.id).toBe("group-g");
   });
 
   it("shows a long command on one line, cut at a character with an ellipsis", () => {

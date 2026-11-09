@@ -15,7 +15,7 @@ import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type
 import { choicesOf, currentName, settingLabel, settingTitle, splitOptions } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
-import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
+import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
 import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
@@ -360,8 +360,8 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
       {open && whole && <pre className="out cmd"><LinkedText text={whole} /></pre>}
       {open && output && <StepOutput text={output} running={running} onOpenBeside={() => openOutput(title, output)} />}
       {open && !output && <div className="out none">{running ? "Running · no output yet" : "No output"}</div>}
-      {/* The step under way shows its last lines live. A failure is one line; its output opens on a click. */}
-      {!open && output && level !== "results" && <LiveTail text={lastLines(output, 3).join("\n")} running={running} />}
+      {/* A failure is one line; its output opens on a click. The step under way shows its last lines
+          on the running step's line below the steps, where they do not move the steps. */}
     </>
   );
 }
@@ -529,6 +529,38 @@ function LiveText({ items }: { items: Turn["answer"] }) {
   );
 }
 
+/** A tool call that joins a run of them on one line: what only looks (commands, reads, searches),
+ *  not an edit, whose file and counts show on its row, nor a coordination command. */
+function groupable(call: ToolCall): boolean {
+  if (call.kind === "edit" || call.kind === "delete" || call.kind === "move" || call.kind === "switch_mode") return false;
+  return !(call.kind === "execute" && parseAgentCommand(commandOf(call) ?? ""));
+}
+
+/** Many tool calls in a row as one line, "Ran 12 commands · read 3 files", that opens to their
+ *  rows. It stays one line while the run grows, so the steps below it do not move. */
+function GroupLine({ group, cwd }: { group: StepGroup; cwd: string }) {
+  const { level } = useContext(DetailContext);
+  const chosen = useOpenedSteps((state) => state.opened[group.id]);
+  const open = chosen ?? level === "everything";
+  const toggle = () => setOpenedStep(group.id, !open);
+  const failed = group.calls.filter((call) => call.status === "failed").length;
+  const starts = group.calls.flatMap((call) => (call.startedAt !== undefined ? [call.startedAt] : []));
+  const ends = group.calls.flatMap((call) => (call.endedAt !== undefined ? [call.endedAt] : []));
+  const took = starts.length && ends.length && Math.max(...ends) - Math.min(...starts) >= 1000 ? duration(Math.max(...ends) - Math.min(...starts)) : null;
+  return (
+    <div className={`group${open ? " open" : ""}`}>
+      <div className="ln can-open" role="button" tabIndex={0} aria-expanded={open} onClick={toggle}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); } }}>
+        <span className="v">{groupSummary(group.calls)}</span>
+        {failed > 0 && <span className="gf">· {failed} failed</span>}
+        <Chevron />
+        {took && <span className="m">{took}</span>}
+      </div>
+      {open && <div className="group-body">{group.calls.map((call) => <ToolLine key={call.id} call={call} cwd={cwd} />)}</div>}
+    </div>
+  );
+}
+
 function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolean; stopped: boolean; cwd: string }) {
   const { level } = useContext(DetailContext);
   const [open, setOpen] = useState(false);
@@ -566,7 +598,9 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
       <details className="quiet" open={isOpen} onToggle={(event) => { if (!working && level !== "everything") setOpen((event.target as HTMLDetailsElement).open); }}>
         <summary>{label}{failedCount > 0 && <span className="fail-count"> · {failedCount} failed</span>} <Chevron /></summary>
         <div className={`trail${working ? " live-turn" : ""}`}>
-          {turn.steps.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} live={working} />)}
+          {groupSteps(turn.steps, groupable).map((step) => step.type === "group"
+            ? <GroupLine key={step.id} group={step} cwd={cwd} />
+            : <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} live={working} />)}
           {working && <LiveText items={turn.answer} />}
         </div>
       </details>
@@ -752,6 +786,11 @@ function CurrentStep({ turn, now, cwd }: { turn: Turn | undefined; now: number; 
         <span className="shim"><span className="txt">{text}</span>{since !== undefined && <span className="m">{duration(now - since)}</span>}</span>
         {call && <Chevron />}
       </div>
+      {/* A command that runs a while shows its last lines here, below the steps, so the steps
+          above do not move as quick ones come and go. */}
+      {call && !open && lastRunning && output && call.startedAt !== undefined && now - call.startedAt >= 2000 && (
+        <div className="trail current-out tail-out"><LiveTail text={lastLines(output, 3).join("\n")} running /></div>
+      )}
       {call && open && (
         <div className="trail current-out">
           {output

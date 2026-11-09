@@ -166,6 +166,47 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
   return turns;
 }
 
+/** A run of tool calls in a row, shown as one line ("Ran 12 commands · read 3 files"). */
+export type StepGroup = { type: "group"; id: string; calls: ToolCall[] };
+
+/** The steps as they show: three or more groupable tool calls in a row become one group (its id
+ *  the first call's, so opening it holds while the run grows); anything else between ends a run. */
+export function groupSteps(steps: Step[], groupable: (call: ToolCall) => boolean, least = 3): Array<Step | StepGroup> {
+  const out: Array<Step | StepGroup> = [];
+  let run: Array<Extract<Step, { type: "tool" }>> = [];
+  const flush = () => {
+    if (run.length >= least) out.push({ type: "group", id: `group-${run[0].id}`, calls: run.map((step) => step.call) });
+    else out.push(...run);
+    run = [];
+  };
+  for (const step of steps) {
+    if (step.type === "tool" && groupable(step.call)) { run.push(step); continue; }
+    flush();
+    out.push(step);
+  }
+  flush();
+  return out;
+}
+
+/** What a group did, in a few words: "Ran 12 commands · read 3 files · 2 searches". */
+export function groupSummary(calls: ToolCall[]): string {
+  const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const commands = calls.filter((call) => call.kind === "execute").length;
+  const reads = calls.filter((call) => call.kind === "read").length;
+  const searches = calls.filter((call) => call.kind === "search").length;
+  const fetches = calls.filter((call) => call.kind === "fetch").length;
+  const other = calls.length - commands - reads - searches - fetches;
+  const parts = [
+    commands ? `ran ${count(commands, "command", "commands")}` : "",
+    reads ? `read ${count(reads, "file", "files")}` : "",
+    searches ? `searched ${count(searches, "time", "times")}` : "",
+    fetches ? `fetched ${count(fetches, "page", "pages")}` : "",
+    other ? count(other, "other step", "other steps") : "",
+  ].filter(Boolean);
+  const text = parts.join(" · ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** Thinking as one line: Codex's own header (**Checking row counts**) when it starts with one,
  *  else its first line without markdown; and what opening it shows (the rest, after a header). */
 export function thoughtSummary(text: string): { title: string; body: string } {
