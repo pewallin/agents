@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { kiroContinuedSession, kiroResumeSessionId, parseKiroSessionList, type KiroListedSession } from "./kiro-sessions.js";
+import { kiroContinuedSession, kiroHistoryForCwd, kiroResumeSessionId, parseKiroSessionList, type KiroListedSession } from "./kiro-sessions.js";
 
 // The sessions Kiro listed in Peter's ~/code on 2026-11-09, after a restart whose Kiro refused
 // `--resume-id a28d7390-…` as ambiguous: the v2 session, Kiro 3's copy of it, and a v3 session
@@ -37,5 +40,34 @@ describe("Kiro sessions", () => {
     expect(parseKiroSessionList(output).map((session) => session.sessionId)).toEqual(["s1", "v2"]);
     expect(parseKiroSessionList("error: not logged in")).toEqual([]);
     expect(parseKiroSessionList("")).toEqual([]);
+  });
+
+  it("lists a folder's conversations as Kiro's TUI resumes them", () => {
+    const root = mkdtempSync(join(tmpdir(), "kiro-sessions-"));
+    const v3 = (id: string, fields: Record<string, unknown>, messages?: string) => {
+      const directory = join(root, "abc123", id);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "session.json"), JSON.stringify({ id, workspacePaths: ["/repo"], ...fields }));
+      if (messages !== undefined) writeFileSync(join(directory, "messages.jsonl"), messages);
+    };
+    try {
+      mkdirSync(join(root, "cli"), { recursive: true });
+      writeFileSync(join(root, "cli", "aaaaaaaa-1111-2222-3333-444444444444.json"), JSON.stringify({ session_id: "aaaaaaaa-1111-2222-3333-444444444444", cwd: "/repo", title: "old", updated_at: "2026-10-19T07:00:00Z" }));
+      writeFileSync(join(root, "cli", "bbbbbbbb-1111-2222-3333-444444444444.json"), JSON.stringify({ session_id: "bbbbbbbb-1111-2222-3333-444444444444", cwd: "/repo", title: "never copied", updated_at: "2026-10-01T07:00:00Z" }));
+      writeFileSync(join(root, "cli", "cccccccc-1111-2222-3333-444444444444.json"), JSON.stringify({ session_id: "cccccccc-1111-2222-3333-444444444444", cwd: "/elsewhere", title: "other folder", updated_at: "2026-10-01T07:00:00Z" }));
+      v3("cli_aaaaaaaa-1111-2222-3333-444444444444_new", { title: "old", lastModifiedAt: "2026-11-07T12:00:00Z", modelId: "claude-sonnet" }, "{}\n");
+      v3("cli_aaaaaaaa-1111-2222-3333-444444444444_older", { title: "old", lastModifiedAt: "2026-11-02T12:00:00Z" }, "{}\n");
+      v3("aaaaaaaa-1111-2222-3333-444444444444", { title: "New Session", lastModifiedAt: "2026-11-09T08:00:00Z" }, "{}\n");
+      v3("sess_new", { title: "New Session", lastModifiedAt: "2026-11-08T08:00:00Z" }, `{"payload":{"type":"user","content":"Fix the build\\nnow"}}\n`);
+      v3("sess_empty", { title: "New Session", lastModifiedAt: "2026-11-09T09:00:00Z" });
+      expect(kiroHistoryForCwd("/repo", root).map((entry) => [entry.sessionId, entry.title])).toEqual([
+        ["sess_new", "Fix the build"],
+        ["cli_aaaaaaaa-1111-2222-3333-444444444444_new", "old"],
+        ["bbbbbbbb-1111-2222-3333-444444444444", "never copied"],
+      ]);
+      expect(kiroHistoryForCwd("/nowhere", root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

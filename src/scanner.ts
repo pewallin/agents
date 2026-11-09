@@ -204,7 +204,7 @@ export function matchesHistoryPaneFilter(
 }
 
 function collectHistoryTargets(agentFilter?: string, cwdOverride?: string, paneFilter?: string): Map<string, HistoryTarget[]> {
-  const agents = ["claude", "codex", "copilot", "opencode", "pi", "cursor"];
+  const agents = ["claude", "codex", "copilot", "opencode", "pi", "cursor", "kiro"];
   const wantedAgents = agentFilter ? agents.filter((agent) => agent === agentFilter) : agents;
   const targets = new Map<string, HistoryTarget[]>();
   const stateSnapshot = readStateSnapshot();

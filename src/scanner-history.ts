@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, join } from "path";
 import { exec } from "./shell.js";
+import { kiroContinuedSession, kiroHistoryForCwd } from "./kiro-sessions.js";
 
 export interface AgentSessionHistoryItem {
   sessionId: string;
@@ -1023,6 +1024,23 @@ function parseCopilotHistoryEntry(sessionDir: string, currentSessionId?: string)
   }
 }
 
+function listKiroHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
+  const entries = kiroHistoryForCwd(cwdRaw);
+  // The pane may still name the Kiro 2 session that Kiro 3 goes on with in a copy.
+  const current = currentSessionId
+    ? kiroContinuedSession(currentSessionId, entries.map((entry) => ({ sessionId: entry.sessionId, source: "v3", updatedAt: new Date(entry.updatedAt * 1000).toISOString() })))
+    : undefined;
+  return entries.slice(0, limit).map((entry) => ({
+    sessionId: entry.sessionId,
+    title: entry.title,
+    titleSource: "stored_title" as const,
+    ...(entry.model && entry.model !== "auto" ? { model: entry.model } : {}),
+    updatedAt: entry.updatedAt,
+    ...(current && entry.sessionId === current ? { current: true } : {}),
+    ...resumeInfoFields("kiro", { sessionId: entry.sessionId }),
+  }));
+}
+
 function listCopilotHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
   const root = join(homedir(), ".copilot", "session-state");
   if (!existsSync(root)) return [];
@@ -1151,6 +1169,9 @@ export function loadHistoryForAgent(agent: string, cwdRaw: string, limit: number
       break;
     case "cursor":
       items = listCursorHistoryForCwd(cwdRaw, limit, currentSessionId);
+      break;
+    case "kiro":
+      items = listKiroHistoryForCwd(cwdRaw, limit, currentSessionId);
       break;
     default:
       return [];
