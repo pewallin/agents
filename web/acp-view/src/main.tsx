@@ -390,20 +390,55 @@ function changesForCall(call: ToolCall): FileChange[] {
   return changesOf([call]);
 }
 
-function StepLine({ step, cwd, live = false }: { step: Step; cwd: string; live?: boolean }) {
+function StepLine({ step, cwd, live = false, whole = false }: { step: Step; cwd: string; live?: boolean; whole?: boolean }) {
   // Thinking and what the agent says along the way are markdown, as its answers are: Codex's
-  // reasoning headers (**Checking row counts**) are a quiet bold line, `code` is code. In a turn
-  // under way they render as the text being written does, so one that was being written when
-  // the next step started stays exactly as it was.
+  // reasoning headers (**Checking row counts**) are a quiet bold line, `code` is code. Among the
+  // steps both fold to one quiet line that opens on a click; Results (whole) shows only what the
+  // agent says, so there it is shown whole.
   if (step.type === "thought") return <ThoughtLine step={step} live={live} />;
   if (step.type === "remark") {
+    if (whole) {
+      return (
+        <div className="remark">
+          <Suspense fallback={<p>{step.text}</p>}><Markdown text={step.text} streaming={live} fade={false} /></Suspense>
+        </div>
+      );
+    }
+    return <RemarkLine step={step} />;
+  }
+  return <ToolLine call={step.call} cwd={cwd} />;
+}
+
+/** What the agent said between its steps (Kiro and Claude narrate their work this way): one quiet
+ *  line of its first words; a click shows all of it, a click on that folds it again. */
+function RemarkLine({ step }: { step: Extract<Step, { type: "remark" }> }) {
+  const { level } = useContext(DetailContext);
+  const chosen = useOpenedSteps((state) => state.opened[step.id]);
+  const { title } = thoughtSummary(step.text);
+  const canOpen = step.text.includes("\n") || step.text !== title || title.length > 90;
+  const open = canOpen && (chosen ?? level === "everything");
+  const toggle = () => {
+    // A drag that selected text is a selection, not a click.
+    if (!canOpen || window.getSelection()?.toString()) return;
+    setOpenedStep(step.id, !open);
+  };
+  const keys = (event: React.KeyboardEvent) => { if (canOpen && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); toggle(); } };
+  if (open) {
     return (
-      <div className="remark">
-        <Suspense fallback={<p>{step.text}</p>}><Markdown text={step.text} streaming={live} fade={false} /></Suspense>
+      <div className="remark open" role="button" tabIndex={0} aria-expanded onClick={toggle} onKeyDown={keys}>
+        <Suspense fallback={<p>{step.text}</p>}><Markdown text={step.text} streaming={false} fade={false} /></Suspense>
       </div>
     );
   }
-  return <ToolLine call={step.call} cwd={cwd} />;
+  return (
+    <div className="remark">
+      <div className={`ln${canOpen ? " can-open" : ""}`} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
+        aria-expanded={canOpen ? false : undefined} onClick={toggle} onKeyDown={keys}>
+        <span className="tp">{oneLine(title, 200)}</span>
+        {canOpen && <Chevron />}
+      </div>
+    </div>
+  );
 }
 
 /** Thinking, as Claude and Codex show it: one quiet line (Codex's header or the first words, and
@@ -447,7 +482,7 @@ function LiveText({ items }: { items: Turn["answer"] }) {
   return (
     <>
       {items.filter((item) => item.text.trim()).map((item) => (
-        <div key={`remark-${item.id}`} className="remark">
+        <div key={`remark-${item.id}`} className="remark writing">
           <Suspense fallback={<p>{item.text}</p>}><Markdown text={item.text} streaming fade /></Suspense>
         </div>
       ))}
@@ -471,7 +506,7 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
     return remarks.length > 0 || turn.answer.length > 0
       ? (
         <div className="trail remarks live-turn">
-          {remarks.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} live />)}
+          {remarks.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} live whole />)}
           <LiveText items={turn.answer} />
         </div>
       )
