@@ -16,7 +16,7 @@ import { choicesOf, currentName, settingLabel, settingTitle, splitOptions } from
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
-import { Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
+import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
@@ -301,6 +301,8 @@ function ToolLine({ call, cwd, failure = false }: { call: ToolCall; cwd: string;
 
 function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; failure: boolean }) {
   const { level, openOutput } = useContext(DetailContext);
+  const host = useContext(ChipHostContext);
+  const turnChanges = useContext(TurnChangesContext);
   // Open or closed is the reader's, kept by the step's id: updates and the step's end keep it.
   const chosen = useOpenedSteps((state) => state.opened[call.id]);
   const open = chosen ?? level === "everything";
@@ -318,8 +320,18 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
   else if (diffCount) {
     let added = 0;
     let removed = 0;
-    for (const change of changesForCall(call)) { added += change.added; removed += change.removed; }
-    meta = <><span className="add">+{added}</span> <span className="del">−{removed}</span></>;
+    const callChanges = changesForCall(call);
+    for (const change of callChanges) { added += change.added; removed += change.removed; }
+    const counts = <><span className="add">+{added}</span> <span className="del">−{removed}</span></>;
+    // The counts open the changes, as a changed file's chip does (the turn's, which git counted
+    // where it could, else this edit's); the file's chip in the row opens the file.
+    const change = callChanges.length === 1 ? changeFor(turnChanges, callChanges[0].path) ?? callChanges[0] : undefined;
+    meta = change && host
+      ? <span className="counts" role="button" title="Show the changes" onClick={(event) => {
+          event.stopPropagation();
+          host.open(fileTarget(change.path, shortPath(change.path, cwd)), { alternate: false, change });
+        }}>{counts}</span>
+      : counts;
   } else if (call.startedAt !== undefined && call.endedAt !== undefined && call.kind === "execute") {
     meta = duration(call.endedAt - call.startedAt).replace(/^0 s$/, "< 1 s");
   }

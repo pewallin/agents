@@ -170,6 +170,8 @@ th, td { overflow-wrap: break-word; }
 .trail .ln.can-open:hover .t { color: var(--fg); }
 .trail .ln .v { flex: none; }
 .trail .ln .t { font: var(--fs-mono) var(--mono); color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trail .ln .m .counts { border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+.trail .ln .m .counts:hover { background: var(--tint2); }
 .trail .ln .m { margin-left: auto; color: var(--faint); font-size: calc(var(--fs) - 2px); font-variant-numeric: tabular-nums; flex: none; padding-left: 8px; }
 .trail .think, .trail .remark { color: var(--dim); max-width: 72ch; }
 /* Thinking: one quiet line, "Thought  Checking row counts  4s", that opens on a click. */
@@ -409,6 +411,13 @@ th, td { overflow-wrap: break-word; }
 .chip .nm { font: var(--fs-mono) var(--mono); overflow: hidden; text-overflow: ellipsis; }
 .chip .at { color: var(--dim); font: var(--fs-mono) var(--mono); margin-left: -4px; }
 .chip .st { font-size: calc(var(--fs) - 2.5px); color: var(--dim); padding-left: 2px; font-variant-numeric: tabular-nums; }
+/* A changed file's chip in two parts: the name opens the file, the counts the changes. */
+.chip.split { padding: 0; gap: 0; }
+.chip.split:hover { background: var(--tint); }
+.chip.split .pick, .chip.split .st { display: inline-flex; align-items: center; height: 100%; transition: background .12s; }
+.chip.split .pick { gap: 4px; padding: 0 5px; border-radius: 5px 0 0 5px; }
+.chip.split .st { gap: 3px; padding: 0 6px 0 5px; border-left: 1px solid var(--hair); border-radius: 0 5px 5px 0; }
+.chip.split .pick:hover, .chip.split .st:hover { background: var(--tint2); }
 .chip.url .nm, .chip.bead .nm { font-family: inherit; font-size: inherit; }
 .chip.url .nm { color: var(--acc); }
 .chip .live { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }

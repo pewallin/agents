@@ -219,15 +219,26 @@ export function Chip({ target, label, counts = true }: { target: ChipTarget; lab
       : target.kind === "url" ? siteOf(target.url)
         : target.kind === "bead" ? target.id
           : target.kind === "commit" ? target.short : "");
-  const open = (event: React.MouseEvent | React.KeyboardEvent) => {
+  // A changed file's chip has two parts: its name opens the file (a preview for Markdown and
+  // HTML), its counts open the turn's changes to it.
+  const split = change !== undefined && counts;
+  const open = (event: React.MouseEvent | React.KeyboardEvent, toChanges = false) => {
     event.preventDefault();
     event.stopPropagation();
     peek?.hide(true);
-    host?.open(target, { alternate: event.altKey, command: event.metaKey, change });
+    host?.open(target, { alternate: event.altKey, command: event.metaKey, change: toChanges ? change : undefined });
   };
   const state = target.kind === "pane" ? target.state : undefined;
+  const mark = target.kind === "pane"
+    ? <span className={`live${state && BUSY_STATES.has(state) ? " work" : state && ASKING_STATES.has(state) ? " need" : state === "idle" || !state ? " idle" : ""}`} />
+    : <Icon kind={target.kind} />;
+  const name = <>
+    {mark}
+    <span className="nm">{text}</span>
+    {(target.kind === "file" || target.kind === "image") && target.line !== undefined && <span className="at">:{target.line}</span>}
+  </>;
   return (
-    <span ref={element} className={`chip ${target.kind}${change ? " changed" : ""}`} role="link" tabIndex={0}
+    <span ref={element} className={`chip ${target.kind}${change ? " changed" : ""}${split ? " split" : ""}`} role="link" tabIndex={0}
       data-path={target.kind === "file" || target.kind === "image" || target.kind === "dir" ? `${target.path}${target.line ? `:${target.line}` : ""}` : target.kind === "url" ? target.url : target.kind === "pane" ? target.id : undefined}
       draggable={target.kind === "file" || target.kind === "image"}
       onDragStart={(event) => {
@@ -239,12 +250,12 @@ export function Chip({ target, label, counts = true }: { target: ChipTarget; lab
       onKeyDown={(event) => { if (event.key === "Enter") open(event); }}
       onMouseEnter={() => element.current && peek?.show(target, element.current, change)}
       onMouseLeave={() => peek?.hide(false)}>
-      {target.kind === "pane"
-        ? <span className={`live${state && BUSY_STATES.has(state) ? " work" : state && ASKING_STATES.has(state) ? " need" : state === "idle" || !state ? " idle" : ""}`} />
-        : <Icon kind={target.kind} />}
-      <span className="nm">{text}</span>
-      {(target.kind === "file" || target.kind === "image") && target.line !== undefined && <span className="at">:{target.line}</span>}
-      {change && counts && <span className="st"><span className="add">+{change.added}</span> <span className="del">−{change.removed}</span></span>}
+      {split ? <span className="pick" title="Open the file">{name}</span> : name}
+      {split && (
+        <span className="st" role="button" title="Show the changes" onClick={(event) => open(event, true)}>
+          <span className="add">+{change.added}</span> <span className="del">−{change.removed}</span>
+        </span>
+      )}
       {target.kind === "bead" && <span className="st">{target.status.replace(/_/g, " ")}</span>}
     </span>
   );
@@ -319,7 +330,7 @@ export function PeekLayer({ children }: { children: ReactNode }) {
  *  with a plain click, as on a web page; ⌘ opens a file in the editor and a page in the browser. */
 export function clickHint(target: ChipTarget, changed = false): string {
   switch (target.kind) {
-    case "file": return changed ? "Click: this turn's changes · ⌘-click: open in the editor" : "Click: open beside · ⌘-click: open in the editor";
+    case "file": return changed ? "Click the name: open beside · the counts: this turn's changes · ⌘-click: open in the editor" : "Click: open beside · ⌘-click: open in the editor";
     case "dir": return "Click: open beside · ⌘-click: open in the editor";
     case "image": return "Click: Quick Look · ⌘-click: open in the editor";
     case "url": return "Click: open beside · ⌘-click: open in your browser";
