@@ -107,6 +107,8 @@ Integrations:
 
 ```
 agents setup | uninstall    Install / remove hooks and extensions
+agents setup --mcp | uninstall --mcp | doctor --mcp
+                            Register / remove / check Agents Next's `agents` MCP server
 agents report ...           State reporting, called by hooks
 agents bundle <dir>         Write an app-installable bundle directory
 ```
@@ -232,6 +234,19 @@ agent-side pieces:
   typing into the terminal.
 - After a compaction, the Claude and Codex `SessionStart` hooks give a pane marked
   `@agents_role=coordinator` its protocol back as context.
+- `agents setup --mcp` registers the app's `agents` MCP server (`agents-app-control mcp`, run
+  through its stable launcher `~/.agents/agents-app/bin/agents-app-control`) with each harness
+  found, so agents report, ask and send as tools, also where their shell is sandboxed. Claude
+  Code: `claude mcp add --scope user` and `mcp__agents` in `permissions.allow`; Codex: a
+  `[mcp_servers.agents]` table under a `# added by agents setup` line, with
+  `default_tools_approval_mode = "approve"`; Kiro: `~/.kiro/settings/mcp.json`, allowed as
+  `@agents` in our agents-reporting agent; Copilot: `~/.copilot/mcp-config.json` (its tools ask
+  first); OpenCode: `mcp.agents` in `~/.config/opencode/config.json`; Pi: `~/.pi/agent/mcp.json`
+  with direct exposure. Only entries it recognises as its own (name plus command, or the marker)
+  are changed; a foreign `agents` server is kept. What it adds without a marker (the Claude rule,
+  files and objects it created) is recorded in `~/.agents/agents-app/integration.json`, and
+  `agents uninstall --mcp` takes back exactly that, leaving each file byte for byte as before.
+  Agents Next runs both for its `agents-mcp` component.
 
 ## tmux-resurrect
 

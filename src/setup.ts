@@ -17,6 +17,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execFileSync, execSync, spawn } from "child_process";
 import { getAgentsHome, getLogsDir, getResourceRoot, getSelfArgv, getSetupHashPath, isCompiledBinary, isUninstalledBinary } from "./paths.js";
+import { doctorMcp, kiroMcpInstalled, setupMcp, uninstallMcp, type McpDoctorResult } from "./mcp-setup.js";
 import {
   INTEGRATION_SPECS,
   LIFECYCLE_CAPABILITIES,
@@ -784,6 +785,11 @@ function kiroHookEntries(): Record<string, any[]> {
   };
 }
 
+/** Our Kiro agent as setup writes it now. */
+export function kiroReportingAgentConfig(): Record<string, any> {
+  return kiroAgentConfig();
+}
+
 function kiroAgentConfig(): Record<string, any> {
   return {
     name: KIRO_AGENT_NAME,
@@ -791,7 +797,43 @@ function kiroAgentConfig(): Record<string, any> {
     tools: ["*"],
     hooks: kiroHookEntries(),
     includeMcpJson: true,
+    // The agents MCP server's tools run without a prompt while `agents setup --mcp` has it in
+    // ~/.kiro/settings/mcp.json.
+    ...(kiroMcpInstalled() ? { allowedTools: ["@agents"] } : {}),
   };
+}
+
+/** Our Kiro agent brought up to date, when it is there: whether it allows the MCP server's tools
+ *  follows the server. */
+function refreshKiroAgent(): void {
+  if (!existsSync(KIRO_AGENT_PATH)) return;
+  try {
+    const existing = JSON.parse(readFileSync(KIRO_AGENT_PATH, "utf-8"));
+    if (!isOurKiroAgentConfig(existing)) return;
+    const next = kiroAgentConfig();
+    if (JSON.stringify(existing) !== JSON.stringify(next)) writeFileSync(KIRO_AGENT_PATH, JSON.stringify(next, null, 2) + "\n");
+  } catch {}
+}
+
+/** `agents setup --mcp`: the agents MCP server in every installed harness. */
+export function setupMcpServer(): SetupResult[] {
+  const results = setupMcp(refreshKiroAgent);
+  // The hash covers our Kiro agent; it is kept only where the hooks were set up, since a hash
+  // makes auto-setup refresh them.
+  if (existsSync(HASH_FILE)) saveSetupHash();
+  return results;
+}
+
+/** `agents uninstall --mcp`: the agents MCP server out of every harness; the hooks stay. */
+export function uninstallMcpServer(): SetupResult[] {
+  const results = uninstallMcp(refreshKiroAgent);
+  // The hash covers our Kiro agent, which no longer allows the server: only where setup ran.
+  if (existsSync(HASH_FILE)) saveSetupHash();
+  return results;
+}
+
+export function doctorMcpServer(): McpDoctorResult[] {
+  return doctorMcp();
 }
 
 function kiroV3HookConfig(): Record<string, any> {

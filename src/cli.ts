@@ -257,7 +257,7 @@ const { Command } = commander;
 const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
 const { reportState, reportContext, reportContributorState, clearPrimaryState, getAgentStateEntry } = state;
-const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks, shadowingAgentsOnPath, hookRuntimeOwner } = setupMod;
+const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks, shadowingAgentsOnPath, hookRuntimeOwner, setupMcpServer, uninstallMcpServer, doctorMcpServer } = setupMod;
 const hookLogHint = () => "logs/hooks.log in the agents home";
 const { createWorkspace } = workspace;
 const { getProfileNames, resolveProfile } = config;
@@ -1371,8 +1371,9 @@ program
   .command("setup")
   .description("Install or update supported agent integrations")
   .option("--quiet", "Suppress output (used by auto-setup)")
+  .option("--mcp", "Register the agents MCP server of Agents Next instead of the hooks")
   .action((opts) => {
-    const results = setup(opts.quiet);
+    const results = opts.mcp ? setupMcpServer() : setup(opts.quiet);
     if (!opts.quiet) {
       for (const r of results) {
         const icon = r.action === "installed" ? "✓" : "–";
@@ -1385,8 +1386,9 @@ program
 program
   .command("uninstall")
   .description("Remove agent hooks installed by setup")
-  .action(() => {
-    const results = uninstall();
+  .option("--mcp", "Remove the agents MCP server instead of the hooks")
+  .action((opts) => {
+    const results = opts.mcp ? uninstallMcpServer() : uninstall();
     for (const r of results) {
       const icon = r.action === "uninstalled" ? "✓" : "–";
       const detail = r.detail ? ` (${r.detail})` : "";
@@ -1398,7 +1400,20 @@ program
   .command("doctor")
   .description("Inspect integration coverage and installation status for supported agents")
   .option("--json", "Output as JSON")
+  .option("--mcp", "Report the agents MCP server per harness instead of the hooks")
   .action((opts) => {
+    if (opts.mcp) {
+      const results = doctorMcpServer();
+      if (opts.json) {
+        console.log(JSON.stringify(results, null, 2));
+        return;
+      }
+      for (const result of results) {
+        const allowed = result.allowed === undefined ? "" : result.allowed ? "  allowed" : "  asks first";
+        console.log(`${result.agent}  ${result.registered}${allowed}  ${result.reachable ? "reachable" : "command missing"}${result.detail ? ` (${result.detail})` : ""}`);
+      }
+      return;
+    }
     const provenanceWarnings = runtimePaneProvenanceWarnings();
     const results = doctor().map((result) => {
       const supplemental = [
