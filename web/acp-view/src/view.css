@@ -680,3 +680,28 @@ th, td { overflow-wrap: break-word; }
   .opening-line, .opening-line .pulse, .col.arrive { animation: none; opacity: 1; transform: none; }
 }
 .trail .remark:has(> .ln) { max-width: none; }
+
+/* What the agent asks in its terminal while the view waits for its session (TerminalWait). */
+.terminal-wait {
+  position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px)); max-height: 70vh; overflow: auto;
+  background: var(--pop); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--edge); border-radius: 12px; box-shadow: var(--shadow);
+  padding: 14px 16px; display: grid; gap: 10px; color: var(--fg); font-size: var(--fs);
+}
+.terminal-wait-title { font-weight: 600; }
+.terminal-wait-text {
+  margin: 0; font-family: var(--mono); font-size: var(--fs-mono); white-space: pre-wrap; word-break: break-word;
+  color: var(--fg2); background: var(--codebg); border-radius: 8px; padding: 8px 10px;
+}
+.terminal-wait-options { display: grid; gap: 6px; }
+.terminal-wait-options button {
+  font: inherit; text-align: left; color: var(--fg); background: var(--tint); border: 1px solid var(--hair);
+  border-radius: 8px; padding: 6px 10px; cursor: default;
+}
+.terminal-wait-options button:hover:not(:disabled) { background: var(--tint2); }
+.terminal-wait-options button.selected { border-color: color-mix(in srgb, var(--acc) 45%, transparent); }
+.terminal-wait-options button:disabled { opacity: .6; }
+.terminal-wait-problem { color: var(--red); }
+.terminal-wait-foot { color: var(--dim); }
+.terminal-wait button.link { font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: default; }

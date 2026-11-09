@@ -824,11 +824,21 @@ function Ask({ request, agentName, session, focused, cwd }: { request: Permissio
 
 interface MentionHit { kind: "file" | "pane"; path: string; note?: string }
 
+/** A host's answer other than 200, with its message when it gave one. */
+class HostAnswer extends Error {
+  constructor(readonly status: number, readonly hostMessage?: string) {
+    super(`host answered ${status}`);
+  }
+}
+
 async function hostJson<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, body === undefined
     ? { headers: { Authorization: `Bearer ${token}` } }
     : { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok) throw new Error(`host answered ${response.status}`);
+  if (!response.ok) {
+    const message = ((await response.json().catch(() => ({}))) as { message?: unknown }).message;
+    throw new HostAnswer(response.status, typeof message === "string" ? message : undefined);
+  }
   return response.json() as Promise<T>;
 }
 
@@ -1923,14 +1933,19 @@ function SessionGate({ info }: { info: HostInfo }) {
   useEffect(() => {
     if (sessionId !== "current") return;
     // An agent just started opens its session a moment after its host is up.
+    // An agent held up as it starts (a question in its terminal, TerminalWait) has none for as
+    // long as it is held up: the view goes on waiting, and opens the session once it has one.
+    // Only a host that does not answer at all ends the wait.
     const current = async () => {
-      for (let attempt = 0; ; attempt += 1) {
+      const started = Date.now();
+      for (let failures = 0; ;) {
         try {
           return await hostJson<{ sessionId: string | null; persisted?: boolean; busy?: boolean }>("/api/session");
         } catch (error) {
-          // Asked often: the view opens the moment the host has the session (within 30 s).
-          if (attempt >= 300) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          if (error instanceof HostAnswer && error.status === 404) failures = 0;
+          else if ((failures += 1) >= 300) throw error;
+          // Asked often at first: the view opens the moment the host has the session.
+          await new Promise((resolve) => setTimeout(resolve, Date.now() - started < 30_000 ? 100 : 1_000));
         }
       }
     };
@@ -1953,7 +1968,7 @@ function SessionGate({ info }: { info: HostInfo }) {
     void untilIdle(waiting, () => stopped).then(() => { if (!stopped) setResolved({ id: waiting, persisted: true }); });
     return () => { stopped = true; };
   }, [waiting]);
-  if (!resolved) return <Opening text={openingText(info.agent.name)} />;
+  if (!resolved) return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} showsTail /></>;
   if (resolved.startsNew) return <SessionView info={info} sessionId={null} />;
   if (!resolved.id) return <Notice>The pane has no {info.agent.name} session yet{resolved.problem ? ` (${resolved.problem})` : ""}.</Notice>;
   if (waiting) return <Opening text={`${info.agent.name} is working; the session shows when it is done`} />;
@@ -1961,6 +1976,85 @@ function SessionGate({ info }: { info: HostInfo }) {
     return <FirstPrompt info={info} sessionId={resolved.id} onStarted={() => setResolved({ id: resolved.id, persisted: true })} />;
   }
   return <SessionView info={info} sessionId={resolved.id} />;
+}
+
+interface TerminalScreen {
+  prompt: { text: string[]; options: Array<{ index: number; label: string; selected: boolean }>; hint: string[] } | null;
+  tail: string[];
+}
+
+/** How long the view waits for a session before it shows what the agent's terminal shows. */
+const TERMINAL_TAIL_AFTER_MS = 6_000;
+
+/**
+ * What the pane's agent shows in its terminal while the view waits for its session (the host's
+ * terminal-prompt.ts): a question it waits on as it starts (Codex's hooks review, a folder to
+ * trust), with its answers as buttons, or with `showsTail`, after a while without a session, the
+ * lines its terminal shows (an error it stopped on). Without either the opening frame stays as it is.
+ */
+function TerminalWait({ agentName, showsTail = false }: { agentName: string; showsTail?: boolean }) {
+  const [screen, setScreen] = useState<TerminalScreen | null>(null);
+  const [late, setLate] = useState(false);
+  const [answering, setAnswering] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    let stopped = false;
+    const timer = setTimeout(() => setLate(true), TERMINAL_TAIL_AFTER_MS);
+    const poll = async () => {
+      while (!stopped) {
+        const next = await hostJson<TerminalScreen>("/api/terminal-prompt").catch(() => null);
+        if (!stopped && next) setScreen(next);
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+    };
+    void poll();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, []);
+  const prompt = screen?.prompt;
+  const tail = showsTail && late && !prompt && screen?.tail.length ? screen.tail : null;
+  if (!prompt && !tail) return null;
+  const answer = async (option: { index: number; label: string }) => {
+    setAnswering(true);
+    setProblem(null);
+    try {
+      const answered = await hostJson<{ screen: TerminalScreen }>("/api/terminal-prompt", option);
+      setScreen(answered.screen);
+    } catch (error) {
+      setProblem(error instanceof HostAnswer && error.hostMessage ? error.hostMessage : `The answer did not reach ${agentName}.`);
+    } finally {
+      setAnswering(false);
+    }
+  };
+  const terminal = inMacApp()
+    ? <button type="button" className="link" onClick={() => { window.location.href = APP_ACTIONS.backToTerminal; }}>Show terminal</button>
+    : null;
+  return (
+    <div className="terminal-wait" role="dialog" aria-label={`${agentName} asks in its terminal`}>
+      {prompt ? (
+        <>
+          <div className="terminal-wait-title">{agentName} is waiting for an answer in its terminal</div>
+          {prompt.text.length > 0 && <pre className="terminal-wait-text">{prompt.text.join("\n")}</pre>}
+          <div className="terminal-wait-options">
+            {prompt.options.map((option) => (
+              <button key={option.index} type="button" disabled={answering} className={option.selected ? "selected" : undefined}
+                onClick={() => void answer(option)}>
+                {option.index}. {option.label}
+              </button>
+            ))}
+          </div>
+          {problem && <div className="terminal-wait-problem">{problem}</div>}
+          <div className="terminal-wait-foot">The session opens here once {agentName} goes on. {terminal}</div>
+        </>
+      ) : (
+        <>
+          <div className="terminal-wait-title">{agentName} has not opened its session yet</div>
+          <div className="terminal-wait-foot">Its terminal shows:</div>
+          <pre className="terminal-wait-text">{tail!.join("\n")}</pre>
+          <div className="terminal-wait-foot">The view goes on waiting. {terminal}</div>
+        </>
+      )}
+    </div>
+  );
 }
 
 /** Waits until the pane's agent has no turn running on the session. */
@@ -2107,7 +2201,7 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
     return <ErrorNotice title={error.title} error={error.detail} agentName={info.agent.name}
       onRetry={() => setReconnects((count) => count + 1)} />;
   }
-  if (!session || !loaded) return <Opening text={openingText(info.agent.name)} />;
+  if (!session || !loaded) return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} /></>;
   return <Conversation session={session} info={info} />;
 }
 

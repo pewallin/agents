@@ -18,6 +18,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
+import { answerTerminalPrompt, readTerminalScreen } from "./terminal-prompt.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
 
@@ -971,7 +972,7 @@ function handleBridge(
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
     || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
     || path === "/api/session/first-turn" || path === "/api/steer" || path === "/api/queue" || path.startsWith("/api/queue/")
-    || path === "/api/history"
+    || path === "/api/history" || path === "/api/terminal-prompt"
     || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
@@ -1041,6 +1042,26 @@ function handleBridge(
   if (queued && request.method === "DELETE" && !queued[2]) {
     const removed = context.queue.remove(queued[1]);
     sendJson(response, removed ? 200 : 409, removed ? {} : { message: "the agent has it already" });
+    return true;
+  }
+  // What the agent's TUI asks in the pane while the view waits for its session (terminal-prompt.ts),
+  // and the view's answer to it.
+  if (path === "/api/terminal-prompt" && request.method === "GET") {
+    try {
+      sendJson(response, 200, readTerminalScreen(context.paneId));
+    } catch (error) {
+      fail(502)(error);
+    }
+    return true;
+  }
+  if (path === "/api/terminal-prompt" && request.method === "POST") {
+    readJson(request).then(async (body) => {
+      const { index, label } = (body ?? {}) as { index?: unknown; label?: unknown };
+      if (typeof index !== "number" || typeof label !== "string") { sendJson(response, 400, { message: "An option is needed." }); return; }
+      const answer = await answerTerminalPrompt(context.paneId, index, label);
+      context.log(`terminal prompt: ${answer.ok ? `picked ${index}. ${label}` : `not answered: ${answer.message}`}`);
+      sendJson(response, answer.ok ? 200 : 409, answer);
+    }).catch(fail(502));
     return true;
   }
   // The pane's conversations with its agent, for the view's /resume.
