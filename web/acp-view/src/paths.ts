@@ -54,6 +54,45 @@ interface HastNode { type: string; tagName?: string; value?: string; properties?
 /** Where a name in prose is the text's own: code (it has its own chips), links, pictures. */
 const SKIPPED = new Set(["code", "pre", "a", "img", "svg", "math"]);
 
+/** The file a link points at, when it points at one: a file: URL, or an address with no scheme
+ *  (`docs/report.md`, `/abs/path`, `~/notes.md`). Web links, fragments and other schemes are not
+ *  files. */
+export function linkedPath(href: unknown): string | undefined {
+  if (typeof href !== "string" || !href || href.startsWith("#") || href.startsWith("//")) return undefined;
+  if (/^file:/i.test(href)) {
+    try {
+      const path = decodeURIComponent(new URL(href).pathname);
+      return path && path !== "/" ? path : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return undefined;
+  try {
+    return decodeURI(href);
+  } catch {
+    return href;
+  }
+}
+
+/** A rehype plugin, run before the link filter (which lets web links alone through): a link to a
+ *  file becomes a `span[data-path-ref]` with the link's text, which the view shows as that
+ *  file's chip. The filter put "[blocked]" in its place. */
+export function rehypeFileLinks() {
+  const visit = (node: HastNode) => {
+    for (const [index, child] of (node.children ?? []).entries()) {
+      if (child.type !== "element") continue;
+      const path = child.tagName === "a" ? linkedPath(child.properties?.href) : undefined;
+      if (path !== undefined) {
+        node.children![index] = { type: "element", tagName: "span", properties: { dataPathRef: path, dataPathLink: "true" }, children: child.children ?? [] };
+        continue;
+      }
+      if (child.tagName !== "code" && child.tagName !== "pre") visit(child);
+    }
+  };
+  return (tree: HastNode) => visit(tree);
+}
+
 /** A rehype plugin: each path or pane id in the prose becomes a `span[data-path-ref]`, which
  *  the view shows as a chip once the host says what it names. */
 export function rehypePathRefs() {

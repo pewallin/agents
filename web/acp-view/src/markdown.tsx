@@ -7,7 +7,7 @@ import { defaultRehypePlugins, Streamdown } from "streamdown";
 import "streamdown/styles.css";
 import { CodeBlock, Quote } from "./blocks";
 import { NamedChip } from "./chips";
-import { rehypePathRefs } from "./paths";
+import { rehypeFileLinks, rehypePathRefs } from "./paths";
 
 type Plugins = NonNullable<Parameters<typeof Streamdown>[0]["plugins"]>;
 
@@ -58,11 +58,14 @@ function InlineCode({ children, node: _node, ...props }: { children?: ReactNode;
   return <NamedChip name={text} label={writtenLabel(text)} fallback={code} />;
 }
 
-/** A path or pane id in the prose (marked by rehypePathRefs): a chip when the host finds it. */
-function Span({ children, node: _node, ...props }: { children?: ReactNode; node?: unknown; "data-path-ref"?: string }) {
+/** A path or pane id in the prose (marked by rehypePathRefs), or a link to a file (rehypeFileLinks,
+ *  which keeps the link's text): a chip when the host finds it. */
+function Span({ children, node: _node, ...props }: { children?: ReactNode; node?: unknown; "data-path-ref"?: string; "data-path-link"?: string }) {
   const name = props["data-path-ref"];
   if (name === undefined) return <span {...props}>{children}</span>;
-  return <NamedChip name={name} label={writtenLabel(name)} fallback={<>{children}</>} />;
+  const text = textOf(children);
+  const label = props["data-path-link"] !== undefined && text !== name ? children : writtenLabel(name);
+  return <NamedChip name={name} label={label} fallback={<>{children}</>} />;
 }
 
 /** Streamdown marks a fenced block's code with data-block; the rest is inline. */
@@ -76,8 +79,17 @@ const STREAMING_FADE = { animation: "fadeIn", duration: 260, easing: "ease-out",
 const components = { a: Link, inlineCode: InlineCode, code: Code, blockquote: Quote, span: Span } as Parameters<typeof Streamdown>[0]["components"];
 const controls = { code: { copy: true, download: false }, table: false, mermaid: false } as Parameters<typeof Streamdown>[0]["controls"];
 
-/** Streamdown's own plugins, then the one that finds paths in the prose. */
-const rehypePlugins = [...Object.values(defaultRehypePlugins), rehypePathRefs] as Parameters<typeof Streamdown>[0]["rehypePlugins"];
+/** Streamdown's own plugins with links to files kept: the sanitizer lets file: links through, and
+ *  they and links with no scheme become file chips before the link filter, which lets web links
+ *  alone through. Then the one that finds paths in the prose. */
+const [sanitize, sanitizeSchema] = defaultRehypePlugins.sanitize as unknown as [unknown, { protocols?: Record<string, string[]> }];
+const rehypePlugins = [
+  defaultRehypePlugins.raw,
+  [sanitize, { ...sanitizeSchema, protocols: { ...sanitizeSchema.protocols, href: [...(sanitizeSchema.protocols?.href ?? []), "file"] } }],
+  rehypeFileLinks,
+  defaultRehypePlugins.harden,
+  rehypePathRefs,
+] as Parameters<typeof Streamdown>[0]["rehypePlugins"];
 
 /** `streaming`: the text is still coming (Streamdown's streaming mode); `fade`: its new words
  *  fade in (by default while it streams). */
