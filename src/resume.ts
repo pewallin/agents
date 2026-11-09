@@ -10,6 +10,7 @@ import { getSelfArgv } from "./paths.js";
 import { respawnPane } from "./tmux-respawn.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
+import { toolSearchPathShellLines } from "./tool-path.js";
 import { agentLaunchCommand, normalizeAgentName as registryAgentName } from "./agent-registry.js";
 import { kiroContinuedSession } from "./kiro-sessions.js";
 import { describeHolder, findSessionHolders, liveHolderInputs, type SessionHolder } from "./session-holders.js";
@@ -236,13 +237,7 @@ export interface ResumeRespawnOptions {
 export function renderResumeRespawnCommand(argv: string[], options: ResumeRespawnOptions = {}): string {
   const command = agentLaunchCommand(shellCommand(argv), options.agentsArgv ?? []);
   return [
-    `agents_prepend_path_dir() { [ -d "$1" ] || return 0; case ":$PATH:" in *":$1:"*) ;; *) PATH="$1\${PATH:+:$PATH}" ;; esac; }`,
-    `agents_prepend_path_dir /opt/homebrew/bin`,
-    `agents_prepend_path_dir /usr/local/bin`,
-    `agents_prepend_path_dir "$HOME/.local/bin"`,
-    `agents_prepend_path_dir "$HOME/.npm-global/bin"`,
-    `if [ -d "$HOME/.nvm/versions/node" ]; then for agents_node_bin in $(find "$HOME/.nvm/versions/node" -mindepth 2 -maxdepth 2 -type d -name bin 2>/dev/null); do agents_prepend_path_dir "$agents_node_bin"; done; fi`,
-    `export PATH`,
+    ...toolSearchPathShellLines(),
     `exec ${command}`,
   ].join("; ");
 }

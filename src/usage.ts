@@ -3,6 +3,7 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { delimiter, join } from "path";
 import { createInterface } from "readline";
+import { toolSearchPath } from "./tool-path.js";
 
 export type AgentUsageAvailability = "available" | "unavailable" | "error";
 export type AgentUsageWindowKind = "session" | "week" | "month" | string;
@@ -827,14 +828,7 @@ async function runUsageCommand(
 }
 
 function effectivePath(env: NodeJS.ProcessEnv): string {
-  const existing = env.PATH || "";
-  const additions = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    join(homedir(), ".local", "bin"),
-    join(homedir(), ".npm-global", "bin"),
-  ];
-  return [...additions, existing].filter(Boolean).join(":");
+  return toolSearchPath(env.PATH);
 }
 
 function stripANSI(text: string): string {

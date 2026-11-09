@@ -1175,7 +1175,7 @@ describe("resume helpers", () => {
     const command = renderResumeRespawnCommand(["codex", "resume", "thread-123"]);
 
     expect(command).toContain("agents_prepend_path_dir");
-    expect(command).toContain("$HOME/.nvm/versions/node");
+    expect(command).toContain(`"$HOME"/.nvm/versions/node/*/bin`);
     expect(command).toContain("exec codex resume thread-123");
   });
 
