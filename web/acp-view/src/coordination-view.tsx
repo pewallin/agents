@@ -61,36 +61,40 @@ function useProgramText(path: string | null): string | null | undefined {
   return text;
 }
 
-/** A worker's first prompt, as the brief its coordinator wrote: folded to its first lines. */
+/** A worker's first prompt, as the brief its coordinator wrote: one row, folded; a click on it
+ *  shows the brief. */
 export function BriefRow({ task, brief, prompt, respawn }: { task: string; brief: string; prompt: string; respawn: boolean }) {
   const coordinator = useCoordination((state) => state.coordinator);
   const text = useProgramText(brief);
   const [open, setOpen] = useState(false);
   // The brief file starts with its title and where it came from; the brief itself is under "## Brief".
-  const body = text ? (text.split(/^## Brief\s*$/m)[1] ?? text).split(/^## /m)[0].trim() : null;
-  // Folded, it shows its first three lines: the goal, as a rule. The ROLE line the row says already.
-  const shown = body?.replace(/^\s*ROLE:[^\n]*\n+/i, "") ?? "";
-  const folds = shown.split("\n").length > 3 || shown.length > 240;
+  // The ROLE line says what the row says already.
+  const body = text ? (text.split(/^## Brief\s*$/m)[1] ?? text).split(/^## /m)[0].trim().replace(/^\s*ROLE:[^\n]*\n+/i, "") : null;
+  const canOpen = Boolean(body) || (text === null && Boolean(prompt));
+  const toggle = (event: React.MouseEvent | React.KeyboardEvent) => {
+    // The chips in the row open what they name.
+    if ((event.target as HTMLElement).closest(".chip") || window.getSelection()?.toString()) return;
+    if (canOpen) setOpen(!open);
+  };
   return (
-    <div className="brief">
-      <div className="event">
+    <div className={`brief${open ? " open" : ""}`}>
+      <div className={`event${canOpen ? " can-open" : ""}`} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined} aria-expanded={canOpen ? open : undefined}
+        onClick={toggle} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(event); } }}>
         <Spark />
         <span className="what">
           {respawn ? "Taken over from an earlier worker: " : "Brief from the coordinator"}
           {coordinator && <> <Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={coordinator.title ?? coordinator.pane} /></>}
           {" · task "}<WorkerChip task={task} />
+          {" "}<NamedChip name={brief} label="brief" fallback={<span />} />
         </span>
-        <NamedChip name={brief} label="brief" fallback={<span />} />
+        {canOpen && <svg className="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>}
       </div>
-      {body && (
-        <>
-          <div className={`brief-body${folds && !open ? " folded" : ""}`}>
-            <Suspense fallback={<p className="plain">{body}</p>}><Markdown text={folds && !open ? shown.split(/\n\s*\n/).slice(0, 2).join("\n\n") : body} streaming={false} /></Suspense>
-          </div>
-          {folds && <button type="button" className="you-more" onClick={() => setOpen(!open)}>{open ? "Show less" : "Show the whole brief"}</button>}
-        </>
+      {open && body && (
+        <div className="brief-body">
+          <Suspense fallback={<p className="plain">{body}</p>}><Markdown text={body} streaming={false} /></Suspense>
+        </div>
       )}
-      {body === undefined && text === null && <details className="quiet"><summary>The prompt</summary><p className="plain">{prompt}</p></details>}
+      {open && !body && text === null && <p className="plain brief-body">{prompt}</p>}
     </div>
   );
 }
@@ -123,9 +127,11 @@ export function WorkerLine() {
   return (
     <div className="worker-line">
       <Spark />
-      <span>Worker of <Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={coordinator.title ?? coordinator.pane} /></span>
-      {task && <span>· task <code>{task}</code></span>}
-      {report && <span className="dim">· {report}{reportLine ? `: ${reportLine}` : ""}</span>}
+      <span className="what">
+        Worker of <Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={coordinator.title ?? coordinator.pane} />
+        {task && <> · task <code>{task}</code></>}
+        {report && <span className="dim"> · {report}{reportLine ? `: ${reportLine}` : ""}</span>}
+      </span>
     </div>
   );
 }

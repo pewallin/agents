@@ -555,27 +555,31 @@ th, td { overflow-wrap: break-word; }
 .full-output { margin: 0; font: var(--fs-mono)/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
 
 /* coordination: wake-ups, briefs and the agent's own coordination commands as quiet event rows */
-.event { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--dim); font-size: calc(var(--fs) - .5px); }
+/* A long event wraps beside its mark, not under it. */
+.event { display: flex; align-items: flex-start; gap: 7px; color: var(--dim); font-size: calc(var(--fs) - .5px); }
+.event .what { min-width: 0; }
+.event .spark, .worker-line .spark { margin-top: calc((1lh - 11px) / 2); }
 .event .spark { width: 11px; height: 11px; color: var(--hue); flex: none; }
 .event .what { color: var(--fg2); }
 .event .dim, .worker-line .dim { color: var(--dim); }
 .event.delivery { padding: 6px 10px; border-radius: 9px; background: color-mix(in srgb, var(--hue) 8%, transparent); }
 .trail .event.agent-event { font-size: calc(var(--fs) - 1px); }
-/* A long event wraps beside its mark, not under it. */
-.event.agent-event { flex-wrap: nowrap; align-items: flex-start; }
-.event.agent-event .what { min-width: 0; }
-.event.agent-event .spark { margin-top: calc((1lh - 11px) / 2); }
 .event.failed .what { color: var(--red); }
-.brief { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 10px; border-radius: 12px; background: color-mix(in srgb, var(--hue) 7%, transparent); }
-.brief-body { color: var(--fg2); font-size: calc(var(--fs) - .5px); }
-.brief-body.folded { max-height: 4.8em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent); }
-.brief-body .you-more { margin: 4px 0 0; }
-.worker-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--dim); font-size: calc(var(--fs) - 1px); padding-bottom: 4px; border-bottom: 1px solid var(--hair); }
-.worker-line .spark { width: 11px; height: 11px; color: var(--hue); }
+/* A brief: one row like a delivery, that opens to the brief on a click. */
+.brief { display: flex; flex-direction: column; gap: 8px; padding: 6px 10px; border-radius: 9px; background: color-mix(in srgb, var(--hue) 7%, transparent); }
+.brief.open { padding-bottom: 10px; }
+.brief > .event.can-open { cursor: default; }
+.brief > .event .chev { flex: none; width: 9px; height: 9px; margin-top: calc((1lh - 9px) / 2); color: var(--faint); opacity: 0; transition: transform .15s, opacity .15s; }
+.brief > .event.can-open:hover .chev, .brief.open > .event .chev { opacity: .8; }
+.brief.open > .event .chev { transform: rotate(90deg); }
+.brief > .event.can-open:hover .what { color: var(--fg); }
+.brief-body { color: var(--fg2); font-size: calc(var(--fs) - .5px); padding-left: 18px; }
+.worker-line { display: flex; align-items: flex-start; gap: 6px; color: var(--dim); font-size: calc(var(--fs) - 1px); padding-bottom: 4px; border-bottom: 1px solid var(--hair); }
+.worker-line .spark { width: 11px; height: 11px; color: var(--hue); flex: none; }
+.worker-line .what { min-width: 0; }
 .you.external.with-text { color: var(--fg2); font-size: inherit; background: var(--tint); padding: 8px 13px; border-radius: 14px; align-self: flex-end; max-width: 84%; }
 .you.external .from { display: block; font-size: calc(var(--fs) - 2.5px); color: var(--dim); margin-bottom: 2px; }
 .trail.coordination { margin-top: -6px; border-left-color: color-mix(in srgb, var(--hue) 40%, transparent); }
-.brief > .you-more { align-self: flex-start; margin: 0; }
 
 /* a coordinator's workers, docked above the field: pills that expand to a list */
 .worker-strip { display: flex; flex-direction: column; gap: 4px; padding: 0 6px; font-size: calc(var(--fs) - 1.5px); }
