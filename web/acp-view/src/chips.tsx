@@ -191,13 +191,13 @@ const BUSY_STATES = new Set(["working", "compacting"]);
 const ASKING_STATES = new Set(["approval", "question", "attention"]);
 
 /** A chip for what a name stands for, or the fallback while it is not known to stand for anything. */
-export function NamedChip({ name, label, fallback }: { name: string; label?: ReactNode; fallback: ReactNode }) {
+export function NamedChip({ name, label, fallback, counts = true }: { name: string; label?: ReactNode; fallback: ReactNode; counts?: boolean }) {
   // A worker's task name stands for its pane (in a coordinator's or a worker's view).
   const worker = useCoordination((state) => workerNamed(state, name));
   const target = useResolved(worker ? null : name);
   if (worker) return <Chip target={{ kind: "pane", id: worker.pane, state: worker.status }} label={label ?? name} />;
   if (!target) return <>{fallback}</>;
-  return <Chip target={target} label={label} />;
+  return <Chip target={target} label={label} counts={counts} />;
 }
 
 /** A file the turn changed, as its chip: an image's with the image mark. */
@@ -205,7 +205,8 @@ export function fileTarget(path: string, rel: string): ChipTarget {
   return { kind: IMAGE_EXTENSIONS.test(path) ? "image" : "file", path, rel };
 }
 
-export function Chip({ target, label }: { target: ChipTarget; label?: ReactNode }) {
+/** `counts`: the lines the turn changed in the file, which a step's row shows at its end instead. */
+export function Chip({ target, label, counts = true }: { target: ChipTarget; label?: ReactNode; counts?: boolean }) {
   const host = useContext(ChipHostContext);
   const changes = useContext(TurnChangesContext);
   const peek = useContext(PeekContext);
@@ -241,8 +242,8 @@ export function Chip({ target, label }: { target: ChipTarget; label?: ReactNode 
         ? <span className={`live${state && BUSY_STATES.has(state) ? " work" : state && ASKING_STATES.has(state) ? " need" : state === "idle" || !state ? " idle" : ""}`} />
         : <Icon kind={target.kind} />}
       <span className="nm">{text}</span>
-      {(target.kind === "file" || target.kind === "image") && target.line !== undefined && <span className="ln">:{target.line}</span>}
-      {change && <span className="st"><span className="add">+{change.added}</span> <span className="del">−{change.removed}</span></span>}
+      {(target.kind === "file" || target.kind === "image") && target.line !== undefined && <span className="at">:{target.line}</span>}
+      {change && counts && <span className="st"><span className="add">+{change.added}</span> <span className="del">−{change.removed}</span></span>}
       {target.kind === "bead" && <span className="st">{target.status.replace(/_/g, " ")}</span>}
     </span>
   );

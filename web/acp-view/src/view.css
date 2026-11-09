@@ -163,6 +163,14 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .trail .ln .t { font: var(--fs-mono) var(--mono); color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .trail .ln .m { margin-left: auto; color: var(--faint); font-size: calc(var(--fs) - 2px); font-variant-numeric: tabular-nums; flex: none; padding-left: 8px; }
 .trail .think, .trail .remark { color: var(--dim); max-width: 72ch; }
+/* Thinking: one quiet line, "Thought  Checking row counts  4s", that opens on a click. */
+.trail .think { max-width: none; }
+.trail .think .ln .tp { font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trail .think .ln .chev { flex: none; align-self: center; margin-left: -3px; opacity: 0; color: var(--faint); }
+.trail .think .ln.can-open:hover .tp { color: var(--fg2); }
+.trail .think .ln.can-open:hover .chev, .trail .think.open .ln .chev { opacity: .8; }
+.trail .think.open .ln .chev { transform: rotate(90deg); }
+.trail .think-body { margin: 4px 0 8px; max-width: 72ch; }
 .trail .think p, .trail .remark p, .trail .think ul, .trail .remark ul, .trail .think ol, .trail .remark ol { margin: 0 0 4px; }
 .trail .think > :last-child, .trail .remark > :last-child, .trail .think > div > :last-child, .trail .remark > div > :last-child { margin-bottom: 0; }
 /* Codex's reasoning headers (**Checking row counts**) as a quiet bold line, not shouted. */
@@ -175,7 +183,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .you-when { position: absolute; right: calc(100% + 10px); bottom: 8px; opacity: 0; transition: opacity .15s; white-space: nowrap; pointer-events: none; }
 .you:hover .you-when { opacity: 1; }
 .turn-when { margin: 2px 0 0; }
-.trail .out { margin: 2px 0 4px; font: calc(var(--fs-mono) - .5px)/1.55 var(--mono); color: var(--dim); white-space: pre; overflow-x: auto; max-height: 320px; overflow-y: auto; }
+.trail .out { margin: 5px 0 8px; font: calc(var(--fs-mono) - .5px)/1.55 var(--mono); color: var(--dim); white-space: pre; overflow-x: auto; max-height: 320px; overflow-y: auto; }
 .add { color: var(--green); }
 .del { color: var(--red); }
 
@@ -389,7 +397,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .chip:hover { background: var(--tint2); }
 .chip svg { width: 12px; height: 12px; flex: none; color: var(--dim); }
 .chip .nm { font: var(--fs-mono) var(--mono); overflow: hidden; text-overflow: ellipsis; }
-.chip .ln { color: var(--dim); font: var(--fs-mono) var(--mono); margin-left: -4px; }
+.chip .at { color: var(--dim); font: var(--fs-mono) var(--mono); margin-left: -4px; }
 .chip .st { font-size: calc(var(--fs) - 2.5px); color: var(--dim); padding-left: 2px; font-variant-numeric: tabular-nums; }
 .chip.url .nm, .chip.bead .nm { font-family: inherit; font-size: inherit; }
 .chip.url .nm { color: var(--acc); }
@@ -488,7 +496,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .trail .ln.failure .t { color: var(--red); }
 .trail.failures { margin-top: -6px; }
 .quiet summary .fail-count { color: color-mix(in srgb, var(--red) 60%, var(--faint)); }
-.trail .out.tail { max-height: 5.4em; overflow: hidden; color: var(--dim); margin: 0 0 2px; transition: max-height .24s ease, opacity .2s ease, margin .24s ease; }
+.trail .out.tail { max-height: 5.4em; overflow: hidden; color: var(--dim); margin: 3px 0 6px; transition: max-height .24s ease, opacity .2s ease, margin .24s ease; }
 .trail .out.tail.closing { max-height: 0; opacity: 0; margin: 0; }
 @media (prefers-reduced-motion: reduce) { .trail .out.tail { transition: none; } }
 .trail .out.can-beside { cursor: zoom-in; }

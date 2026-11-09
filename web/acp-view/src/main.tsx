@@ -15,7 +15,7 @@ import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type
 import { choicesOf, currentName, settingLabel, settingTitle, splitOptions } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
-import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, mergeChanges, oneLine, shortPath, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
+import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type Turn } from "./turns";
 import { Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
@@ -335,7 +335,7 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
         {failed && <span className="fail-dot" aria-label="failed" />}
         {verb && <span className="v">{verb}</span>}
         {files.length > 0
-          ? <span className="t files">{files.map((path) => <NamedChip key={path} name={path} fallback={<span>{shortPath(path, cwd)}</span>} />)}</span>
+          ? <span className="t files">{files.map((path) => <NamedChip key={path} name={path} counts={false} fallback={<span>{shortPath(path, cwd)}</span>} />)}</span>
           : <span className="t" title={whole ? undefined : line}>{line}</span>}
         {meta !== null && <span className="m">{meta}</span>}
       </div>
@@ -395,14 +395,49 @@ function StepLine({ step, cwd, live = false }: { step: Step; cwd: string; live?:
   // reasoning headers (**Checking row counts**) are a quiet bold line, `code` is code. In a turn
   // under way they render as the text being written does, so one that was being written when
   // the next step started stays exactly as it was.
-  if (step.type === "thought" || step.type === "remark") {
+  if (step.type === "thought") return <ThoughtLine step={step} live={live} />;
+  if (step.type === "remark") {
     return (
-      <div className={step.type === "thought" ? "think" : "remark"}>
+      <div className="remark">
         <Suspense fallback={<p>{step.text}</p>}><Markdown text={step.text} streaming={live} fade={false} /></Suspense>
       </div>
     );
   }
   return <ToolLine call={step.call} cwd={cwd} />;
+}
+
+/** Thinking, as Claude and Codex show it: one quiet line (Codex's header or the first words, and
+ *  how long it took) that opens on a click. Everything (⌃O) shows it open; the reader's choice is
+ *  kept by its id, as a step's is. */
+function ThoughtLine({ step, live }: { step: Extract<Step, { type: "thought" }>; live: boolean }) {
+  const { level } = useContext(DetailContext);
+  const chosen = useOpenedSteps((state) => state.opened[step.id]);
+  const { title, body } = thoughtSummary(step.text);
+  // A thought of one short line has nothing more to show.
+  const canOpen = body.length > 0 && (body.includes("\n") || body !== title);
+  const open = canOpen && (chosen ?? level === "everything");
+  const toggle = () => canOpen && setOpenedStep(step.id, !open);
+  const writing = live && step.endedAt === undefined;
+  const took = step.startedAt !== undefined && step.endedAt !== undefined && step.endedAt - step.startedAt >= 1000
+    ? duration(step.endedAt - step.startedAt) : null;
+  return (
+    <div className={`think${open ? " open" : ""}`}>
+      <div className={`ln${canOpen ? " can-open" : ""}`} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
+        aria-expanded={canOpen ? open : undefined} onClick={toggle}
+        onKeyDown={(event) => { if (canOpen && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); toggle(); } }}>
+        <span className="v">{writing ? "Thinking" : "Thought"}</span>
+        {/* Open, the first words are the text's own first line: shown once, in the text. */}
+        {!(open && body === step.text) && <span className="tp">{oneLine(title, 140)}</span>}
+        {canOpen && <Chevron />}
+        {took && <span className="m">{took}</span>}
+      </div>
+      {open && (
+        <div className="think-body">
+          <Suspense fallback={<p>{body}</p>}><Markdown text={body} streaming={writing} fade={false} /></Suspense>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** What the agent is writing after its last step, in a turn under way: where it will stay if

@@ -4,7 +4,9 @@ import { diffLines } from "diff";
 import type { Item, SessionState, ToolCall } from "./session-state";
 
 export type Step =
-  | { type: "thought"; id: string; text: string }
+  /** Thinking, with when it started and when the next thing the agent did started (a session
+   *  replayed from its history has no times). */
+  | { type: "thought"; id: string; text: string; startedAt?: number; endedAt?: number }
   | { type: "remark"; id: string; text: string }
   | { type: "tool"; id: string; call: ToolCall };
 
@@ -115,19 +117,26 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
   const begin = (user?: Extract<Item, { type: "user" }>) => {
     open = { turn: { id: user?.id ?? `turn-${turns.length}`, user, steps: [], answer: [], changes: [], startedAt: user?.at }, tail: [] };
   };
+  // The thinking last written: it ends when the agent does the next thing.
+  let thinking: Extract<Step, { type: "thought" }> | undefined;
   const touch = (at: number | undefined) => {
     if (!open || at === undefined) return;
+    if (thinking && thinking.startedAt !== undefined && at > thinking.startedAt) {
+      thinking.endedAt = at;
+      thinking = undefined;
+    }
     open.turn.startedAt ??= at;
     open.turn.endedAt = Math.max(open.turn.endedAt ?? at, at);
   };
 
   for (const item of state.items) {
     if (item.type === "user") {
+      thinking = undefined;
       close();
       begin(item);
       continue;
     }
-    if (!open) begin();
+    if (!open) { begin(); thinking = undefined; }
     const current = open!;
     if (item.type === "agent") {
       current.tail.push(item);
@@ -139,8 +148,11 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
     for (const remark of current.tail) if (remark.text.trim()) current.turn.steps.push({ type: "remark", id: remark.id, text: remark.text.trim() });
     current.tail = [];
     if (item.type === "thought") {
-      if (item.text.trim()) current.turn.steps.push({ type: "thought", id: item.id, text: item.text.trim().replace(/\n{3,}/g, "\n\n") });
       touch(item.at);
+      if (item.text.trim()) {
+        thinking = { type: "thought", id: item.id, text: item.text.trim().replace(/\n{3,}/g, "\n\n"), startedAt: item.at };
+        current.turn.steps.push(thinking);
+      }
     } else {
       const call = state.toolCalls[item.id];
       if (call) {
@@ -152,6 +164,16 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
   }
   close();
   return turns;
+}
+
+/** Thinking as one line: Codex's own header (**Checking row counts**) when it starts with one,
+ *  else its first line without markdown; and what opening it shows (the rest, after a header). */
+export function thoughtSummary(text: string): { title: string; body: string } {
+  const header = text.match(/^\*\*([^*\n]+)\*\*\s*(?:\n|$)/);
+  if (header) return { title: header[1].trim(), body: text.slice(header[0].length).trim() };
+  const first = text.split("\n").find((line) => line.trim()) ?? "";
+  const title = first.replace(/^\s*(?:[#>*-]+|\d+\.)\s+/, "").replace(/[*_`]+/g, "").trim();
+  return { title, body: text };
 }
 
 const VERBS: Record<string, string> = {

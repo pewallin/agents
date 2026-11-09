@@ -171,6 +171,22 @@ function appendAgentImage(state: SessionState, block: Extract<ContentBlock, { ty
   return { ...state, items: [...state.items, { type: "agent", id, text: "", at, images: [picture] }], nextLocalId: state.nextLocalId + 1 };
 }
 
+/** A path as a plain path: Kiro names a diff's file by a file:// URI and its location by the
+ *  path, which would make one file two. */
+export function plainPath(path: string): string {
+  if (!path.startsWith("file://")) return path;
+  try {
+    return decodeURIComponent(new URL(path).pathname);
+  } catch {
+    return path.slice("file://".length);
+  }
+}
+
+function withPlainPath<T>(entry: T): T {
+  const path = (entry as { path?: unknown }).path;
+  return typeof path === "string" && path.startsWith("file://") ? { ...entry, path: plainPath(path) } : entry;
+}
+
 function mergeToolCall(previous: ToolCall | undefined, update: ToolCallUpdate & { title?: string | null }, at: number | undefined): ToolCall {
   const status = (update.status ?? previous?.status ?? "pending") as ToolStatus;
   const ended = status === "completed" || status === "failed";
@@ -179,8 +195,8 @@ function mergeToolCall(previous: ToolCall | undefined, update: ToolCallUpdate & 
     title: update.title ?? previous?.title ?? "Tool call",
     kind: update.kind ?? previous?.kind,
     status,
-    content: update.content ?? previous?.content ?? [],
-    locations: update.locations ?? previous?.locations ?? [],
+    content: update.content ? update.content.map(withPlainPath) : previous?.content ?? [],
+    locations: update.locations ? update.locations.map(withPlainPath) : previous?.locations ?? [],
     rawInput: update.rawInput !== undefined ? update.rawInput : previous?.rawInput,
     rawOutput: update.rawOutput !== undefined ? update.rawOutput : previous?.rawOutput,
     startedAt: previous ? previous.startedAt : at,

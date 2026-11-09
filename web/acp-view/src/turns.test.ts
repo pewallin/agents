@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySession, reduce, type SessionAction } from "./session-state";
-import { buildTurns, changesOf, conversationChanges, countLines, describeCall, duration, oneLine, shortPath } from "./turns";
+import { buildTurns, changesOf, conversationChanges, countLines, describeCall, duration, oneLine, shortPath, thoughtSummary } from "./turns";
 import { changedWords, commentsMessage, diffRows, linePieces, splitPath } from "./review";
 
 const text = (t: string) => ({ type: "text" as const, text: t });
@@ -19,6 +19,40 @@ describe("the activity trail", () => {
     const [turn] = buildTurns(state);
     expect(turn.steps.map((step) => step.type)).toEqual(["thought", "tool", "tool"]);
     expect(turn.steps[0]).toMatchObject({ text: "**Checking row counts**\n\nThen sum them." });
+  });
+
+  it("times thinking from its start to the next thing the agent does", () => {
+    const actions: SessionAction[] = [
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Go"), messageId: "u1" }, at: 1000 },
+      { type: "update", update: { sessionUpdate: "agent_thought_chunk", content: text("Plan it.") }, at: 2000 },
+      { type: "update", update: { sessionUpdate: "agent_thought_chunk", content: text(" More.") }, at: 3000 },
+      { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "ls", kind: "execute", status: "in_progress", rawInput: { command: "ls" } }, at: 6500 },
+      { type: "update", update: { sessionUpdate: "agent_thought_chunk", content: text("Still thinking") }, at: 7000 },
+    ];
+    const [turn] = buildTurns(actions.reduce(reduce, emptySession()));
+    expect(turn.steps[0]).toMatchObject({ type: "thought", text: "Plan it. More.", startedAt: 2000, endedAt: 6500 });
+    expect(turn.steps[2]).toMatchObject({ type: "thought", startedAt: 7000 });
+    expect((turn.steps[2] as { endedAt?: number }).endedAt).toBeUndefined();
+  });
+
+  it("sums thinking up in one line: Codex's header, else its first words", () => {
+    expect(thoughtSummary("**Checking row counts**\n\nThen sum them.")).toEqual({ title: "Checking row counts", body: "Then sum them." });
+    expect(thoughtSummary("**Done**")).toEqual({ title: "Done", body: "" });
+    expect(thoughtSummary("- I should read `a.ts` first.\nThen b.")).toEqual({ title: "I should read a.ts first.", body: "- I should read `a.ts` first.\nThen b." });
+  });
+
+  it("takes a diff's file:// path as the file's path, so a Kiro edit names one file", () => {
+    const actions: SessionAction[] = [
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Write"), messageId: "u1" } },
+      { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Write File", kind: "edit", status: "completed",
+        locations: [{ path: "/repo/tmp/my notes.md" }],
+        content: [{ type: "diff", path: "file:///repo/tmp/my%20notes.md", oldText: "", newText: "a\nb\n" }] } },
+    ];
+    const state = actions.reduce(reduce, emptySession());
+    expect(state.toolCalls.t1.content[0]).toMatchObject({ path: "/repo/tmp/my notes.md" });
+    const [turn] = buildTurns(state);
+    expect(turn.changes).toEqual([expect.objectContaining({ path: "/repo/tmp/my notes.md", added: 2, removed: 0 })]);
+    expect(describeCall(state.toolCalls.t1, "/repo")).toEqual({ verb: "Edited", target: "tmp/my notes.md" });
   });
 
   it("shows a long command on one line, cut at a character with an ellipsis", () => {
