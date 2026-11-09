@@ -409,14 +409,33 @@ function StepLine({ step, cwd, live = false, whole = false }: { step: Step; cwd:
   return <ToolLine call={step.call} cwd={cwd} />;
 }
 
+/** Whether a one-line text is cut short (its ellipsis shows): then its row opens to show all of it. */
+function useCutShort(text: string, shown = true): [React.RefObject<HTMLSpanElement | null>, boolean] {
+  const element = useRef<HTMLSpanElement>(null);
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    const span = element.current;
+    if (!span) return;
+    // Not laid out (a folded turn, a row opened that hides it): nothing to measure, keep the last.
+    const measure = () => { if (span.isConnected && span.clientWidth > 0) setCut(span.scrollWidth > span.clientWidth + 1); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(span);
+    return () => observer.disconnect();
+  }, [text, shown]);
+  return [element, cut];
+}
+
 /** What the agent said between its steps (Kiro and Claude narrate their work this way): one quiet
  *  line of its first words; a click shows all of it, a click on that folds it again. */
 function RemarkLine({ step }: { step: Extract<Step, { type: "remark" }> }) {
   const { level } = useContext(DetailContext);
   const chosen = useOpenedSteps((state) => state.opened[step.id]);
   const { title } = thoughtSummary(step.text);
-  const canOpen = step.text.includes("\n") || step.text !== title || title.length > 90;
-  const open = canOpen && (chosen ?? level === "everything");
+  const opened = chosen ?? level === "everything";
+  const [line, cut] = useCutShort(title, !opened);
+  const canOpen = step.text.includes("\n") || step.text !== title || cut;
+  const open = canOpen && opened;
   const toggle = () => {
     // A drag that selected text is a selection, not a click.
     if (!canOpen || window.getSelection()?.toString()) return;
@@ -434,7 +453,7 @@ function RemarkLine({ step }: { step: Extract<Step, { type: "remark" }> }) {
     <div className="remark">
       <div className={`ln${canOpen ? " can-open" : ""}`} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
         aria-expanded={canOpen ? false : undefined} onClick={toggle} onKeyDown={keys}>
-        <span className="tp">{oneLine(title, 200)}</span>
+        <span className="tp" ref={line}>{oneLine(title, 200)}</span>
         {canOpen && <Chevron />}
       </div>
     </div>
@@ -448,9 +467,11 @@ function ThoughtLine({ step, live }: { step: Extract<Step, { type: "thought" }>;
   const { level } = useContext(DetailContext);
   const chosen = useOpenedSteps((state) => state.opened[step.id]);
   const { title, body } = thoughtSummary(step.text);
-  // A thought of one short line has nothing more to show.
-  const canOpen = body.length > 0 && (body.includes("\n") || body !== title);
-  const open = canOpen && (chosen ?? level === "everything");
+  // A thought of one line that shows whole has nothing more to show.
+  const opened = chosen ?? level === "everything";
+  const [line, cut] = useCutShort(title, !(opened && body === step.text));
+  const canOpen = body.length > 0 && (body.includes("\n") || body !== title || cut);
+  const open = canOpen && opened;
   const toggle = () => canOpen && setOpenedStep(step.id, !open);
   const writing = live && step.endedAt === undefined;
   const took = step.startedAt !== undefined && step.endedAt !== undefined && step.endedAt - step.startedAt >= 1000
@@ -462,7 +483,7 @@ function ThoughtLine({ step, live }: { step: Extract<Step, { type: "thought" }>;
         onKeyDown={(event) => { if (canOpen && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); toggle(); } }}>
         <span className="v">{writing ? "Thinking" : "Thought"}</span>
         {/* Open, the first words are the text's own first line: shown once, in the text. */}
-        {!(open && body === step.text) && <span className="tp">{oneLine(title, 140)}</span>}
+        {!(open && body === step.text) && <span className="tp" ref={line}>{oneLine(title, 140)}</span>}
         {canOpen && <Chevron />}
         {took && <span className="m">{took}</span>}
       </div>

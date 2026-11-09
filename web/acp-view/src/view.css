@@ -556,6 +556,10 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .event .dim, .worker-line .dim { color: var(--dim); }
 .event.delivery { padding: 6px 10px; border-radius: 9px; background: color-mix(in srgb, var(--hue) 8%, transparent); }
 .trail .event.agent-event { font-size: calc(var(--fs) - 1px); }
+/* A long event wraps beside its mark, not under it. */
+.event.agent-event { flex-wrap: nowrap; align-items: flex-start; }
+.event.agent-event .what { min-width: 0; }
+.event.agent-event .spark { margin-top: calc((1lh - 11px) / 2); }
 .event.failed .what { color: var(--red); }
 .brief { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 10px; border-radius: 12px; background: color-mix(in srgb, var(--hue) 7%, transparent); }
 .brief-body { color: var(--fg2); font-size: calc(var(--fs) - .5px); }
