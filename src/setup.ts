@@ -15,7 +15,8 @@ import { createHash } from "crypto";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { execFileSync, execSync, spawn } from "child_process";
+import { execFileSync, spawn } from "child_process";
+import { findOnPath } from "./shell.js";
 import { getAgentsHome, getLogsDir, getResourceRoot, getSelfArgv, getSetupHashPath, isCompiledBinary, isUninstalledBinary } from "./paths.js";
 import { doctorMcp, kiroMcpInstalled, setupMcp, uninstallMcp, type McpDoctorResult } from "./mcp-setup.js";
 import {
@@ -159,12 +160,7 @@ function applyCapabilityOverrides(
 }
 
 function commandExists(command: string): boolean {
-  try {
-    execSync(`command -v ${command}`, { encoding: "utf-8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
-    return true;
-  } catch {
-    return false;
-  }
+  return findOnPath(command) !== undefined;
 }
 
 /** JSON with the indentation and final newline of the file it replaces (2 spaces for a new file),
@@ -1383,10 +1379,8 @@ function uninstallHermes(): SetupResult {
 
 export function setup(quiet: boolean = false): SetupResult[] {
   // Verify agents CLI is available (a compiled binary is run by path, see writeHookRuntime)
-  try {
-    if (!isCompiledBinary()) execSync("which agents", { encoding: "utf-8", timeout: 3000 });
-  } catch {
-    if (!quiet) console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
+  if (!isCompiledBinary() && !findOnPath("agents") && !quiet) {
+    console.error("Warning: 'agents' command not found on PATH. Hooks will fail until it is installed.");
   }
 
   writeHookRuntime();

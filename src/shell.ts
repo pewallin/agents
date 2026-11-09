@@ -1,9 +1,10 @@
 /**
- * Shared shell execution wrapper used across the project.
- * All tmux and process commands go through this.
+ * Shared process helpers. A command line that a shell has to parse runs only here (exec,
+ * execAsync), and only for fixed strings; everything else runs an executable with an argv.
  */
 import { execSync as nodeExecSync, exec as nodeExecCb, execFile as nodeExecFileCb, spawn, spawnSync } from "child_process";
-import { closeSync, openSync } from "fs";
+import { accessSync, closeSync, constants, openSync, statSync } from "fs";
+import { join } from "path";
 import { promisify } from "util";
 
 const nodeExecAsync = promisify(nodeExecCb);
@@ -35,6 +36,22 @@ export interface ManagedBackgroundProcess {
 export interface SpawnBackgroundOptions {
   env?: NodeJS.ProcessEnv;
   logPath: string;
+}
+
+/** The executable `name` resolves to on PATH, found without a shell, or undefined. */
+export function findOnPath(name: string, pathValue: string = process.env.PATH ?? ""): string | undefined {
+  if (!name || name.includes("/")) return undefined;
+  for (const directory of pathValue.split(":")) {
+    if (!directory) continue;
+    const candidate = join(directory, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // Not here.
+    }
+  }
+  return undefined;
 }
 
 /** Synchronous exec — returns stdout trimmed, or "" on error. */

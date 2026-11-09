@@ -63,7 +63,7 @@ docs/                — feature plans and the ACP view client notes
 
 ## Important patterns
 
-- **Shell execution**: All `execSync`/`execAsync` calls go through `shell.ts`. Never import `child_process` directly in other modules.
+- **Processes**: Run executables with an argv (`execFile*`, `spawn*`, or `shell.ts`'s `execFileCapture`); never interpolate a value into a shell string. A command line that a shell has to parse runs only through `shell.ts`'s `exec`/`execAsync`, and only for fixed text. `findOnPath()` looks an executable up without a shell.
 - **tmux window naming**: Must set both `automatic-rename off` AND `allow-rename off` to prevent helper programs (yazi) from overwriting window names via escape sequences. Then explicitly `rename-window`.
 - **tmux hooks**: The correct hook for pane focus changes is `after-select-pane` (NOT `pane-focus-in` which doesn't exist).
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execSync, spawnSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -45,7 +45,7 @@ function readGitRevision(packageRoot: string | undefined): string | undefined {
     return undefined;
   }
   try {
-    return execSync("git rev-parse --short=12 HEAD", {
+    return execFileSync("git", ["rev-parse", "--short=12", "HEAD"], {
       cwd: packageRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
