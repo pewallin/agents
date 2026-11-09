@@ -18,6 +18,8 @@ export interface AgentSessionHistoryItem {
   resumeTargetKind?: AgentSessionResumeTargetKind;
   resumeCommand?: string;
   resumeArgv?: string[];
+  /** Another pane (or process) has the session open: where (session-holders.ts). */
+  openIn?: { pane?: string; session?: string; window?: string; pid?: number };
 }
 
 export type AgentSessionResumeStrategy = "restart" | "switch-in-place";

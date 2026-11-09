@@ -452,6 +452,7 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
       : undefined,
     agentLogFiles: agent.logFiles?.(),
     agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
+    historyAgent: agent.stateAgent,
     paneId,
     agent: { id: agent.id, name: agent.name },
     runtimeTempDir,

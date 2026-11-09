@@ -12,9 +12,13 @@ import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
 import { handOffAgentId } from "./acp-restart.js";
 import { kiroResumeSessionId } from "./kiro-sessions.js";
+import { describeHolder, findSessionHolders, liveHolderInputs, type SessionHolder } from "./session-holders.js";
+import { acpHostMetadataPath, acpHostRuntimeTempDir, readAcpHostMetadata } from "./acp-host.js";
+import { rmSync } from "node:fs";
 
 export type AgentSessionResumeCode =
   | "agent-not-idle"
+  | "session-open-elsewhere"
   | "missing-target"
   | "pane-not-found"
   | "unsupported-agent"
@@ -34,7 +38,13 @@ export interface AgentSessionResumeResult {
   targetKind?: AgentSessionResumeTargetKind;
   command?: string;
   argv?: string[];
+  /** session-open-elsewhere: where the session is open. */
+  openIn?: SessionHolder;
 }
+
+/** How the resumed agent shows in Agents Next: the pane option the ACP host reads at its start
+ *  (acp-host-cli.ts OPEN_IN_OPTION), so a pane that shows the ACP view stays in it. */
+export type ResumeOpenIn = "acp-view" | "terminal";
 
 export interface ResumeAgentSessionOptions {
   pane: string;
@@ -47,7 +57,9 @@ export interface ResumeAgentSessionOptions {
   sessionPath?: string;
   target?: string;
   targetKind?: AgentSessionResumeTargetKind;
+  /** Resume even if the agent is not idle, or the session is open in another pane. */
   force?: boolean;
+  openIn?: ResumeOpenIn;
 }
 
 interface ResolvedResumeTarget {
@@ -299,8 +311,46 @@ export function resolveResumePane(
   return fallbackAgentPaneFromTmuxDisplay(paneFilter, fallbackAgent, tmuxPaneLookup);
 }
 
+/** The session's holder other than `paneId`, if another pane or process has it open. */
+export function sessionOpenElsewhere(agent: string, sessionIds: string[], paneId: string, panes: AgentPane[]): SessionHolder | undefined {
+  const ids = [...new Set(sessionIds.filter(Boolean))];
+  if (ids.length === 0) return undefined;
+  const holders = findSessionHolders(agent, ids, paneId, liveHolderInputs(agent, ids, panes));
+  return ids.map((id) => holders.get(id)).find((holder) => holder !== undefined);
+}
+
+/** Sets the pane option the pane's next ACP host reads as it starts (acp-host-cli.ts). */
+function setOpenInOption(paneId: string, openIn: ResumeOpenIn): void {
+  const result = execFileCapture("tmux", ["set-option", "-p", "-t", paneId, "@agents_open_in", openIn]);
+  if (result.status !== 0) throw new Error(result.stderr || `tmux set-option exited ${result.status}`);
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Waits for the ACP host the pane ran before its respawn to end, and clears what it left: the
+ * pane's next host starts only once the old one is gone (acp-handoff.ts), and Agents Next opens
+ * the view of the new session at the address it finds there.
+ */
+export function waitForOldHost(metadataPath: string, processId: number, timeoutMs = 8_000): void {
+  const deadline = Date.now() + timeoutMs;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (processAlive(processId) && Date.now() < deadline) Atomics.wait(pause, 0, 0, 50);
+  if (!processAlive(processId) && readAcpHostMetadata(metadataPath)?.processId === processId) {
+    rmSync(metadataPath, { force: true });
+  }
+}
+
 export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSessionResumeResult {
-  const pane = resolveResumePane(options.pane, scan(), options.agent);
+  const panes = scan();
+  const pane = resolveResumePane(options.pane, panes, options.agent);
   if (!pane) {
     return {
       ok: false,
@@ -331,6 +381,26 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
   const target = resumeAgent === "kiro" && requested.targetKind === "session-id"
     ? { ...requested, target: kiroResumeSessionId(requested.target, cwd) }
     : requested;
+
+  // Most agents let a second process open a session another has open, and both write it
+  // (docs/acp-view-client.md): a session open elsewhere is gone to there, not opened again.
+  const openIn = target.targetKind === "session-id" && !options.force
+    ? sessionOpenElsewhere(resumeAgent, [target.target, requested.target], pane.tmuxPaneId, panes)
+    : undefined;
+  if (openIn) {
+    return {
+      ok: false,
+      code: "session-open-elsewhere",
+      message: `The session is open in ${describeHolder(openIn)}; pass --force to open it here as well.`,
+      openIn,
+      agent: pane.agent,
+      pane: pane.pane,
+      tmuxPaneId: pane.tmuxPaneId,
+      status: pane.status,
+      target: target.target,
+      targetKind: target.targetKind,
+    };
+  }
 
   if (agentStatusRequiresForce(pane.status) && !options.force) {
     return {
@@ -377,6 +447,9 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     if (target.targetKind === "new-session") {
       clearStateExternalSessionId(resumeAgent, pane.tmuxPaneId);
     }
+    if (options.openIn) setOpenInOption(pane.tmuxPaneId, options.openIn);
+    const hostMetadataPath = acpHostMetadataPath(acpHostRuntimeTempDir(), pane.tmuxPaneId);
+    const oldHost = readAcpHostMetadata(hostMetadataPath);
     // Safe on tmux before 3.8 with Agents Next attached (tmux-respawn.ts).
     respawnPane(pane.tmuxPaneId, ["-k", "-t", pane.tmuxPaneId, "-c", cwd, respawnCommand], (args) => {
       const result = execFileCapture("tmux", args);
@@ -385,6 +458,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
       }
       return result.stdout;
     });
+    if (oldHost) waitForOldHost(hostMetadataPath, oldHost.processId);
     setTmuxPaneCommandMetadata(pane.tmuxPaneId, {
       agent: resumeAgent,
       command,

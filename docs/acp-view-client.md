@@ -14,11 +14,23 @@ first, then names that start with it, names that contain it, descriptions that c
 - **The view's own commands** (src `web/acp-view/src/slash.ts`), under "This view":
   - `/terminal`: shows the pane's terminal again (only in Agents Next on the Mac, through
     `agents-next-action://back-to-terminal`).
+  - `/resume` (and `/chat`, Kiro's name for it): lists this folder's earlier conversations with
+    the pane's agent above the field, newest first, each with its title and how long ago it was
+    used; the open one says "open here", one another pane has open says where ("open in web").
+    Type to filter, ↑/↓, Enter opens, Esc closes. The host lists them (`GET /api/history`, what
+    `agents history --pane` says, the same list as Agents Next's Conversations). Agents Next opens
+    the one picked in the same pane with `agents resume --open-in acp-view`, so the pane's agent
+    starts again in the view on that session and the pane's view follows it; one open in another
+    pane shows that pane instead. An agent at work does not switch (as the view toggle does not).
+    Only in Agents Next on the Mac (its `agentsNextConversation` message handler).
+  - `/new`: a new conversation in the same pane, the same way (`agents resume --new-session`).
   - `/changes`: one review of every file the conversation changed (a file changed in several
     turns spans git's snapshots from the first to the last).
   - `/mode`, `/model`, `/effort`: list the session's choices of that option (ACP config option
     of category mode, model or thought_level, or the session's modes) and set one at once,
-    `/model opus` included. They hide an agent command of the same name.
+    `/model opus` included.
+  Each view command hides an agent command of the same name (ACP runs no TUI command such as
+  Claude's `/resume` or Kiro's `/chat`).
 
 ## What each agent advertises (measured 2026-11-07, Peter's Mac mini)
 
@@ -80,3 +92,24 @@ there. Measured on the Mac mini with the adapters the CLI bundles or starts.
 Gaps to pick from: steering for OpenCode (its server has no steer, so a queue is the honest
 answer), Copilot until it can load sessions, Kiro's context and model switch over ACP, and the
 plan line for the agents marked ?.
+
+## One session opened twice (measured 2026-11-09, Peter's Mac mini)
+
+What each agent does when a session is opened while another process has it open: a second TUI
+(`--resume` of the same id in another pane), and an ACP adapter's `session/load` (and a prompt)
+while the TUI has it. Tested on a private tmux server with a throwaway project.
+
+| Agent | TUI + TUI | TUI + ACP `session/load` | What marks a session as open |
+| --- | --- | --- | --- |
+| Claude 2.1.319 | Allowed: both write the same transcript; the second only says another process has Remote Control | Allowed: claude-agent-acp loads it and its prompt is appended while the TUI has it open | No lock. Each interactive process writes `~/.claude/sessions/<pid>.json` (`pid`, `sessionId`, `cwd`, `procStart`, `tmux` "session:@window.%pane"); the file stays after the process ends, so only a live pid counts. The ACP adapter's process writes none |
+| Codex 0.167 | No conflict: both TUIs join the one managed app-server daemon and share the thread live (each sees the other's turns) | Refused by a second app-server (codex-acp starting its own `codex app-server`, or another pane's `codex-session`): `This Codex session is in use by another Codex client …` (`thread_active_writer`) | `~/.codex/thread-writer-locks/<thread>.lock`: an empty file the writing app-server holds open (`lsof` names it) |
+| Kiro 3.1 | Refused: `Session is open in another terminal (PID n)`, and the second TUI then sits at "Initializing" | Allowed: `kiro-cli acp --agent-engine v3` loads the session and runs a prompt in it while the TUI holds the lock (two writers) | `{"pid":…,"started_at":…}` in `<workspace hash>/<session>/.lock` (Kiro 3) or `cli/<session>.lock` (Kiro 2). A TUI killed with its pane can hold it a few seconds longer |
+| Copilot 0.0.406 | Allowed, no warning | Cannot be tried: its ACP has no `session/load` (`Method not found`) | None found: `session-state/<id>/` holds `events.jsonl` and `workspace.yaml`, `open-sessions-state.json` stayed `{}`. Copilot downloads 1.0.x by itself (1.0.107 here), but the Homebrew binary keeps running 0.0.406, so a newer check was not seen |
+| Pi 1.4.0 | Allowed, no warning | Allowed (pi-acp 0.0.34) | None |
+| OpenCode 1.18.21 | Allowed, no warning | Allowed (`opencode acp`) | None (its SQLite store) |
+
+So only Kiro's TUI and Codex refuse a second writer, and Kiro's ACP agent does not. Agents Next
+and `agents resume` therefore decide for themselves whether a session is open elsewhere
+(src/session-holders.ts): the agent panes' own sessions (what their hooks report), Kiro's
+locks, Codex's writer locks and Claude's process records, each held by a live process, located
+to the pane whose process tree holds it.

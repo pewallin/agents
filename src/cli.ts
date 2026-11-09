@@ -234,6 +234,7 @@ const [
   doneMod,
   codexSessionMod,
   codexSharedAppServer,
+  sessionHolders,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -251,11 +252,13 @@ const [
   import("./done.js"),
   import("./codex-session.js"),
   import("./codex-shared-app-server.js"),
+  import("./session-holders.js"),
 ]);
 
 const { Command } = commander;
 const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
+const { markOpenElsewhere, describeHolder } = sessionHolders;
 const { reportState, reportContext, reportContributorState, clearPrimaryState, getAgentStateEntry } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks, shadowingAgentsOnPath, hookRuntimeOwner, setupMcpServer, uninstallMcpServer, doctorMcpServer } = setupMod;
 const hookLogHint = () => "logs/hooks.log in the agents home";
@@ -780,6 +783,8 @@ program
   .option("--json", "Output as JSON")
   .action((opts) => {
     const groups = getSessionHistory({ agent: opts.agent, pane: opts.pane, cwd: opts.cwd, limit: opts.limit });
+    // With a pane: each session another pane has open says where (openIn), to go there instead.
+    if (opts.pane) markOpenElsewhere(groups, scan());
     if (opts.json) {
       console.log(JSON.stringify(groups, null, 2));
       return;
@@ -801,7 +806,8 @@ program
       for (const session of group.sessions) {
         const marker = session.current ? "*" : " ";
         const model = session.model ? `  ${session.model}` : "";
-        console.log(`${marker} ${formatTs(session.updatedAt)}${model}  ${session.title}`);
+        const elsewhere = session.openIn ? `  (open in ${describeHolder(session.openIn)})` : "";
+        console.log(`${marker} ${formatTs(session.updatedAt)}${model}  ${session.title}${elsewhere}`);
       }
     }
   });
@@ -818,9 +824,14 @@ program
   .option("--session-path <path>", "Session file path to resume")
   .option("--target <value>", "Generic resume target")
   .option("--target-kind <kind>", "Generic resume target kind (session-id, session-path, or new-session)")
-  .option("--force", "Resume even if the live agent is not idle")
+  .option("--force", "Resume even if the live agent is not idle or the session is open in another pane")
+  .option("--open-in <where>", "Where Agents Next shows the resumed agent: acp-view or terminal")
   .option("--json", "Output as JSON")
   .action((opts) => {
+    if (opts.openIn !== undefined && opts.openIn !== "acp-view" && opts.openIn !== "terminal") {
+      console.error("--open-in is acp-view or terminal");
+      process.exit(2);
+    }
     const targetKind = opts.targetKind === "session-path" || opts.targetKind === "session-id" || opts.targetKind === "new-session"
       ? opts.targetKind
       : undefined;
@@ -835,6 +846,7 @@ program
       target: opts.target,
       targetKind,
       force: !!opts.force,
+      openIn: opts.openIn,
     });
 
     if (opts.json) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
-import { allCommands, choiceFor, filterCommands, needsInput, optionTarget, slashDraft, viewCommands } from "./slash";
+import { allCommands, choiceFor, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands } from "./slash";
 
 const model: SessionConfigOption = {
   id: "model", name: "Model", type: "select", category: "model", currentValue: "sonnet",
@@ -68,3 +68,27 @@ describe("needsInput", () => {
     expect(needsInput({ name: "init", description: "" })).toBe(false);
   });
 });
+
+describe("conversation commands", () => {
+  it("offers /resume, /chat and /new where the app can open a conversation, hiding the agent's own", () => {
+    const view = viewCommands({ configOptions: [], inApp: true, conversations: true });
+    expect(view.map((command) => [command.name, command.view])).toEqual([
+      ["terminal", "terminal"], ["resume", "resume"], ["chat", "resume"], ["new", "new"], ["changes", "changes"],
+    ]);
+    const all = allCommands([
+      { name: "chat", description: "Kiro's sessions" },
+      { name: "resume", description: "Claude's picker" },
+      { name: "compact", description: "Free up context" },
+    ], view);
+    expect(all.filter((command) => command.name === "chat" || command.name === "resume").every((command) => command.view === "resume")).toBe(true);
+    expect(all.map((command) => command.name)).toContain("compact");
+    expect(viewCommands({ configOptions: [], inApp: true }).map((command) => command.name)).not.toContain("resume");
+  });
+
+  it("lets /resume pick from a list and runs /new at once", () => {
+    expect(viewCommandPicks("resume", null)).toBe(true);
+    expect(viewCommandPicks("new", null)).toBe(false);
+    expect(viewCommandPicks("model", optionTarget("model", [model]))).toBe(true);
+  });
+});
+

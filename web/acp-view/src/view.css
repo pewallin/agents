@@ -269,6 +269,9 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .pop.slash { width: 460px; max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain; }
 .pop.slash .it .p { flex: none; max-width: 55%; }
 .pop.slash .it small { max-width: none; min-width: 0; flex: 1; text-align: right; }
+.pop.slash .it.conv .ct { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop.slash .it.conv small { flex: none; }
+.pop.slash .it.status { color: var(--faint); }
 .note-line { align-self: flex-start; font-size: calc(var(--fs) - 1.5px); color: var(--dim); padding: 0 12px 6px; }
 
 /* review beside the conversation: a head with the files and their counts, then every file in one

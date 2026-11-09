@@ -88,7 +88,8 @@ Dashboard and inspection:
 agents [watch [seconds]]    Live dashboard (default command)
 agents ls [--json]          One-shot list; interactive picker on a TTY
 agents runtime --json       Reconciled runtime state per pane (--pane %N, repeatable)
-agents history              Past sessions per agent and cwd (--agent, --cwd, --pane, --limit, --json)
+agents history              Past sessions per agent and cwd (--agent, --cwd, --pane, --limit, --json);
+                            with --pane, a session another pane has open says where (openIn)
 agents usage --json         Provider quota windows (Codex, Claude, Copilot, Kiro)
 agents doctor [--json]      Integration coverage and hook runtime checks
 ```
@@ -100,7 +101,10 @@ agents ws [profile] [args...]   New tmux window: agent pane plus the profile's l
                                 (-n name, -l layout, --agent-only, --tmux-session, --json, --list-profiles)
 agents back                     Jump back to where you were before the last jump from the dashboard
 agents resume --pane %N         Respawn a pane's agent on a session: --session <id> | --session-path
-                                | --new-session [--prompt]; --profile, --agent; --force if not idle
+                                | --new-session [--prompt]; --profile, --agent; --open-in acp-view|terminal
+                                (where Agents Next shows it). Refuses a session another pane has open
+                                (session-open-elsewhere, naming the pane) and an agent that is not idle,
+                                unless --force
 ```
 
 Integrations:
@@ -217,7 +221,9 @@ and the effort. Kiro's `-a` / `--trust-all-tools` and OpenCode's `--auto` make t
 each tool call the agent asks about.
 
 `agents resume` wraps agents in these automatically; `agents acp-restart` converts an agent that
-was started without one, on the same session.
+was started without one, on the same session. In the view, `/resume` (or `/chat`) lists the
+folder's earlier conversations and `/new` starts one; Agents Next opens the one picked in the same
+pane, which stays in the view (docs/acp-view-client.md).
 
 The host also keeps a per-pane message queue that survives reloads, routes steering (ACP
 `_session/steering` for Codex and Claude, the steer inbox for Pi, queued otherwise), and serves

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { AcpActivity, OPEN_ELSEWHERE_CODE, OPEN_ELSEWHERE_REASON, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, hostPage, rankFiles, readAcpHostMetadata, startAcpHost, withAgentName, type AcpHost } from "./acp-host.js";
+import { AcpActivity, OPEN_ELSEWHERE_CODE, OPEN_ELSEWHERE_REASON, SessionTracker, TAKEN_OVER_CLOSE_CODE, TAKEN_OVER_METHOD, hostPage, pickPaneHistory, rankFiles, withCurrentSession, readAcpHostMetadata, startAcpHost, withAgentName, type AcpHost, type PaneHistory } from "./acp-host.js";
 
 // A stand-in agent: answers each JSON-RPC line with an echo of its method.
 const ECHO_AGENT = `
@@ -354,6 +354,35 @@ describe("acp-host", () => {
     expect(await (await fetch(`${h.url}/api/session`, { headers: auth })).json()).toEqual({ sessionId: "t1", persisted: true, busy: true });
   });
 
+  it("lists the pane's conversations for the view's /resume, to a page with the token", async () => {
+    const asked: number[] = [];
+    const history: PaneHistory = {
+      agent: "claude", currentSessionId: "s2", hasMore: false,
+      sessions: [{ sessionId: "s2", title: "Now", updatedAt: 20, current: true }, { sessionId: "s1", title: "Before", updatedAt: 10, openIn: { pane: "%7", window: "web" } }],
+    };
+    host = await startAcpHost({
+      paneId: "%42",
+      agent: { id: "test-acp", name: "Test" },
+      runtimeTempDir: join(dir, "rt"),
+      webRoot: join(dir, "web"),
+      cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", ECHO_AGENT], env: process.env },
+      history: async (limit) => { asked.push(limit); return history; },
+    });
+    const h = host;
+    expect((await fetch(`${h.url}/api/history`)).status).toBe(401);
+    const answer = await fetch(`${h.url}/api/history?limit=7`, { headers: { Authorization: `Bearer ${h.token}` } });
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual(history);
+    expect(asked).toEqual([7]);
+  });
+
+  it("says a pane without its agent's history has none to list", async () => {
+    const h = await start();
+    const answer = await fetch(`${h.url}/api/history`, { headers: { Authorization: `Bearer ${h.token}` } });
+    expect(answer.status).toBe(404);
+  });
+
   it("follows the agent's state file and tells the views when it changes", async () => {
     const stateFile = join(dir, "codex-%42.json");
     writeFileSync(stateFile, JSON.stringify({ state: "idle", ts: 1 }));
@@ -432,3 +461,57 @@ describe("acp-host", () => {
     expect(new URLSearchParams(page.hash.slice(1)).get("token")).toBe("a+b");
   });
 });
+
+describe("pickPaneHistory", () => {
+  const output = JSON.stringify([
+    { agent: "claude", cwd: "/p", sessions: [{ sessionId: "other", title: "Folder only", updatedAt: 1 }] },
+    {
+      agent: "claude", cwd: "/p", tmuxPaneId: "%42", currentSessionId: "s2", hasMore: true,
+      sessions: [
+        { sessionId: "s2", title: "Now", shortTitle: "Now", updatedAt: 20, current: true, resumeTarget: "s2", resumeTargetKind: "session-id" },
+        { sessionId: "s1", title: "Before", updatedAt: 10, openIn: { pane: "%7", window: "web" } },
+        { title: "no id" },
+      ],
+    },
+    { agent: "codex", cwd: "/p", sessions: [{ sessionId: "c", title: "Codex", updatedAt: 5 }] },
+  ]);
+
+  it("takes the agent's group of the pane, with what the view needs of each conversation", () => {
+    expect(pickPaneHistory(output, "%42", "claude")).toEqual({
+      agent: "claude", currentSessionId: "s2", hasMore: true,
+      sessions: [
+        { sessionId: "s2", title: "Now", updatedAt: 20, current: true, resumeTarget: "s2", resumeTargetKind: "session-id" },
+        { sessionId: "s1", title: "Before", updatedAt: 10, openIn: { pane: "%7", window: "web" } },
+      ],
+    });
+  });
+
+  it("falls back to the agent's group for the folder, and to none", () => {
+    expect(pickPaneHistory(output, "%9", "claude").sessions.map((session) => session.sessionId)).toEqual(["other"]);
+    expect(pickPaneHistory(output, "%42", "kiro")).toEqual({ agent: "kiro", currentSessionId: null, hasMore: false, sessions: [] });
+    expect(() => pickPaneHistory("not json", "%42", "claude")).toThrow(/no JSON/);
+  });
+});
+
+describe("withCurrentSession", () => {
+  const history: PaneHistory = {
+    agent: "kiro", currentSessionId: null, hasMore: false,
+    sessions: [
+      { sessionId: "a", title: "A", updatedAt: 3, current: true },
+      { sessionId: "b", title: "B", updatedAt: 2, openIn: { pane: "%9" } },
+      { sessionId: "c", title: "C", updatedAt: 1 },
+    ],
+  };
+
+  it("marks the session the host has open as the current one, the only one", () => {
+    const marked = withCurrentSession(history, "b");
+    expect(marked.currentSessionId).toBe("b");
+    expect(marked.sessions).toEqual([
+      { sessionId: "a", title: "A", updatedAt: 3 },
+      { sessionId: "b", title: "B", updatedAt: 2, current: true },
+      { sessionId: "c", title: "C", updatedAt: 1 },
+    ]);
+    expect(withCurrentSession(history, null)).toBe(history);
+  });
+});
+

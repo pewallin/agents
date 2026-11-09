@@ -23,7 +23,8 @@ import { quoted } from "./compose";
 import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
 import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine, WorkerStrip } from "./coordination-view";
 import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
-import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
+import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
+import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import "./view.css";
 
@@ -742,7 +743,7 @@ async function hostJson<T>(path: string, body?: unknown): Promise<T> {
 };
 
 /** Sends a message to Agents Next, if the view is in it. */
-function postToApp(handler: "agentsNextACPLink" | "agentsNextACPQuickLook", body: Record<string, unknown>): boolean {
+function postToApp(handler: "agentsNextACPLink" | "agentsNextACPQuickLook" | "agentsNextConversation", body: Record<string, unknown>): boolean {
   const handlers = (window as unknown as { webkit?: { messageHandlers?: Record<string, { postMessage: (body: unknown) => void } | undefined> } }).webkit?.messageHandlers;
   const target = handlers?.[handler];
   if (!target) return false;
@@ -754,6 +755,21 @@ function postToApp(handler: "agentsNextACPLink" | "agentsNextACPQuickLook", body
 function inMacApp(): boolean {
   return Boolean((window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }).webkit?.messageHandlers?.agentsNextACPLink);
 }
+
+/** Whether Agents Next opens another conversation in the pane for the view (/resume, /new): it
+ *  runs the resume its Conversations runs, and the pane stays in the view. */
+function conversationsInApp(): boolean {
+  return Boolean((window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }).webkit?.messageHandlers?.agentsNextConversation);
+}
+
+/** A conversation Agents Next is opening in the pane: the view says so, calmly, until the app
+ *  shows the view of it (the pane's agent starts again, and its host with it). The app calls
+ *  __agentsNextConversationFailed when it did not (with why, or null when it showed the pane that
+ *  has the conversation), and the view is back as it was. */
+const useOpeningConversation = create<{ text: string | null; failure: string | null }>(() => ({ text: null, failure: null }));
+(window as unknown as { __agentsNextConversationFailed: (message: string | null) => void }).__agentsNextConversationFailed = (message) => {
+  useOpeningConversation.setState({ text: null, failure: message || null });
+};
 
 type DictationState = "idle" | "recording" | "transcribing";
 
@@ -784,7 +800,27 @@ function useAppDictation(onText: (text: string) => void): { available: boolean; 
   };
 }
 
-type SlashItem = { kind: "command"; command: SlashCommand } | { kind: "choice"; choice: Choice; current: boolean };
+type SlashItem =
+  | { kind: "command"; command: SlashCommand }
+  | { kind: "choice"; choice: Choice; current: boolean }
+  | { kind: "conversation"; conversation: PaneConversation }
+  /** A line of the list that is not a choice: loading, nothing there. */
+  | { kind: "status"; text: string };
+
+/** The pane's conversations while /resume lists them, asked of the host each time it opens. */
+function usePaneHistory(active: boolean): PaneHistory | { problem: string } | null {
+  const [history, setHistory] = useState<PaneHistory | { problem: string } | null>(null);
+  useEffect(() => {
+    if (!active) { setHistory(null); return; }
+    let cancelled = false;
+    hostJson<PaneHistory>("/api/history?limit=50").then(
+      (value) => { if (!cancelled) setHistory(value); },
+      (error: unknown) => { if (!cancelled) setHistory({ problem: error instanceof Error ? error.message : String(error) }); },
+    );
+    return () => { cancelled = true; };
+  }, [active]);
+  return history;
+}
 
 /** What @ can add: the project's files, and the other panes of the pane's tmux session. */
 function useMentionSearch(query: string | null): MentionHit[] {
@@ -959,16 +995,33 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   const [selectedSlash, setSelectedSlash] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const commands = useMemo(
-    () => allCommands(agentCommands, viewCommands({ configOptions, modes, inApp: inMacApp() })),
+    () => allCommands(agentCommands, viewCommands({ configOptions, modes, inApp: inMacApp(), conversations: conversationsInApp() })),
     [agentCommands, configOptions, modes],
   );
   const slash = slashDraft(draft, caret);
   const slashCommand = slash?.stage === "args" ? commands.find((command) => command.name === slash.name) : undefined;
   const slashTarget = slashCommand?.view ? optionTarget(slashCommand.view, configOptions, modes) : null;
+  const pickingConversation = !slashClosed && slash?.stage === "args" && slashCommand?.view === "resume";
+  const history = usePaneHistory(pickingConversation);
+  const conversationItems = (args: string): SlashItem[] => {
+    if (!history) return [{ kind: "status", text: "Loading conversations…" }];
+    if ("problem" in history) return [{ kind: "status", text: `The conversations could not be listed: ${history.problem}` }];
+    const found = filterConversations(history.sessions, args);
+    if (found.length > 0) return found.map((conversation): SlashItem => ({ kind: "conversation", conversation }));
+    return [{ kind: "status", text: args.trim() ? `No conversation matches "${args.trim()}".` : `No earlier conversations with ${agentName} in this folder.` }];
+  };
   const slashItems: SlashItem[] = slashClosed || !slash ? []
     : slash.stage === "name" ? filterCommands(commands, slash.query).map((command): SlashItem => ({ kind: "command", command }))
+    : pickingConversation ? conversationItems(slash.args)
     : slashTarget ? filterChoices(slashTarget.choices, slash.args).map((choice): SlashItem => ({ kind: "choice", choice, current: choice.value === slashTarget.current }))
     : [];
+  // The app could not open a conversation: the view is back, and says why.
+  const openFailure = useOpeningConversation((s) => s.failure);
+  useEffect(() => {
+    if (!openFailure) return;
+    setNotice(openFailure);
+    useOpeningConversation.setState({ failure: null });
+  }, [openFailure]);
   const slashHint = !slashClosed && slash?.stage === "args" && !slash.args && !slashTarget ? slashCommand?.hint : undefined;
   useEffect(() => {
     if (!notice) return;
@@ -1013,9 +1066,45 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     });
   };
 
+  /** Another conversation in the pane: the app opens it (as its Conversations does) and the pane
+   *  stays in the view. An agent at work is not switched, as the view toggle does not. */
+  const switchBlocked = prompting || working || asking;
+  const busyLine = `${agentName} is working – switch conversations when it is done.`;
+  const openConversation = (conversation: PaneConversation) => {
+    const pick = pickConversation(conversation);
+    if (pick.kind === "current") { setField(""); setNotice("That conversation is the one open here."); return; }
+    if (pick.kind === "show") { setField(""); setNotice(null); postToApp("agentsNextConversation", { action: "show", pane: pick.pane }); return; }
+    if (pick.kind === "elsewhere") { setNotice(`That conversation is ${pick.label}: close it there to open it here.`); return; }
+    if (switchBlocked) { setNotice(busyLine); return; }
+    setField("");
+    setNotice(null);
+    useOpeningConversation.setState({ text: `Opening ${conversation.title}…`, failure: null });
+    postToApp("agentsNextConversation", {
+      action: "open",
+      agent: history && !("problem" in history) ? history.agent : undefined,
+      sessionId: conversation.sessionId,
+      title: conversation.title,
+      resumeTarget: conversation.resumeTarget ?? conversation.sessionId,
+      resumeTargetKind: conversation.resumeTargetKind ?? "session-id",
+    });
+  };
+
   /** Runs one of the view's own commands; a failed one keeps the field and says why. */
   const runView = (id: ViewCommandId, arg: string) => {
     const done = () => { setField(""); setNotice(null); };
+    if (id === "resume") {
+      // Enter with nothing in the list to pick: the list shows what is there.
+      if (!arg.trim()) { setField(`/${slashCommand?.name ?? "resume"} `); return; }
+      setNotice(`No conversation matches "${arg.trim()}".`);
+      return;
+    }
+    if (id === "new") {
+      if (switchBlocked) { setNotice(busyLine); return; }
+      done();
+      useOpeningConversation.setState({ text: "Starting a new conversation…", failure: null });
+      postToApp("agentsNextConversation", { action: "new" });
+      return;
+    }
     if (id === "terminal") {
       done();
       window.location.href = "agents-next-action://back-to-terminal";
@@ -1042,9 +1131,11 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
 
   /** Tab on a command puts it in the field; Enter also runs it when it needs nothing more. */
   const pickSlash = (item: SlashItem, run: boolean) => {
+    if (item.kind === "status") return;
+    if (item.kind === "conversation") { openConversation(item.conversation); return; }
     if (item.kind === "choice") { if (slashCommand?.view) runView(slashCommand.view, item.choice.value); return; }
     const { command } = item;
-    const needsMore = command.view ? optionTarget(command.view, configOptions, modes) !== null : needsInput(command);
+    const needsMore = command.view ? viewCommandPicks(command.view, optionTarget(command.view, configOptions, modes)) : needsInput(command);
     if (run && !needsMore) {
       if (command.view) runView(command.view, "");
       else sendText(`/${command.name}`, "send");
@@ -1172,18 +1263,35 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
         {slashItems.length > 0 && (
           <div className="pop slash" role="listbox" aria-label="Commands">
             {slashItems.map((item, index) => {
-              const group = item.kind === "choice" ? `/${slashCommand?.name}` : item.command.view ? "This view" : agentName;
+              const groupOf = (entry: SlashItem) => entry.kind === "command" ? (entry.command.view ? "This view" : agentName) : `/${slashCommand?.name}`;
+              const group = groupOf(item);
               const previous = slashItems[index - 1];
-              const previousGroup = previous && (previous.kind === "choice" ? group : previous.command.view ? "This view" : agentName);
+              const previousGroup = previous && groupOf(previous);
+              const key = item.kind === "choice" ? `c-${item.choice.value}` : item.kind === "conversation" ? `s-${item.conversation.sessionId}`
+                : item.kind === "status" ? "status" : `${item.command.view ? "v" : "a"}-${item.command.name}`;
+              if (item.kind === "status") {
+                return (
+                  <div key={key} style={{ display: "contents" }}>
+                    {group !== previousGroup && <div className="gh">{group}</div>}
+                    <div className="it status" aria-live="polite">{item.text}</div>
+                  </div>
+                );
+              }
               return (
-                <div key={item.kind === "choice" ? `c-${item.choice.value}` : `${item.command.view ? "v" : "a"}-${item.command.name}`} style={{ display: "contents" }}>
+                <div key={key} style={{ display: "contents" }}>
                   {group !== previousGroup && <div className="gh">{group}</div>}
-                  <div role="option" aria-selected={index === selectedSlash} className={`it${index === selectedSlash ? " sel" : ""}`}
+                  <div role="option" aria-selected={index === selectedSlash} className={`it${item.kind === "conversation" ? " conv" : ""}${index === selectedSlash ? " sel" : ""}`}
                     ref={index === selectedSlash ? (element) => element?.scrollIntoView({ block: "nearest" }) : undefined}
                     onMouseDown={(event) => { event.preventDefault(); pickSlash(item, true); }} onMouseEnter={() => setSelectedSlash(index)}>
                     {item.kind === "choice"
                       ? <><span>{item.choice.name}</span>{item.current && <small>current</small>}</>
-                      : <><span className="p">/{item.command.name}</span>{(item.command.description || item.command.hint) && <small title={item.command.description}>{item.command.description || item.command.hint}</small>}</>}
+                      : item.kind === "conversation"
+                        ? <><span className="ct" title={item.conversation.title}>{item.conversation.title}</span>
+                          <small>{[
+                            item.conversation.current ? "open here" : item.conversation.openIn ? openInLabel(item.conversation.openIn) : null,
+                            relativeTime(item.conversation.updatedAt),
+                          ].filter(Boolean).join(" · ")}</small></>
+                        : <><span className="p">/{item.command.name}</span>{(item.command.description || item.command.hint) && <small title={item.command.description}>{item.command.description || item.command.hint}</small>}</>}
                   </div>
                 </div>
               );
@@ -1836,6 +1944,7 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
   const [takeOvers, setTakeOvers] = useState(0);
   const takeOverHere = () => { setOpenElsewhere(false); setTakenOver(false); setTakeOvers((count) => count + 1); };
   const [loaded, setLoaded] = useState(false);
+  const opening = useOpeningConversation((s) => s.text);
   const session = useMemo(() => token
     ? connectSession({
       url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`,
@@ -1870,6 +1979,9 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
     return () => { cancelled = true; };
   }, [session, info.agent.name]);
 
+  // Another conversation is opening in the pane: its connection ends as the pane's agent starts
+  // again, which is no error to show.
+  if (opening) return <Opening text={opening} />;
   if (cannotLoad) {
     const version = cannotLoad.agentInfo?.version;
     // Copilot's changelog has ACP sessions resumed from 1.0.95 (0.0.406 cannot load one).

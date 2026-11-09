@@ -4,7 +4,7 @@
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from "@agentclientprotocol/sdk";
 
 /** A command the view runs itself, not the agent. */
-export type ViewCommandId = "terminal" | "changes" | "mode" | "model" | "effort";
+export type ViewCommandId = "terminal" | "changes" | "mode" | "model" | "effort" | "resume" | "new";
 
 export interface SlashCommand {
   name: string;
@@ -54,9 +54,19 @@ export function viewCommands(context: {
   modes?: SessionModeState | null;
   /** The view is in Agents Next, which can show the pane's terminal again. */
   inApp: boolean;
+  /** Agents Next can open another conversation in the pane (conversations.ts). */
+  conversations?: boolean;
 }): SlashCommand[] {
   const commands: SlashCommand[] = [];
   if (context.inApp) commands.push({ name: "terminal", description: "Show the agent's terminal in this pane", view: "terminal" });
+  if (context.conversations) {
+    // /chat is Kiro's name for it; both hide the agent's own, which ACP does not run.
+    commands.push(
+      { name: "resume", description: "Open an earlier conversation in this pane", view: "resume" },
+      { name: "chat", description: "Open an earlier conversation in this pane (as /resume)", view: "resume" },
+      { name: "new", description: "Start a new conversation in this pane", view: "new" },
+    );
+  }
   commands.push({ name: "changes", description: "Review the files changed in this conversation", view: "changes" });
   for (const spec of OPTION_COMMANDS) {
     const target = optionTarget(spec.id, context.configOptions, context.modes);
@@ -127,6 +137,12 @@ export function choiceFor(choices: Choice[], arg: string): Choice | undefined {
   if (exact) return exact;
   const matching = filterChoices(choices, lower);
   return matching.length === 1 ? matching[0] : undefined;
+}
+
+/** Whether a view command lists choices to pick from after its name (an option's values, the
+ *  conversations of /resume) rather than running at once. */
+export function viewCommandPicks(id: ViewCommandId, target: OptionTarget | null): boolean {
+  return id === "resume" || target !== null;
 }
 
 /** Whether a command must have something written after it before it runs: it has a hint that

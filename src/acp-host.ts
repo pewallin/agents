@@ -13,7 +13,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, re
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
-import { getBuildInfo, getStateDir } from "./paths.js";
+import { getBuildInfo, getSelfArgv, getStateDir } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
@@ -85,6 +85,96 @@ export interface AcpHostOptions {
   /** Starts the first turn of a session that is not on disk yet (Codex: on the app-server), and
    *  resolves once a view can load it. */
   startFirstTurn?: (sessionId: string, text: string) => Promise<void>;
+  /** The agent name of the pane's conversations in `agents history` (its state agent: claude,
+   *  kiro, …), for the view's /resume. */
+  historyAgent?: string;
+  /** The pane's conversations; defaults to `agents history` for the pane (paneHistory). */
+  history?: (limit: number) => Promise<PaneHistory>;
+}
+
+/** The pane's conversations with its agent, as the view's /resume lists them: what `agents
+ *  history --pane` says of this agent, the same list as Agents Next's Conversations. */
+export interface PaneHistory {
+  agent: string;
+  currentSessionId: string | null;
+  hasMore: boolean;
+  sessions: Array<{
+    sessionId: string;
+    title: string;
+    /** Seconds since 1970. */
+    updatedAt: number;
+    current?: boolean;
+    resumeTarget?: string;
+    resumeTargetKind?: string;
+    /** Another pane (or process) has it open (session-holders.ts). */
+    openIn?: { pane?: string; session?: string; window?: string; pid?: number };
+  }>;
+}
+
+interface HistoryGroupPayload {
+  agent?: unknown;
+  tmuxPaneId?: unknown;
+  currentSessionId?: unknown;
+  hasMore?: unknown;
+  sessions?: unknown;
+}
+
+/** The group of `agents history --json` output for `agent` in `paneId`: the pane's own, else the
+ *  agent's group for the folder. */
+export function pickPaneHistory(output: string, paneId: string, agent: string): PaneHistory {
+  let groups: HistoryGroupPayload[] = [];
+  try {
+    const value = JSON.parse(output) as unknown;
+    if (Array.isArray(value)) groups = value as HistoryGroupPayload[];
+  } catch {
+    throw new Error("agents history answered no JSON");
+  }
+  const ofAgent = groups.filter((group) => group.agent === agent);
+  const group = ofAgent.find((entry) => entry.tmuxPaneId === paneId) ?? ofAgent[0];
+  const sessions = Array.isArray(group?.sessions) ? group.sessions as PaneHistory["sessions"] : [];
+  return {
+    agent,
+    currentSessionId: typeof group?.currentSessionId === "string" ? group.currentSessionId : null,
+    hasMore: group?.hasMore === true,
+    sessions: sessions
+      .filter((session) => typeof session?.sessionId === "string" && typeof session.title === "string")
+      .map((session) => ({
+        sessionId: session.sessionId,
+        title: session.title,
+        updatedAt: Number(session.updatedAt) || 0,
+        ...(session.current ? { current: true } : {}),
+        ...(session.resumeTarget ? { resumeTarget: session.resumeTarget } : {}),
+        ...(session.resumeTargetKind ? { resumeTargetKind: session.resumeTargetKind } : {}),
+        ...(session.openIn ? { openIn: session.openIn } : {}),
+      })),
+  };
+}
+
+/** The history with the session the host has open as the current one: what the pane's view
+ *  shows, which the agent's hooks may not have reported (Kiro's run in its TUI only). */
+export function withCurrentSession(history: PaneHistory, sessionId: string | null | undefined): PaneHistory {
+  if (!sessionId) return history;
+  return {
+    ...history,
+    currentSessionId: sessionId,
+    sessions: history.sessions.map((session) => {
+      const { current: _current, openIn: _openIn, ...rest } = session;
+      return session.sessionId === sessionId ? { ...rest, current: true } : session.current ? rest : session;
+    }),
+  };
+}
+
+/** `agents history --json --pane <pane> --agent <agent>`, run as its own process: it scans every
+ *  pane, which the host's event loop is not held up by. */
+export function paneHistory(paneId: string, agent: string, limit: number): Promise<PaneHistory> {
+  const [command, ...prefix] = getSelfArgv();
+  const args = [...prefix, "history", "--json", "--pane", paneId, "--agent", agent, "--limit", String(Math.max(1, Math.min(100, limit)))];
+  return new Promise((resolveHistory, reject) => {
+    execFile(command, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, AGENTS_NO_AUTO_SETUP: "1" } }, (error, stdout) => {
+      if (error) { reject(new Error(`agents history failed: ${error.message}`)); return; }
+      try { resolveHistory(pickPaneHistory(stdout, paneId, agent)); } catch (failure) { reject(failure); }
+    });
+  });
 }
 
 export interface AcpHandoffControl {
@@ -171,6 +261,13 @@ const CONTENT_TYPES: Record<string, string> = {
   ".woff2": "font/woff2",
   ".map": "application/json; charset=utf-8",
 };
+
+/** Where the panes' ACP hosts keep their metadata: AGENTS_TMP_DIR, else AGENTS_HOME's
+ *  runtime/tmp, else the app's. `acp-session` and `codex-session` start with this rule, and Agents
+ *  Next finds a pane's host by it (WorkspacePaneRuntimeMetadata). */
+export function acpHostRuntimeTempDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AGENTS_TMP_DIR || join(env.AGENTS_HOME || join(env.HOME || "", ".agents", "agents-app"), "runtime", "tmp");
+}
 
 export function acpHostMetadataPath(runtimeTempDir: string, paneId: string): string {
   const normalized = paneId.trim().replace(/^%/, "pane-").replace(/[^A-Za-z0-9._-]/g, "-");
@@ -348,6 +445,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     return child;
   };
 
+  const historySource = options.history ?? (options.historyAgent ? (limit: number) => paneHistory(options.paneId, options.historyAgent!, limit) : undefined);
   const server: Server = createServer((request, response) => {
     const port = (server.address() as { port: number }).port;
     if (!isLoopbackHost(request.headers.host)) {
@@ -400,6 +498,10 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       startFirstTurn: options.startFirstTurn,
       queue,
       agentName: options.agent.name,
+      history: historySource && (async (limit) => withCurrentSession(
+        await historySource(limit),
+        (await options.currentSession?.().catch(() => undefined))?.id,
+      )),
       log,
     })) return;
     handleHttp(request, response, {
@@ -860,6 +962,7 @@ function handleBridge(
     startFirstTurn?: (sessionId: string, text: string) => Promise<void>;
     queue: MessageQueue;
     agentName: string;
+    history?: (limit: number) => Promise<PaneHistory>;
     log: (message: string) => void;
   },
 ): boolean {
@@ -868,6 +971,7 @@ function handleBridge(
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
     || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
     || path === "/api/session/first-turn" || path === "/api/steer" || path === "/api/queue" || path.startsWith("/api/queue/")
+    || path === "/api/history"
     || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
@@ -937,6 +1041,12 @@ function handleBridge(
   if (queued && request.method === "DELETE" && !queued[2]) {
     const removed = context.queue.remove(queued[1]);
     sendJson(response, removed ? 200 : 409, removed ? {} : { message: "the agent has it already" });
+    return true;
+  }
+  // The pane's conversations with its agent, for the view's /resume.
+  if (path === "/api/history" && request.method === "GET") {
+    if (!context.history) { sendJson(response, 404, { message: `${context.agentName}'s conversations are not known here.` }); return true; }
+    context.history(Number(url.searchParams.get("limit") ?? 30) || 30).then((history) => sendJson(response, 200, history), fail(502));
     return true;
   }
   if (path === "/api/events" && request.method === "GET") {

@@ -20,6 +20,7 @@ import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost, type AcpHost } 
 import { reportViewActivity, type AcpAgentEntry } from "./acp-host-cli.js";
 import type { AcpLaunchSettings } from "./acp-launch-settings.js";
 import { getStateDir } from "./paths.js";
+import { reportState, type ReportedState } from "./state.js";
 
 export interface HandoffSessionInput {
   agent: AcpAgentEntry;
@@ -306,6 +307,13 @@ function startedAsLocked(file: string, pid: number): boolean {
   }
 }
 
+/** The live process that holds a session lock, by its pid and start time; none for a lock
+ *  nothing holds any more. */
+export function liveLockHolder(file: string): number | undefined {
+  const pid = lockOwner(file);
+  return pid !== undefined && processAlive(pid) && startedAsLocked(file, pid) ? pid : undefined;
+}
+
 function lockOwner(file: string): number | undefined {
   try {
     const match = readFileSync(file, "utf8").match(/\d+/);
@@ -458,6 +466,8 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
 
   // `retry`: the refusal passes by itself (the agent is busy or switching): the app waits and asks again.
   const handOff = async (id: string): Promise<{ status: number; message?: string; session?: string | null; retry?: boolean }> => {
+    // The host is opening its session (a pane that starts in the view): the app asks again.
+    if (mode === "view" && hostedStarting) return { status: 409, message: `${agent.name} is opening its session; try again.`, retry: true };
     if (mode === "view") {
       const current = sessionId ?? startedSession ?? null;
       return id === "current" || id === current || (current !== null && continued(id) === current)
@@ -528,8 +538,20 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     }
   };
 
+  /** The pane's session as the agents state has it (`agents ls`, history, the app): an agent whose
+   *  hooks do not run under ACP (Kiro) reports none while the view has it. */
+  const reportSession = (id: string | undefined) => {
+    if (!id) return;
+    try {
+      reportState(agent.stateAgent, paneId, (reportedAgentState(agent.stateAgent, paneId) as ReportedState | undefined) ?? "idle", { externalSessionId: id, activity: false });
+    } catch {
+      // The view works without it.
+    }
+  };
+
   /** The view has the session: the pane shows what happens there, and Enter goes back. */
   const inView = () => {
+    reportSession(sessionId);
     status("in the view");
     transcript.title(agent.name);
     transcript.say(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go on in the terminal.\n`);
@@ -544,6 +566,8 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   process.on("SIGINT", () => { if (mode === "view") void giveBack(); });
   for (const signal of ["SIGTERM", "SIGHUP"] as const) {
     process.on(signal, async () => {
+      // A pane respawned (a resume) starts its next host at once: this one makes way first.
+      await host?.close();
       await stopTui();
       await finish(128 + (signal === "SIGTERM" ? 15 : 1));
     });
@@ -552,9 +576,18 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   // A pane whose terminal went away (the pane closed) takes no more writes: that ends nothing.
   process.stdout.on("error", (error) => log(`the pane took no more output: ${error.message}`));
   // One host per pane: another that still runs for it keeps it, and this agent runs in its terminal.
-  const other = readAcpHostMetadata(acpHostMetadataPath(runtimeTempDir, paneId));
-  const otherRuns = other !== undefined && other.processId !== process.pid && processAlive(other.processId)
-    && isAcpSessionProcess(other.processId);
+  // The host of the pane's command before this one (a respawned pane: a resume) may still be on
+  // its way out; it is waited for.
+  const otherHost = () => {
+    const other = readAcpHostMetadata(acpHostMetadataPath(runtimeTempDir, paneId));
+    return other !== undefined && other.processId !== process.pid && processAlive(other.processId)
+      && isAcpSessionProcess(other.processId) ? other : undefined;
+  };
+  for (const deadline = Date.now() + 5_000; otherHost() && Date.now() < deadline;) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const other = otherHost();
+  const otherRuns = other !== undefined;
   if (otherRuns) {
     log(`host ${other.processId} still serves ${paneId}: no second host`);
     status("no view", `another ACP host (process ${other.processId}) still serves this pane`);
@@ -576,6 +609,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         spareCanHost: agent.spareCanHost === true,
         agentLogFiles: agent.logFiles?.(),
         agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
+        historyAgent: agent.stateAgent,
         onActivity: reportViewActivity(agent.stateAgent, paneId),
         handoff: { inView: () => mode === "view", handOff, giveBack },
         onAgentLine: (line) => { if (mode === "view") transcript.agentLine(line); },
@@ -585,7 +619,10 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
           if (!sessionId) {
             const message = parse(line);
             const prompted = message?.method === "session/prompt" ? message.params?.sessionId : undefined;
-            if (typeof prompted === "string") startedSession = prompted;
+            if (typeof prompted === "string" && startedSession !== prompted) {
+              startedSession = prompted;
+              reportSession(prompted);
+            }
           }
         },
         // While the host starts its own session the view waits for it (404, asked again).
