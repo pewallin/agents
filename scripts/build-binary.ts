@@ -13,14 +13,13 @@
 // The code lives in Bun's virtual file system, so the binary finds extensions/ next to itself
 // (src/paths.ts getResourceRoot). Keep the directory together when installing it.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TARGETS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"] as const;
 type Target = (typeof TARGETS)[number];
-const BRIDGE_WASM = join("bridge-plugin", "target", "wasm32-wasip1", "release", "agents-bridge.wasm");
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -68,7 +67,7 @@ for (const target of targets) {
     minify: true,
     define: {
       AGENTS_BUILD_INFO: JSON.stringify(JSON.stringify(info)),
-      // React's production build: faster, and no development warnings in the dashboard.
+      // React's production build: faster, and no development warnings in `agents ls`.
       "process.env.NODE_ENV": JSON.stringify("production"),
     },
     plugins: [{
@@ -90,10 +89,6 @@ for (const target of targets) {
 
   cpSync(join(ROOT, "extensions"), join(dir, "extensions"), { recursive: true });
   cpSync(ACP_VIEW, join(dir, "acp-view"), { recursive: true });
-  if (existsSync(join(ROOT, BRIDGE_WASM))) {
-    mkdirSync(dirname(join(dir, BRIDGE_WASM)), { recursive: true });
-    cpSync(join(ROOT, BRIDGE_WASM), join(dir, BRIDGE_WASM));
-  }
   writeFileSync(join(dir, "build.json"), JSON.stringify(info, null, 2) + "\n");
   console.log(`${target}: ${join(dir, "agents")} (${version}+${gitCommit.slice(0, 12)}${dirty ? "-dirty" : ""})`);
 }

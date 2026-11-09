@@ -1,5 +1,5 @@
 /**
- * Pi reporting extension: reports agent state to the agents dashboard.
+ * Pi reporting extension: reports agent state to the agents CLI.
  *
  * Pi exposes a richer lifecycle than the older reporter used. We treat:
  * - agent_start / agent_end as the outer prompt lifecycle

@@ -1,12 +1,11 @@
-# Agents — terminal multiplexer AI agent monitor
+# Agents — AI agent runtime for tmux
 
-A CLI tool that monitors AI agent panes across tmux (and soon zellij) sessions, providing a live dashboard with status tracking, preview, grid view, and workspace management.
+A CLI that finds AI agent panes in tmux, tracks their state through the agents' hooks, launches and restores agent workspaces, and serves each pane's ACP view. Agents Next is its UI; the CLI has no dashboard of its own.
 
 ## Quick start
 
 ```bash
 npm run build          # compile TypeScript
-agents                 # live dashboard (default command)
 agents ls              # one-shot agent list
 agents history         # persisted session history across supported agent backends
 agents ws              # create workspace window (uses default profile)
@@ -14,29 +13,20 @@ agents ws -p opencode  # create workspace using named profile
 agents setup           # install hooks for all supported agents
 ```
 
-If launched outside tmux, `agents` auto-creates/attaches a tmux session.
-
-For development with hot reload: `npm run dev:watch`
-
 ## Architecture
 
 ```
 src/
   cli.ts            — entry point, commander subcommands
   shell.ts          — shared exec/execAsync wrapper (single source of truth)
-  constants.ts      — magic numbers, dashboard sizing helpers
-  scanner.ts        — pane discovery, process detection, status detection, filterAgents()
+  constants.ts      — agent display colours for `agents ls`
+  scanner.ts        — pane discovery, process detection, status detection
   state.ts          — read/write ~/.agents/state/ files (hook-reported state)
   setup.ts          — install/uninstall hooks and extensions for each agent
   config.ts         — ~/.agents/config.json (helpers, workspace layouts, profiles)
-  mouse.ts          — SGR mouse tracking via Ink's internal event emitter
   workspace.ts      — tmux workspace creation (new-window + helper splits)
-  grid.ts           — grid view layout computation + tmux pane management
-  zones.ts          — helper zone lifecycle (create/populate/depopulate/destroy)
-  persistence.ts    — preview state save/load (survives HMR + restarts)
-  multiplexer.ts    — Multiplexer interface + auto-detection (tmux vs zellij)
-  mux-tmux.ts       — tmux Multiplexer backend
-  mux-zellij.ts     — zellij Multiplexer backend (talks to bridge plugin via pipe)
+  pane-ops.ts       — switchToPane (through Agents Next, or this tmux client) for `agents ls`
+  tmux-env.ts       — insideTmux()
   codex-session.ts  — a Codex pane's own app-server, shared live with its ACP view; starts its acp-session
   acp-host.ts       — an agent pane's ACP view host: static web client, one adapter per client
   acp-host-cli.ts   — `acp-session --agent <ACP registry id>` and its agent table (adapter, resume
@@ -44,7 +34,6 @@ src/
   acp-handoff.ts    — `acp-session --tui`: an agent without a shared session runs its TUI under
                       a supervisor that hands the session to the ACP view and back
   components/
-    Dashboard.tsx    — main watch-mode UI (Ink/React), preview, grid, sidebar
     AgentTable.tsx   — responsive table with adaptive column widths
     Select.tsx       — interactive one-shot agent picker
 
@@ -56,8 +45,7 @@ extensions/
   kiro/              — Kiro CLI hook script (wired via ~/.kiro/agents/agents-reporting.json and Kiro's default agent setting when unset)
 
 web/acp-view/        — the agent-neutral ACP web view (React, @acp-components); `npm run build:web` → dist-web/
-bridge-plugin/       — Rust WASM plugin for zellij (see bridge-plugin/README.md)
-docs/                — feature plans (zellij-support.md)
+docs/                — feature plans and the ACP view client notes
 ```
 
 ## Key concepts
@@ -68,24 +56,11 @@ docs/                — feature plans (zellij-support.md)
 - **Hook-based** (claude, codex, copilot, pi, opencode, kiro, hermes): Authoritative state from `~/.agents/state/` files, written by agent hooks/extensions via `agents report`.
 - **Process/runtime fallback** (cursor, others): Detects panes by process name and reports conservative activity-derived status without reading terminal content.
 
-**Preview**: The dashboard swaps an agent pane into a split beside itself using `tmux swap-pane`. Pane IDs follow the process (not the position) after a swap. `filterAgents()` in scanner.ts handles re-adding swapped agents to the scan results.
-
-**Grid view**: Shows multiple agent panes simultaneously in a dynamic grid layout. Layouts computed by `computeLayout()` (1-12 agents, tested). Grid panes are created via tmux splits with even distribution. The dashboard pane is part of the grid. Supports scoped (g = current session) and unscoped (G = all agents) modes. Session switching on j/k navigation.
-
-**Helper zones**: Persistent tmux panes in the preview layout that show companion tools (lazygit, yazi, etc.) from the agent's original window. Managed by `zones.ts` — zones are created once and helpers are swapped in/out on agent switch.
-
-**Multiplexer abstraction**: `multiplexer.ts` defines a shared interface. Auto-detects tmux (`$TMUX`) vs zellij (`$ZELLIJ_SESSION_NAME`). Zellij backend uses a WASM bridge plugin for operations the CLI can't do (focus by ID, cross-tab pane movement, PID lookup).
-
 ## Important patterns
 
 - **Shell execution**: All `execSync`/`execAsync` calls go through `shell.ts`. Never import `child_process` directly in other modules.
-- **Constants**: Magic numbers live in `constants.ts` (sidebar width, debounce ms, dashboard sizing). Use `calcDashboardCols()` instead of inline math.
-- **Pane width sync**: `process.stdout.columns` is synced from actual tmux pane width via `getPaneWidth()` because the PTY size often doesn't match after tmux rearranges panes. A `prependListener("resize")` interceptor prevents SIGWINCH from restoring stale values.
-- **Scan sequence**: Async scans use `scanSeq` to discard stale results. Any code that changes preview/grid state must call `doScan()` to invalidate in-flight scans.
-- **Scan filtering**: `filterAgents()` is a pure function that handles self-exclusion, preview pane re-adding, and grid pane re-adding. It's tested independently in `scanner.test.ts`.
-- **Mouse input**: Uses Ink's `internal_eventEmitter` (not `stdin.on("data")`) to avoid conflicts with Ink's paused-mode stdin handling.
 - **tmux window naming**: Must set both `automatic-rename off` AND `allow-rename off` to prevent helper programs (yazi) from overwriting window names via escape sequences. Then explicitly `rename-window`.
-- **tmux hooks**: The correct hook for pane focus changes is `after-select-pane` (NOT `pane-focus-in` which doesn't exist). Used for grid focus tracking.
+- **tmux hooks**: The correct hook for pane focus changes is `after-select-pane` (NOT `pane-focus-in` which doesn't exist).
 
 ## Adding a new agent
 
@@ -110,14 +85,13 @@ The copilot extension (`extensions/copilot/extension.mjs`) uses the `@github/cop
 npm run build        # tsc → dist/
 npm run test         # vitest run (58 tests)
 npm run dev          # tsc --watch
-npm run dev:watch    # vite-node hot reload for watch mode
 npm run build:binary # single executable via Bun → dist-bin/<platform>/ (--target all for every platform)
 npm run build:web    # the ACP web view → dist-web/acp-view (build:binary runs it and ships acp-view/)
 ```
 
 The compiled binary (`scripts/build-binary.ts`) runs without node or node_modules. Its code
 lives in Bun's virtual file system, so anything that needs real files beside the code goes
-through `getResourceRoot()` in `paths.ts` (extensions/, the zellij bridge plugin), and anything
+through `getResourceRoot()` in `paths.ts` (extensions/, acp-view/), and anything
 that starts this CLI again goes through `getSelfArgv()` (never `process.argv[1]`, which is a
 virtual path in the binary). Ship the whole `dist-bin/<platform>/` directory, not just the
 executable: `agents setup` points hooks at its `extensions/`, and `hook-runtime.env` records
@@ -129,9 +103,8 @@ It only refreshes hooks a setup installed: with no `.setup-hash` (never set up, 
 uninstall` took them out) it does nothing, so a user who turned the hooks off keeps them off.
 
 Test files: `src/*.test.ts` (excluded from tsc output via tsconfig.json).
-- `grid.test.ts` — layout computation, geometry, tiling, contiguity (22 tests)
-- `scanner.test.ts` — detector selection, generic detector regexes, filterAgents (27 tests)
-- `state.test.ts` — priority logic, session filtering (9 tests)
+Run `npm test` for the current count; `scanner.test.ts` covers detection and parsing,
+`state.test.ts` hook state and its priorities.
 
 ## Git workflow
 

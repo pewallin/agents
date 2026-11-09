@@ -14,17 +14,5 @@ export function switchBack(): boolean {
 
   exec(`tmux select-window -t ${JSON.stringify(back)} \\; switch-client -t ${JSON.stringify(back)}`);
 
-  // Signal the dashboard to exit fullscreen by sending 's' to a narrow pane.
-  const winRef = back.replace(/\.\d+$/, "");
-  const panes = exec(`tmux list-panes -t ${JSON.stringify(winRef)} -F '#{pane_id}§#{pane_width}' 2>/dev/null`);
-  if (!panes) return true;
-
-  for (const line of panes.split("\n")) {
-    const [paneId, width] = line.split("§");
-    if (paneId && parseInt(width, 10) <= 5) {
-      exec(`tmux send-keys -t ${paneId} s`);
-      break;
-    }
-  }
   return true;
 }

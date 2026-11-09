@@ -46,18 +46,6 @@ export function exec(cmd: string): string {
   }
 }
 
-/** Execute a command with inherited stdio (TTY passthrough).
- *  Required for zellij commands that need terminal access (e.g. float/embed).
- *  Returns the exit code (0 = success). */
-export function execInherit(cmd: string, args: string[]): number {
-  try {
-    const r = spawnSync(cmd, args, { timeout: EXEC_TIMEOUT, stdio: "inherit" });
-    return r.status ?? 1;
-  } catch {
-    return 1;
-  }
-}
-
 /** Execute an interactive binary until it exits, preserving the caller's TTY. */
 export function execFileInheritUntilExit(
   cmd: string,
@@ -131,7 +119,7 @@ export function execFileCapture(cmd: string, args: string[], opts: ExecFileCaptu
 }
 
 /** Async exec — returns stdout trimmed, or "" on error.
- *  If the command produces output but exits with a signal (e.g. zellij pipe),
+ *  If the command produces output but exits with a signal,
  *  returns the captured stdout rather than discarding it. */
 export async function execAsync(cmd: string): Promise<string> {
   try {
@@ -160,6 +148,3 @@ export function gitBranch(dir: string): string | undefined {
   return result.status === 0 && result.stdout ? result.stdout : undefined;
 }
 
-export async function gitBranchAsync(dir: string): Promise<string | undefined> {
-  return (await execFileAsync("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"])) || undefined;
-}

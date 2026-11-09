@@ -3,10 +3,7 @@
 A CLI that finds AI coding agents running in tmux panes, tracks their state through the agents'
 own hooks, launches and restores agent workspaces, and serves a per-pane ACP web view of each
 agent's session. It is the runtime layer of the Agents Next app, which ships a compiled build of
-it, and works on its own as a terminal dashboard.
-
-tmux is the primary backend. zellij (0.44+) is in beta and needs the WASM bridge plugin in
-`bridge-plugin/`; grid view and helper zones are tmux-only.
+it. tmux is the only backend.
 
 ## Install
 
@@ -18,7 +15,7 @@ npm install && npm run build
 npm run build:web     # only needed for the ACP view (dist-web/acp-view)
 npm link
 agents setup          # install hooks for the agents found on this machine
-agents                # dashboard; outside tmux it creates/attaches an `agents` session
+agents ls             # the agents in your tmux panes
 ```
 
 As a single executable (no Node needed at runtime):
@@ -82,10 +79,9 @@ setup` always takes the hooks over. `AGENTS_NO_AUTO_SETUP=1` turns auto-setup of
 
 ## Commands
 
-Dashboard and inspection:
+Inspection:
 
 ```
-agents [watch [seconds]]    Live dashboard (default command)
 agents ls [--json]          One-shot list; interactive picker on a TTY
 agents runtime --json       Reconciled runtime state per pane (--pane %N, repeatable)
 agents history              Past sessions per agent and cwd (--agent, --cwd, --pane, --limit, --json);
@@ -99,7 +95,7 @@ Workspaces and sessions:
 ```
 agents ws [profile] [args...]   New tmux window: agent pane plus the profile's layout
                                 (-n name, -l layout, --agent-only, --tmux-session, --json, --list-profiles)
-agents back                     Jump back to where you were before the last jump from the dashboard
+agents back                     Jump back to where you were before the last jump from `agents ls`
 agents resume --pane %N         Respawn a pane's agent on a session: --session <id> | --session-path
                                 | --new-session [--prompt]; --profile, --agent; --open-in acp-view|terminal
                                 (where Agents Next shows it). Refuses a session another pane has open
@@ -132,26 +128,7 @@ Also: `agents done list|record|update` (persisted Done events and pinned session
 app), `agents target|checkout|session ...` (see [Remote hosts](#remote-hosts)) and `agents
 resurrect ...` (see [tmux-resurrect](#tmux-resurrect)). Every command has `--help`.
 
-### Dashboard keys
-
-| Key | Action |
-| --- | --- |
-| `j`/`k`, `↑`/`↓` | Move selection |
-| `enter` | Jump to the agent's window |
-| `tab`, `space`, click | Focus the agent in preview or grid |
-| `p` / `P` | Preview beside the dashboard (horizontal / vertical) |
-| `g` / `G` | Grid of the session's agents / all agents |
-| `h` | Cycle helper layouts in the preview |
-| `s` | Collapse the dashboard to a narrow sidebar |
-| `S` | Summary view |
-| `n` | New workspace from the selected agent's cwd and session |
-| `x` | Kill the selected workspace |
-| `?` | Key help |
-| `q` | Quit and put panes back |
-
-The preview swaps the agent's pane into the dashboard's window (`tmux swap-pane`) and swaps it
-back on exit. For a global jump-back key: `bind -n M-b run-shell "agents back || tmux
-last-window"`.
+For a global jump-back key: `bind -n M-b run-shell "agents back || tmux last-window"`.
 
 ## Configuration
 
@@ -173,12 +150,6 @@ without a file there is one `claude` profile and built-in `default` and `small` 
       { "command": "$SHELL", "split": "right", "size": "25%" }
     ],
     "small": [{ "command": "lazygit", "split": "right", "size": "35%" }]
-  },
-  "helpers": {
-    "default": [
-      { "process": "lazygit", "split": "left", "size": "20%" },
-      { "process": "yazi", "split": "below", "of": "lazygit", "size": "35%" }
-    ]
   }
 }
 ```
@@ -189,8 +160,6 @@ without a file there is one `claude` profile and built-in `default` and `small` 
   prompt injection then runs commands as you.
 - **workspace**: panes `agents ws` creates around the agent pane. `split` is relative to `of`
   (default: the agent pane); `size` is a tmux `-l` value.
-- **helpers**: panes from the agent's own window, matched by `process`, that the dashboard shows
-  around the preview (`h` cycles layouts).
 
 `agents ws` starts the agent through the shell, so exiting it leaves a usable shell;
 `--agent-only --direct-agent-launch` execs it directly instead.
@@ -351,7 +320,6 @@ session runtime.
 ## Development
 
 ```bash
-npm run dev:watch     # dashboard with hot reload
 npm test              # vitest
 npm run build         # tsc → dist/
 ```

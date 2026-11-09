@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildBranchCache, buildBranchCacheAsync } from "./scanner-discovery.js";
+import { buildBranchCache } from "./scanner-discovery.js";
 
 describe("branch lookup for pane directories", () => {
   let root: string | undefined;
@@ -26,7 +26,6 @@ describe("branch lookup for pane directories", () => {
     mkdirSync(plain);
 
     expect(buildBranchCache(new Set([dir, plain]))).toEqual(new Map([[dir, "trunk"], [plain, undefined]]));
-    expect(await buildBranchCacheAsync(new Set([dir, plain]))).toEqual(new Map([[dir, "trunk"], [plain, undefined]]));
     expect(existsSync(marker)).toBe(false);
   });
 });

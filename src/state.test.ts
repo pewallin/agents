@@ -290,7 +290,6 @@ describe("contributor state overlays", () => {
 describe("runtime state events", () => {
   const primarySurface = `%vitest-events-primary-${Date.now()}`;
   const contributorSurface = `%vitest-events-contrib-${Date.now()}`;
-  const zellijSurface = `terminal_vitest-events-zellij-${Date.now()}`;
 
   afterEach(() => {
     clearContributorState("pi", contributorSurface, "dustbot-sandbox");
@@ -393,20 +392,6 @@ describe("runtime state events", () => {
         state: "idle",
       }),
     ]);
-  });
-
-  it("marks zellij surfaces without leaking tmux naming into the event payload", () => {
-    reportState("opencode", zellijSurface, "idle");
-
-    const event = readRuntimeStateEvents().at(-1);
-    expect(event).toMatchObject({
-      entity: "primary_state",
-      op: "upsert",
-      agent: "opencode",
-      surfaceId: zellijSurface,
-      mux: "zellij",
-    });
-    expect("session" in (event ?? {})).toBe(false);
   });
 });
 

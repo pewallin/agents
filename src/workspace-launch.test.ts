@@ -53,7 +53,6 @@ vi.mock("./config.js", () => ({
         },
       },
     },
-    helpers: {},
     workspace: {},
   }),
   resolveProfile: (profileName?: string) => {
@@ -97,9 +96,8 @@ vi.mock("./scanner.js", () => ({
   scan: scanMock,
 }));
 
-vi.mock("./multiplexer.js", () => ({
-  detectMultiplexer: () => "tmux",
-  getMux: vi.fn(),
+vi.mock("./tmux-env.js", () => ({
+  insideTmux: () => true,
 }));
 
 const { createWorkspace, createWorkspaceOrThrow, resolveWorkspaceLaunch } = await import("./workspace.js");

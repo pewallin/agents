@@ -10,7 +10,7 @@ export type ModelSource = "hook" | "sdk" | "transcript" | "session-log" | "infer
 export interface WorkspaceSnapshot {
   command: string;
   cwd: string;
-  mux?: "tmux" | "zellij";
+  mux?: "tmux";
   sessionName?: string;
 }
 

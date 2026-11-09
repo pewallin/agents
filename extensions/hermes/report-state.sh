@@ -1,12 +1,10 @@
 #!/bin/bash
-# Hermes shell hook: report pane state to the agents dashboard.
+# Hermes shell hook: report pane state to the agents CLI.
 # Hermes passes a normalized JSON payload on stdin. Keep stdout empty because
 # pre_llm_call hooks can inject stdout JSON back into the model context.
 
 if [ -n "$TMUX_PANE" ]; then
   SESSION="$TMUX_PANE"
-elif [ -n "$ZELLIJ_PANE_ID" ]; then
-  SESSION="terminal_${ZELLIJ_PANE_ID}"
 else
   SESSION="default"
 fi

@@ -1,18 +1,13 @@
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { basename, join } from "path";
-import { exec, execAsync, gitBranch } from "./shell.js";
+import { exec, gitBranch } from "./shell.js";
 import { getAgentStateEntry, readStateSnapshot, rebindStateSnapshotToExternalSession } from "./state.js";
-import { getMux, detectMultiplexer } from "./multiplexer.js";
-import { BACK_ENV, switchBack } from "./back.js";
 import type { ModelMetadata, ModelSource, StateSnapshot } from "./state.js";
-import type { MuxPaneInfo } from "./multiplexer.js";
 import { inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, runtimeStateFromAgent } from "./scanner-runtime.js";
 import { mergedContextTokens, resolveModelInfo, stateContext, stateDetail, stateExternalSessionId, stateIntent, stateProvenance, stateResponsePreview, stateTokens, stateWorkspaceCwd } from "./scanner-state-runtime.js";
 import { resolveStatusFromContent } from "./scanner-detection.js";
-import { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
-import type { SiblingPane, WindowSnapshot } from "./pane-ops.js";
-import { buildBranchCache, buildBranchCacheAsync, buildProcessTree, buildProcessTreeAsync, detectAgentProcess, findAgentLeafInTree, findAgentOnTtyProcessInTree, findLeafProcessSync, findOpenCodexSessionIds, findOpenCodexSessionIdsAsync, findPrimaryAgentForReporterInTree } from "./scanner-discovery.js";
+import { buildBranchCache, buildProcessTree, detectAgentProcess, findAgentLeafInTree, findAgentOnTtyProcessInTree, findLeafProcessSync, findOpenCodexSessionIds, findPrimaryAgentForReporterInTree } from "./scanner-discovery.js";
 import type { AgentLeafProcess } from "./scanner-discovery.js";
 import { extractClaudeRenameTitleFromTranscript, extractLatestCodexSessionTitlesFromIndexLines, loadHistoryForAgent, normalizeHistoryCwd, resolveAgentDisplayTitle } from "./scanner-history.js";
 import type { AgentSessionHistoryItem } from "./scanner-history.js";
@@ -23,7 +18,7 @@ export { extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUs
 export { codexStreamDisconnectStatus, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, getDetector, reconcileStaleCodexWorkingState, shouldTreatCodexWorkingAsIdle } from "./scanner-detection.js";
 export { detectAgentProcess, extractOpenCodexSessionIds } from "./scanner-discovery.js";
 export { extractClaudeRenameTitleFromTranscript, extractLatestCodexSessionTitlesFromIndexLines } from "./scanner-history.js";
-export { createPreviewSplit, createSplitPane, findSiblingPanes, focusPane, getPaneHeight, getPaneWidth, joinPane, killPane, killPanes, killWindow, ownPaneId, paneExists, patchSnapshotId, resizePaneWidth, restoreWindowLayout, returnPaneToWindow, showPlaceholder, snapshotWindow, swapPanes, switchToPane } from "./pane-ops.js";
+export { switchToPane } from "./pane-ops.js";
 
 export interface AgentSessionHistoryGroup {
   agent: string;
@@ -344,22 +339,12 @@ export function resolveAgentIntentTitle(paneTitle: string, displayTitle?: string
 
 // Sync version for CLI commands that don't need async
 export function scan(options: { requireProcess?: boolean; excludeProcessIDs?: number[]; reporterProcessID?: number } = {}): AgentPane[] {
-  if (detectMultiplexer() === "zellij") {
-    return processZellijPanes(getMux().listPanes());
-  }
   return scanSync(options);
 }
 
 export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
   if (!paneIds?.length) {
     return scan().map(runtimeStateFromAgent);
-  }
-
-  if (detectMultiplexer() === "zellij") {
-    const filter = new Set(paneIds);
-    return processZellijPanes(getMux().listPanes())
-      .filter((agent) => filter.has(agent.tmuxPaneId))
-      .map(runtimeStateFromAgent);
   }
 
   const raw = exec(
@@ -435,92 +420,6 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
   }
 
   results.sort((a, b) => (paneOrder.get(a.session) ?? Number.MAX_SAFE_INTEGER) - (paneOrder.get(b.session) ?? Number.MAX_SAFE_INTEGER));
-  return results;
-}
-
-// ── Zellij scan path ────────────────────────────────────────────────
-// Single implementation used by both sync and async entry points.
-
-function processZellijPanes(panes: MuxPaneInfo[]): AgentPane[] {
-  const results: AgentPane[] = [];
-  const stateSnapshot = readStateSnapshot();
-
-  for (const p of panes) {
-    let agentName: string | null = null;
-    let processArgs = p.command;
-
-    if (p.pid) {
-      // Check the PID itself first — in zellij the returned PID is often
-      // the agent process directly (not a shell), and its children may be
-      // non-agent subprocesses (e.g. caffeinate, node).
-      processArgs = exec(`ps -p ${p.pid} -o args= 2>/dev/null`);
-      agentName = detectAgentProcess("", processArgs);
-      if (!agentName) {
-        const leafCmd = findLeafProcessSync(String(p.pid));
-        if (leafCmd) agentName = leafCmd;
-      }
-    }
-
-    // Fallback: check the command string from zellij (may include args)
-    if (!agentName && p.command) {
-      agentName = detectAgentProcess("", p.command);
-    }
-
-    if (!agentName) continue;
-
-    const paneRef = `${p.session}:${p.tab}`;
-    const titleClean = cleanTitle(p.title);
-
-    const zellijCwd = p.cwd?.replace(homedir(), "~") || undefined;
-    const observedExternalSessionId = resolveAgentExternalSessionId({
-      processSessionId: externalSessionIdFromProcessArgs(agentName, processArgs),
-    });
-    if (observedExternalSessionId) {
-      rebindStateSnapshotToExternalSession(stateSnapshot, agentName, p.id, observedExternalSessionId);
-    }
-    const content = "";
-    const { status, detail } = resolveStatusFromContent(p.title, 0, agentName, content, p.id, stateSnapshot);
-    const externalSessionId = resolveAgentExternalSessionId({
-      processSessionId: observedExternalSessionId,
-      stateSessionId: stateExternalSessionId(agentName, p.id, stateSnapshot),
-    });
-    const zellijBranch = p.cwd ? gitBranch(p.cwd) : undefined;
-
-    // Prefer rich detail from state (e.g. "reading main.ts") over bare duration
-    const richDetail = stateDetail(agentName, p.id, stateSnapshot);
-    const finalDetail = richDetail || detail;
-    const modelInfo = resolveModelInfo(agentName, p.id, content, stateSnapshot);
-    const tokenInfo = mergedContextTokens(agentName, p.id, content, stateSnapshot);
-    const provenance = stateProvenance(agentName, p.id, stateSnapshot);
-    const displayTitle = resolveAgentDisplayTitle(agentName, p.cwd, externalSessionId, titleClean);
-    const intent = stateIntent(agentName, p.id, stateSnapshot)
-      || resolveAgentIntentTitle(p.title, displayTitle, p.cwd);
-    const responsePreview = stateResponsePreview(agentName, p.id, stateSnapshot);
-
-    results.push({
-      pane: paneRef,
-      paneId: paneRef,
-      tmuxPaneId: p.id,
-      title: displayTitle,
-      ...(intent ? { intent } : {}),
-      ...(responsePreview ? { responsePreview } : {}),
-      agent: friendlyName(agentName),
-      status,
-      cpuPercent: 0,
-      memoryMB: 0,
-      detail: finalDetail,
-      ...modelInfo,
-      ...(externalSessionId ? { externalSessionId } : {}),
-      windowId: paneRef,
-      cwd: zellijCwd,
-      branch: zellijBranch,
-      context: stateContext(agentName, p.id, stateSnapshot),
-      ...tokenInfo,
-      ...provenance,
-    });
-  }
-
-  results.sort((a, b) => a.pane.localeCompare(b.pane));
   return results;
 }
 
@@ -663,197 +562,3 @@ function scanSync(options: { requireProcess?: boolean; excludeProcessIDs?: numbe
   return results;
 }
 
-// Async version for watch mode — doesn't block the Ink render loop
-export async function scanAsync(): Promise<AgentPane[]> {
-  if (detectMultiplexer() === "zellij") {
-    // Zellij scan uses sync subprocess calls (zellij pipe doesn't work
-    // reliably with async exec — the process hangs until timeout).
-    // Use the same code path as scan() for consistency.
-    return processZellijPanes(getMux().listPanes());
-  }
-  const raw = await execAsync(
-    `tmux list-panes -a -F '${TMUX_SCAN_FORMAT}' 2>/dev/null`
-  );
-  if (!raw) return [];
-
-  const records = parseTmuxScanRecords(raw);
-  const tree = await buildProcessTreeAsync();
-  const stateSnapshot = readStateSnapshot();
-  type ParsedPane = {
-    pane: string;
-    title: string;
-    wactStr: string;
-    paneId: string;
-    tmuxPaneId: string;
-    cwdRaw: string;
-    agentName: string;
-    processPid?: number;
-    processArgs?: string;
-    cpuPercent: number;
-    memoryMB: number;
-  };
-  const agentPanes: ParsedPane[] = [];
-  const uniqueCwds = new Set<string>();
-
-  for (const fields of records) {
-    const [pane, pid, title, winname, _fgcmd, wactStr, tty, paneId, tmuxPaneId, cwdRaw, commandContentKind, commandLaunch, agentsUUID, paneDead, workspaceRenderMode] = fields;
-    const session = pane.split(":")[0];
-    if (session.startsWith("_agents_")) continue;
-
-    const pidNum = parseInt(pid, 10) || 0;
-    const leaf = findAgentLeafInTree(pidNum, tree);
-    const ttyMatch = !leaf && tty ? findAgentOnTtyProcessInTree(tty, tree) : null;
-    const matchedProcess = resolveTmuxAgentProcess(
-      leaf ?? ttyMatch,
-      commandContentKind,
-      commandLaunch,
-      hasActiveTmuxMetadataRuntimeEvidence(commandLaunch, tmuxPaneId, stateSnapshot, agentsUUID, paneDead, workspaceRenderMode),
-    );
-    if (!matchedProcess) continue;
-    const agentName = matchedProcess.agentName;
-
-    const resolvedTitle = resolvedPaneTitle(title, winname);
-    agentPanes.push({
-      pane,
-      title: resolvedTitle,
-      wactStr,
-      paneId,
-      tmuxPaneId,
-      cwdRaw,
-      agentName,
-      processPid: matchedProcess.process?.pid,
-      processArgs: matchedProcess.process?.args ?? commandLaunch,
-      cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
-      memoryMB: matchedProcess.process?.memoryMB ?? 0,
-    });
-    if (cwdRaw) uniqueCwds.add(cwdRaw);
-  }
-
-  const branchCache = await buildBranchCacheAsync(uniqueCwds);
-  const openCodexSessionIds = await findOpenCodexSessionIdsAsync(
-    agentPanes
-      .filter((pane) => pane.agentName === "codex")
-      .flatMap((pane) => pane.processPid ? [pane.processPid] : []),
-  );
-
-  const promises = agentPanes.map(async (p) => {
-    const wact = parseInt(p.wactStr, 10) || 0;
-    const content = "";
-    const observedExternalSessionId = resolveAgentExternalSessionId({
-      observedProcessSessionId: p.processPid ? openCodexSessionIds.get(p.processPid) : undefined,
-      processSessionId: externalSessionIdFromProcessArgs(p.agentName, p.processArgs),
-    });
-    if (observedExternalSessionId) {
-      rebindStateSnapshotToExternalSession(stateSnapshot, p.agentName, p.tmuxPaneId, observedExternalSessionId);
-    }
-    const { status, detail } = resolveStatusFromContent(p.title, wact, p.agentName, content, p.tmuxPaneId, stateSnapshot);
-    const richDetail = stateDetail(p.agentName, p.tmuxPaneId, stateSnapshot);
-    const finalDetail = richDetail || detail;
-    const paneShort = p.pane.replace(/\.\d+$/, "");
-    const titleClean = cleanTitle(p.title);
-    const cwd = p.cwdRaw?.replace(homedir(), "~") || undefined;
-    const branch = branchCache.get(p.cwdRaw);
-    const externalSessionId = resolveAgentExternalSessionId({
-      observedProcessSessionId: observedExternalSessionId,
-      stateSessionId: stateExternalSessionId(p.agentName, p.tmuxPaneId, stateSnapshot),
-    });
-    const modelInfo = resolveModelInfo(p.agentName, p.tmuxPaneId, content, stateSnapshot);
-    const tokenInfo = mergedContextTokens(p.agentName, p.tmuxPaneId, content, stateSnapshot);
-    const provenance = stateProvenance(p.agentName, p.tmuxPaneId, stateSnapshot);
-    const displayTitle = resolveAgentDisplayTitle(p.agentName, p.cwdRaw, externalSessionId, titleClean);
-    const intent = stateIntent(p.agentName, p.tmuxPaneId, stateSnapshot)
-      || resolveAgentIntentTitle(p.title, displayTitle, p.cwdRaw);
-    const responsePreview = stateResponsePreview(p.agentName, p.tmuxPaneId, stateSnapshot);
-
-    return {
-      pane: paneShort,
-      paneId: p.paneId,
-      tmuxPaneId: p.tmuxPaneId,
-      title: displayTitle,
-      ...(intent ? { intent } : {}),
-      ...(responsePreview ? { responsePreview } : {}),
-      agent: friendlyName(p.agentName),
-      status,
-      cpuPercent: p.cpuPercent,
-      memoryMB: p.memoryMB,
-      detail: finalDetail,
-      ...modelInfo,
-      ...(externalSessionId ? { externalSessionId } : {}),
-      windowId: p.paneId,
-      cwd,
-      branch,
-      context: stateContext(p.agentName, p.tmuxPaneId, stateSnapshot),
-      ...tokenInfo,
-      ...provenance,
-    } as AgentPane;
-  });
-
-  const results = (await Promise.all(promises)).filter((r): r is AgentPane => r !== null);
-
-  results.sort((a, b) => a.pane.localeCompare(b.pane) || a.tmuxPaneId.localeCompare(b.tmuxPaneId));
-  return results;
-}
-
-// ── Scan result filtering ────────────────────────────────────────────
-
-export interface PreviewFilter {
-  agentTmuxId: string;
-  splitPaneId: string;
-  agentPane: string;
-  agentPaneId: string;
-}
-
-export interface GridFilter {
-  agents: { tmuxPaneId: string; pane: string; paneId?: string; windowId?: string }[];
-  placeholderIds: string[];
-}
-
-/**
- * Filter scan results for the dashboard:
- * 1. Remove the dashboard's own pane and window
- * 2. Re-add previewed/gridded agents with their original pane names
- *
- * Pure function — no side effects, easy to test.
- */
-export function filterAgents(
-  scanned: AgentPane[],
-  selfPaneId: string,
-  selfWindowId: string,
-  preview?: PreviewFilter | null,
-  grid?: GridFilter | null,
-): AgentPane[] {
-  // 1. Remove self
-  let list = scanned.filter((a) => a.tmuxPaneId !== selfPaneId && a.windowId !== selfWindowId);
-
-  // 2. Preview: agent pane is swapped into dashboard window, re-add with original name
-  if (preview) {
-    const swapped = scanned.find((a) => a.tmuxPaneId === preview.agentTmuxId);
-    list = list.filter(
-      (a) => a.tmuxPaneId !== preview.agentTmuxId && a.tmuxPaneId !== preview.splitPaneId
-    );
-    if (swapped) {
-      list.push({ ...swapped, pane: preview.agentPane, paneId: preview.agentPaneId });
-    }
-  }
-
-  // 3. Grid: agents are swapped into dashboard window, re-add with original names
-  if (grid) {
-    const gridPaneIds = new Set(grid.agents.map((a) => a.tmuxPaneId));
-    const placeholderIds = new Set(grid.placeholderIds);
-    list = list.filter((a) => !gridPaneIds.has(a.tmuxPaneId) && !placeholderIds.has(a.tmuxPaneId));
-    for (const ga of grid.agents) {
-      const found = scanned.find((a) => a.tmuxPaneId === ga.tmuxPaneId);
-      if (found) {
-        list.push({
-          ...found,
-          pane: ga.pane,
-          paneId: ga.paneId || found.paneId,
-          windowId: ga.windowId || found.windowId,
-        });
-      }
-    }
-  }
-
-  list.sort((a, b) => a.pane.localeCompare(b.pane));
-  return list;
-}

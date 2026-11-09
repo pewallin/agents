@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claude state hook: reports agent state to agents dashboard.
+# Claude state hook: reports agent state to the agents CLI.
 # Reads bridge file from statusline for context window data.
 # Usage: state-hook.sh <state>
 #   state: working, idle, approval, question, exited (the agent left the pane)
@@ -10,8 +10,6 @@ STATE="$1"
 
 if [ -n "$TMUX_PANE" ]; then
   SESSION="$TMUX_PANE"
-elif [ -n "$ZELLIJ_PANE_ID" ]; then
-  SESSION="terminal_${ZELLIJ_PANE_ID}"
 else
   SESSION="default"
 fi

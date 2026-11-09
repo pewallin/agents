@@ -36,8 +36,6 @@ export function AgentTable({ agents, selectedIndex, showCursor, summaryView }: P
     );
   }
 
-  // process.stdout.columns is kept in sync with the actual tmux pane width
-  // by Dashboard's resize interceptor (prependListener on 'resize').
   const termCols = process.stdout.columns || 80;
 
   // Measure ideal data widths (capped)

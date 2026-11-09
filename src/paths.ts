@@ -90,9 +90,6 @@ export function getSetupHashPath(): string {
   return process.env.AGENTS_SETUP_HASH_PATH || join(resolveAgentsHome(), ".setup-hash");
 }
 
-export function getGridFocusFile(): string {
-  return process.env.AGENTS_GRID_FOCUS_FILE || join(getStateDir(), "grid-focus");
-}
 
 export function getLogsDir(): string {
   return process.env.AGENTS_LOG_DIR || join(resolveAgentsHome(), "logs");

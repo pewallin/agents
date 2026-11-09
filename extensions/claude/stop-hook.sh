@@ -7,8 +7,6 @@
 
 if [ -n "$TMUX_PANE" ]; then
   SESSION="$TMUX_PANE"
-elif [ -n "$ZELLIJ_PANE_ID" ]; then
-  SESSION="terminal_${ZELLIJ_PANE_ID}"
 else
   SESSION="default"
 fi

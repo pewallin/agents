@@ -1,12 +1,10 @@
 #!/bin/bash
-# Kiro CLI hook: report pane state to the agents dashboard.
+# Kiro CLI hook: report pane state to the agents CLI.
 # Hooks pass a JSON event via stdin. Keep stdout empty because Kiro may add
 # successful hook output to agent context for some lifecycle events.
 
 if [ -n "$TMUX_PANE" ]; then
   SESSION="$TMUX_PANE"
-elif [ -n "$ZELLIJ_PANE_ID" ]; then
-  SESSION="terminal_${ZELLIJ_PANE_ID}"
 else
   SESSION="default"
 fi

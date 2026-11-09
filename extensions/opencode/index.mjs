@@ -2,7 +2,7 @@
  * Agents reporting plugin for OpenCode.
  *
  * Reports opencode state (working/idle/approval/question) plus structured
- * provider/model metadata to the agents dashboard via `agents report`.
+ * provider/model metadata to the agents CLI via `agents report`.
  *
  * Install: add "opencode-agents-reporting" to the plugin array in opencode.json,
  * or run `agents setup` to have it configured automatically.

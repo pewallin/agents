@@ -1,7 +1,7 @@
 import { existsSync } from "fs";
 import { basename, join } from "path";
 import { getRuntimeTempDir } from "./paths.js";
-import { exec, execAsync, execFileCapture, gitBranch, gitBranchAsync } from "./shell.js";
+import { exec, execFileCapture, gitBranch } from "./shell.js";
 
 // macOS `comm` is a truncated path (and can contain spaces). `ucomm` is the
 // executable name; keep full args separately for Node wrappers and session IDs.
@@ -77,13 +77,6 @@ export function findOpenCodexSessionIds(processIds: number[]): Map<number, strin
   if (pids.length === 0) return new Map();
   const result = execFileCapture("lsof", ["-a", "-p", pids.join(","), "-Fn"]);
   return extractOpenCodexSessionIds(result.stdout, isInternalCodexSession);
-}
-
-export async function findOpenCodexSessionIdsAsync(processIds: number[]): Promise<Map<number, string>> {
-  const pids = normalizedProcessIds(processIds);
-  if (pids.length === 0) return new Map();
-  const output = await execAsync(`lsof -a -p ${pids.join(",")} -Fn 2>/dev/null`);
-  return extractOpenCodexSessionIds(output, isInternalCodexSession);
 }
 
 function normalizeProcessToken(token: string): string {
@@ -201,10 +194,6 @@ export function buildProcessTree(): ProcessTree {
   return parseProcessTree(exec(PROCESS_TREE_PS_COMMAND));
 }
 
-export async function buildProcessTreeAsync(): Promise<ProcessTree> {
-  return parseProcessTree(await execAsync(PROCESS_TREE_PS_COMMAND));
-}
-
 export function findAgentLeafInTree(
   pid: number,
   tree: ProcessTree,
@@ -315,12 +304,6 @@ export function buildBranchCache(uniqueCwds: Set<string>): Map<string, string | 
   const branchCache = new Map<string, string | undefined>();
   for (const dir of uniqueCwds) branchCache.set(dir, gitBranch(dir));
   return branchCache;
-}
-
-export async function buildBranchCacheAsync(uniqueCwds: Set<string>): Promise<Map<string, string | undefined>> {
-  const cwdArr = [...uniqueCwds];
-  const branches = await Promise.all(cwdArr.map(dir => gitBranchAsync(dir)));
-  return new Map(cwdArr.map((dir, i) => [dir, branches[i]]));
 }
 
 export function findLeafProcessSync(pid: string): string {

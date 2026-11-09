@@ -1,5 +1,5 @@
 #!/bin/bash
-# Codex hook: report pane state to the agents dashboard.
+# Codex hook: report pane state to the agents CLI.
 # Usage: report-state.sh <state>
 #   state: working, idle, approval, question, exited (the agent left the pane), started (SessionStart)
 
@@ -8,8 +8,6 @@ STATE="$1"
 
 if [ -n "$TMUX_PANE" ]; then
   SESSION="$TMUX_PANE"
-elif [ -n "$ZELLIJ_PANE_ID" ]; then
-  SESSION="terminal_${ZELLIJ_PANE_ID}"
 else
   SESSION="default"
 fi

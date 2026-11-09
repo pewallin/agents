@@ -3,7 +3,7 @@ import { Text, Box, useApp, useInput } from "ink";
 import { switchToPane } from "../scanner.js";
 import type { AgentPane } from "../scanner.js";
 import { AgentTable } from "./AgentTable.js";
-import { detectMultiplexer } from "../multiplexer.js";
+import { insideTmux } from "../tmux-env.js";
 
 interface Props {
   agents: AgentPane[];
@@ -12,7 +12,7 @@ interface Props {
 export function Select({ agents }: Props) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const { exit } = useApp();
-  const canJump = !!detectMultiplexer();
+  const canJump = insideTmux();
 
   useInput((input, key) => {
     if (input === "q" || (key.ctrl && input === "c")) {
@@ -50,7 +50,7 @@ export function Select({ agents }: Props) {
         <Text dimColor>
           {canJump
             ? "j/k navigate · enter to jump · q to quit"
-            : "j/k navigate · run inside tmux/zellij to jump · q to quit"}
+            : "j/k navigate · run inside tmux to jump · q to quit"}
         </Text>
       </Box>
     </Box>

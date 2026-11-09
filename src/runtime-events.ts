@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, renameSync, rmSync, statSync } from "fs";
 import { getRuntimeStateEventsPath, ensureAgentsDirs } from "./paths.js";
 
-export type RuntimeMux = "tmux" | "zellij";
+export type RuntimeMux = "tmux";
 export type RuntimeStateEventEntity = "primary_state" | "contributor_state";
 export type RuntimeStateEventOperation = "upsert" | "remove";
 export type RuntimeReportedState = "working" | "idle" | "approval" | "question";
@@ -54,9 +54,6 @@ const MAX_RUNTIME_STATE_EVENTS_MAX_BYTES = 25 * 1024 * 1024;
 export function runtimeLocatorForSurface(surfaceId: string): RuntimeLocator {
   if (surfaceId.startsWith("%")) {
     return { surfaceId, mux: "tmux" };
-  }
-  if (surfaceId.startsWith("terminal_")) {
-    return { surfaceId, mux: "zellij" };
   }
   return { surfaceId };
 }

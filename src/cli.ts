@@ -7,7 +7,7 @@ import type { ModelSource } from "./state.js";
 import type { AgentDoneRecordInput } from "./done.js";
 import { switchBack } from "./back.js";
 import { getBuildInfo, getSelfArgv } from "./paths.js";
-import { setMultiplexer, detectMultiplexer, initMux } from "./multiplexer.js";
+import { insideTmux } from "./tmux-env.js";
 import {
   runCodexAppServerWebSocketProxy,
   shouldRunCodexAppServerProxy,
@@ -65,12 +65,6 @@ function agentsVersion(): string {
   const version = readPackageVersion(packageRoot);
   const revision = readGitRevision(packageRoot);
   return revision ? `${version}+${revision}` : version;
-}
-
-// Handle --tmux flag early (before commander parses, since it's global)
-if (process.argv.includes("--tmux")) {
-  setMultiplexer("tmux");
-  process.argv = process.argv.filter(a => a !== "--tmux");
 }
 
 const args = process.argv.slice(2);
@@ -160,81 +154,9 @@ if (firstArg === "acp-session") {
   await runAcpSessionCommand(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp"));
 }
 
-const muxKind = detectMultiplexer();
-
 // Fast path: `agents back` should feel instant and does not need Commander/Ink.
-if (args.length === 1 && firstArg === "back" && muxKind === "tmux") {
+if (args.length === 1 && firstArg === "back" && insideTmux()) {
   process.exit(switchBack() ? 0 : 1);
-}
-
-// If launched outside a multiplexer for a command that truly requires a live
-// dashboard pane, re-exec inside tmux. Other commands may still talk to tmux,
-// but they should not force an attach just because they were launched from a
-// plain shell.
-const insideMux = !!muxKind;
-if (!insideMux) {
-  const needsMux = !firstArg || firstArg === "watch" || firstArg === "w";
-  if (needsMux) {
-    // Try tmux (zellij auto-session creation not yet supported)
-    try {
-      execSync("which tmux", { stdio: "ignore" });
-    } catch {
-      console.error("No multiplexer detected. Run inside tmux or zellij, or install tmux.");
-      process.exit(1);
-    }
-    // Attach to existing 'agents' session or create a new one
-    const fullCmd = [...getSelfArgv(), ...args].map(a => JSON.stringify(a)).join(" ");
-    // Inline script that applies agents styling — used as a session-level
-    // hook so it runs AFTER any global hooks (like user theme scripts).
-    const styleScript = [
-      `tmux set -t agents status-bg '#a3be8c'`,
-      `tmux set -t agents status-fg '#2e3440'`,
-      `tmux set -t agents pane-active-border-style 'fg=#a3be8c'`,
-      `tmux set -t agents pane-border-style 'fg=#4c566a'`,
-    ].join(" \\; ");
-    const applyStyle = () => {
-      try {
-        // Lock the window name so shells/programs can't override it
-        execSync(`tmux set-option -t agents:0 -w automatic-rename off`, { stdio: "ignore" });
-        execSync(`tmux set-option -t agents:0 -w allow-rename off`, { stdio: "ignore" });
-        execSync(`tmux rename-window -t agents: "agents"`, { stdio: "ignore" });
-        // Apply immediately
-        execSync(styleScript, { stdio: "ignore" });
-        // Inherit user's border format settings
-        try {
-          const borderStatus = execSync(`tmux show -gv pane-border-status 2>/dev/null`, { encoding: "utf-8" }).trim();
-          if (borderStatus) execSync(`tmux set -t agents pane-border-status '${borderStatus}'`, { stdio: "ignore" });
-          const borderFormat = execSync(`tmux show -gv pane-border-format 2>/dev/null`, { encoding: "utf-8" }).trim();
-          if (borderFormat) execSync(`tmux set -t agents pane-border-format '${borderFormat}'`, { stdio: "ignore" });
-        } catch {}
-        // Set session-level hooks so our style wins over global theme hooks.
-        // Global hooks fire first, then session hooks override.
-        for (const hook of ["client-attached", "after-new-session", "session-window-changed", "window-pane-changed"]) {
-          execSync(`tmux set-hook -t agents ${hook} 'run-shell "${styleScript}"'`, { stdio: "ignore" });
-        }
-      } catch {}
-    };
-    try {
-      execSync("tmux has-session -t agents 2>/dev/null");
-      // Re-apply styling on every attach (global theme hooks may have overridden it)
-      applyStyle();
-      // Session exists — run the command in it
-      if (!firstArg || firstArg === "watch" || firstArg === "w") {
-        // Dashboard: attach to existing session
-        execSync(`tmux attach-session -t agents`, { stdio: "inherit" });
-      } else {
-        // Other commands: run in the existing session
-        execSync(`tmux send-keys -t agents ${JSON.stringify(fullCmd)} Enter`, { stdio: "inherit" });
-        execSync(`tmux attach-session -t agents`, { stdio: "inherit" });
-      }
-    } catch {
-      // Create new session running the command
-      execSync(`tmux new-session -d -s agents -n agents ${fullCmd}`, { stdio: "ignore" });
-      applyStyle();
-      execSync(`tmux attach-session -t agents`, { stdio: "inherit" });
-    }
-    process.exit(0);
-  }
 }
 
 const [
@@ -586,24 +508,19 @@ async function readJSONFromStdin(): Promise<unknown> {
 }
 
 async function loadUiModules() {
-  const [reactMod, ink, dashboardMod, selectMod, agentTableMod] = await Promise.all([
+  const [reactMod, ink, selectMod, agentTableMod] = await Promise.all([
     import("react"),
     import("ink"),
-    import("./components/Dashboard.js"),
     import("./components/Select.js"),
     import("./components/AgentTable.js"),
   ]);
   return {
     React: reactMod.default,
     render: ink.render,
-    Dashboard: dashboardMod.Dashboard,
     Select: selectMod.Select,
     AgentTable: agentTableMod.AgentTable,
   };
 }
-
-// Initialize multiplexer (async import of the correct backend)
-await initMux();
 
 // Auto-setup in background if hook config changed since last run
 if (!["setup", "uninstall"].includes(firstArg)) autoSetupIfNeeded();
@@ -641,28 +558,6 @@ program
       );
       waitUntilExit().then(() => process.exit(0));
     }
-  });
-
-program
-  .command("watch")
-  .alias("w")
-  .description("Live dashboard with auto-refresh")
-  .argument("[seconds]", "Refresh interval", "2")
-  .action(async (seconds) => {
-    const interval = parseInt(seconds, 10) || 2;
-    // Set tmux pane title
-    process.stdout.write("\x1b]2;Agent Dashboard\x1b\\");
-    // Clear screen for clean start (no alternate screen — conflicts with pane splits)
-    process.stdout.write("\x1b[2J\x1b[H");
-    const { React, render, Dashboard } = await loadUiModules();
-    const { waitUntilExit } = render(
-      React.createElement(Dashboard, { interval }),
-      { exitOnCtrlC: false }
-    );
-    waitUntilExit().then(() => {
-      process.stdout.write("\x1b[2J\x1b[H");
-      process.exit(0);
-    });
   });
 
 program
@@ -1218,10 +1113,6 @@ program
   .option("--session <id>", "Session ID (reads from stdin if not provided)")
   .action(async (opts) => {
     let session = opts.session;
-    // Resolve empty session from zellij env (hooks pass $TMUX_PANE which is empty in zellij)
-    if (!session && process.env.ZELLIJ_PANE_ID) {
-      session = `terminal_${process.env.ZELLIJ_PANE_ID}`;
-    }
     if (!session) {
       // Try reading session_id from stdin (hooks pipe JSON)
       try {
@@ -1236,10 +1127,10 @@ program
     // Workspace snapshot is seeded at creation time by createWorkspace().
     // Here we only build a fallback for agents started manually (not via `agents ws` or `n`).
     // Existing workspace data is never overwritten — reportState preserves it.
-    let wsSnapshot: undefined | { command: string; cwd: string; mux?: "tmux" | "zellij" };
-    const muxKind = detectMultiplexer();
+    let wsSnapshot: undefined | { command: string; cwd: string; mux?: "tmux" };
+    const inTmux = insideTmux();
     const externalSessionId = opts.externalSessionId as string | undefined;
-    if (muxKind === "tmux" && opts.agent?.trim().toLowerCase() === "codex" && session?.startsWith("%")) {
+    if (inTmux && opts.agent?.trim().toLowerCase() === "codex" && session?.startsWith("%")) {
       const shared = codexSharedAppServer.resolveCodexSharedAppServerReport();
       if (shared.shared) {
         if (!shared.pane) {
@@ -1249,7 +1140,7 @@ program
         session = shared.pane;
       }
     }
-    if (muxKind === "tmux" && session?.startsWith("%")) {
+    if (inTmux && session?.startsWith("%")) {
       const paneMetadata = readTmuxPaneReportMetadata(session);
       const foregroundAgent = paneMetadata?.foregroundCommand
         ? detectAgentProcess(paneMetadata.foregroundCommand, paneMetadata.foregroundCommand) || undefined
@@ -1286,11 +1177,9 @@ program
           cwd: binding.paneCwd,
         });
       }
-    } else if (muxKind === "zellij" && process.env.PWD) {
-      wsSnapshot = { command: opts.agent, cwd: process.env.PWD, mux: "zellij" };
     }
 
-    if (externalSessionId && muxKind === "tmux" && session?.startsWith("%") && wsSnapshot?.cwd) {
+    if (externalSessionId && inTmux && session?.startsWith("%") && wsSnapshot?.cwd) {
       const restoreArgv = resolveAgentRestoreArgv({
         agent: opts.agent,
         cwd: wsSnapshot.cwd,
@@ -1514,7 +1403,7 @@ program
   });
 
 if (args.length === 0) {
-  program.parse([process.argv[0], process.argv[1], "watch"]);
+  program.help();
 } else {
   program.parse();
 }

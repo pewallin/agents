@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "fs";
 import { randomUUID } from "crypto";
 import { dirname, join, resolve } from "path";
 import { exec, execFileCapture } from "./shell.js";
-import { getMux, detectMultiplexer } from "./multiplexer.js";
+import { insideTmux } from "./tmux-env.js";
 import { loadConfig, resolveProfile } from "./config.js";
 import { readStates, reportState } from "./state.js";
 import { resolveStateRestoreCommand } from "./agent-restore.js";
@@ -73,7 +73,7 @@ export interface ResolvedWorkspaceLaunch {
 
 export interface WorkspaceLaunchResult {
   cwd: string;
-  mux: "tmux" | "zellij" | null;
+  mux: "tmux" | null;
   windowName: string;
   paneId: string;
   tmuxPaneId?: string;
@@ -355,27 +355,22 @@ export function createWorkspaceOrThrow(agentCmd?: string, name?: string, layout?
 
   // Build workspace snapshot at creation time — this is the authoritative
   // source for session name and cwd. Report hooks will preserve it.
-  const muxKind = detectMultiplexer();
+  const inTmux = insideTmux();
   const wsSnapshot: WorkspaceSnapshot = {
     command: cmd,
     cwd,
-    mux: muxKind || undefined,
+    mux: inTmux ? "tmux" : undefined,
     sessionName: opts?.tmuxSession || undefined,
   };
 
-  let createdPane: CreatedWorkspacePane;
-  if (muxKind === "zellij") {
-    createdPane = createWorkspaceZellij(cmd, metadataCommand, windowName, defs, opts, wsSnapshot);
-  } else {
-    createdPane = createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen, argv, launchEnv, resolved.profileName);
-  }
+  const createdPane = createWorkspaceTmux(cmd, metadataCommand, windowName, defs, opts, wsSnapshot, resolved.alternateScreen, argv, launchEnv, resolved.profileName);
 
   const result: WorkspaceLaunchResult = {
     cwd,
-    mux: muxKind,
+    mux: inTmux ? "tmux" : null,
     windowName,
     paneId: createdPane.paneId,
-    ...(muxKind === "tmux" ? { tmuxPaneId: createdPane.paneId } : {}),
+    ...(inTmux ? { tmuxPaneId: createdPane.paneId } : {}),
     ...(createdPane.sessionName ? { sessionName: createdPane.sessionName } : {}),
     resolved,
   };
@@ -414,70 +409,8 @@ function seedWorkspaceState(agentPaneId: string, agentCommand: string, snapshot:
   });
 }
 
-function createWorkspaceZellij(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot): CreatedWorkspacePane {
-  const mux = getMux();
-
-  // Create tab — getMux().createTab returns the tab name, not pane ID
-  // Snapshot panes before to find the new one after
-  const before = new Set(mux.listPanes().map(p => p.id));
-  mux.createTab(windowName, cmd, { cwd: opts?.cwd || process.cwd() });
-
-  // Find the new pane (the one not in the before set)
-  const after = mux.listPanes();
-  const newPane = after.find(p => !before.has(p.id));
-  const agentPaneId = newPane?.id || "";
-
-  if (!agentPaneId) {
-    throw new Error("Failed to create zellij tab");
-  }
-
-  if (wsSnapshot) seedWorkspaceState(agentPaneId, agentCommand, wsSnapshot);
-
-  const paneMap: Record<string, string> = { agent: agentPaneId };
-
-  for (const def of defs) {
-    const targetId = paneMap[def.of || "agent"] || agentPaneId;
-    const dir = def.split || "right";
-    // Map tmux directions to zellij's simpler right/down
-    const direction: "right" | "down" = (dir === "left" || dir === "right") ? "right" : "down";
-
-    // Convert percentage size to absolute columns/rows
-    let size: string | undefined;
-    if (def.size) {
-      const pctMatch = def.size.match(/^(\d+)%$/);
-      if (pctMatch) {
-        const pct = parseInt(pctMatch[1], 10);
-        const targetPane = mux.listPanes().find(p => p.id === targetId);
-        if (targetPane) {
-          const total = direction === "right" ? targetPane.geometry.width : targetPane.geometry.height;
-          size = String(Math.round(total * pct / 100));
-        }
-      } else {
-        size = def.size;
-      }
-    }
-
-    const paneId = mux.createSplit(targetId, direction, size);
-    if (paneId) {
-      if (def.command !== "$SHELL") {
-        mux.sendKeys(paneId, def.command + "\n");
-      }
-      const label = def.command.replace(/^\$/, "").split(/\s+/)[0].toLowerCase();
-      paneMap[label] = paneId;
-    }
-  }
-
-  // Focus the agent pane
-  mux.focusPane(agentPaneId);
-
-  return {
-    paneId: agentPaneId,
-    ...(newPane?.session ? { sessionName: newPane.session } : {}),
-  };
-}
-
 function createWorkspaceTmux(cmd: string, agentCommand: string, windowName: string, defs: WorkspaceDef[], opts?: Partial<CreateWorkspaceOpts>, wsSnapshot?: WorkspaceSnapshot, alternateScreen?: boolean, argv?: string[], env?: Record<string, string>, profileName?: string): CreatedWorkspacePane {
-  const shouldFocusNewWindow = detectMultiplexer() === "tmux" && opts?.detached !== true;
+  const shouldFocusNewWindow = insideTmux() && opts?.detached !== true;
   const cwd = opts?.cwd || process.cwd();
   const targetSession = resolveTmuxSessionTarget(opts?.tmuxSession);
   if (targetSession && opts?.createTmuxSessionIfMissing) {

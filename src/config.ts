@@ -1,13 +1,6 @@
 import { readFileSync } from "fs";
 import { getConfigPath } from "./paths.js";
 
-export interface HelperDef {
-  process: string;           // match against pane_current_command
-  split: "left" | "right" | "above" | "below";
-  of?: string;               // pane to split from (default: "agent")
-  size?: string;             // tmux -l value, e.g. "20%" or "30" (default: 20%)
-}
-
 export interface WorkspaceDef {
   command: string;             // shell command to run in this pane
   split?: "left" | "right" | "above" | "below";  // direction relative to "of"
@@ -36,7 +29,6 @@ export interface CommandConfigEntry {
 }
 
 export interface Config {
-  helpers: Record<string, HelperDef[]>;
   workspace: WorkspaceDef[] | Record<string, WorkspaceDef[]>;
   defaultCommand: string;
   profiles: Record<string, LaunchProfile>;
@@ -53,18 +45,6 @@ const DEFAULT_CONFIG: Config = {
   },
   defaultProfile: "claude",
   commands: [],
-  helpers: {
-    default: [
-      { process: "lazygit", split: "left", size: "20%" },
-      { process: "yazi", split: "below", of: "lazygit", size: "35%" },
-      { process: "bv", split: "right", size: "25%" },
-      { process: "zsh", split: "below", of: "bv", size: "25%" },
-    ],
-    small: [
-      { process: "lazygit", split: "right", size: "25%" },
-      { process: "bv", split: "below", of: "lazygit", size: "40%" },
-    ],
-  },
   workspace: {
     default: [
       { command: "lazygit", split: "left", size: "23%" },
@@ -78,12 +58,6 @@ const DEFAULT_CONFIG: Config = {
     ],
   },
 };
-
-function parseHelpers(raw: any): Record<string, HelperDef[]> {
-  if (Array.isArray(raw)) return raw.length ? { default: raw } : {};
-  if (raw && typeof raw === "object") return raw;
-  return {};
-}
 
 /** Build profiles from config, falling back to defaultCommand for backward compat. */
 function parseProfiles(raw: any): { profiles: Record<string, LaunchProfile>; defaultProfile: string } {
@@ -131,7 +105,6 @@ export function loadConfig(): Config {
     const ws = raw.workspace;
     const { profiles, defaultProfile } = parseProfiles(raw);
     _cached = {
-      helpers: parseHelpers(raw.helpers ?? DEFAULT_CONFIG.helpers),
       workspace: Array.isArray(ws) ? ws : (ws && typeof ws === "object" ? ws : DEFAULT_CONFIG.workspace),
       defaultCommand: raw.defaultCommand || DEFAULT_CONFIG.defaultCommand,
       profiles,
