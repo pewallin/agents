@@ -28,6 +28,7 @@ import { filterConversations, openInLabel, pickConversation, relativeTime, type 
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import { announceBridge, APP_ACTIONS, APP_HANDLERS, appHandler, definePageEntry, PAGE_ENTRIES, PAGE_EVENTS, type AppHandler } from "./bridge";
 import { gateFromHost, initialGate, nextViewPhase, type GatePhase, type ViewPhase } from "./opening";
+import { typedTicketTokens, useTicketRules } from "./tickets";
 import "./view.css";
 
 announceBridge();
@@ -625,6 +626,22 @@ function clockTime(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+/** Text you typed, with its ticket ids as links (tickets.ts). */
+function TicketText({ text }: { text: string }) {
+  const rules = useTicketRules();
+  const tokens = useMemo(() => typedTicketTokens(text, rules), [text, rules]);
+  if (tokens.length === 0) return <>{text}</>;
+  const parts: ReactNode[] = [];
+  let at = 0;
+  for (const token of tokens) {
+    if (token.start > at) parts.push(text.slice(at, token.start));
+    parts.push(<a key={token.start} href={token.href} className="fl ticket" target="_blank" rel="noreferrer" title={token.href}>{text.slice(token.start, token.end)}</a>);
+    at = token.end;
+  }
+  if (at < text.length) parts.push(text.slice(at));
+  return <>{parts}</>;
+}
+
 function YouMessage({ text, pending, at, images = 0 }: { text: string; pending?: boolean; at?: number; images?: number }) {
   const body = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(false);
@@ -651,7 +668,7 @@ function YouMessage({ text, pending, at, images = 0 }: { text: string; pending?:
     // none (the agent does not say when it was sent), so it shows none rather than a wrong one.
     <div className={`you${pending ? " pending" : ""}${folds ? " folds" : ""}${folded ? " folded" : ""}`}>
       {at !== undefined && <span className="when you-when">{clockTime(at)}</span>}
-      <div ref={body} className="you-body" style={folded ? { maxHeight: limit } : undefined}>{text}</div>
+      <div ref={body} className="you-body" style={folded ? { maxHeight: limit } : undefined}><TicketText text={text} /></div>
       {images > 0 && <span className="you-images">{images === 1 ? "1 image" : `${images} images`}</span>}
       {folds && (
         <button type="button" className="you-more" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -671,7 +688,7 @@ function UserItem({ user }: { user: NonNullable<Turn["user"]> }) {
   if (brief) return <BriefRow task={brief.task} brief={brief.brief} prompt={user.text} respawn={brief.respawn} />;
   if (user.external) {
     return user.text
-      ? <div className="you external with-text"><span className="from">From the terminal</span>{user.text}</div>
+      ? <div className="you external with-text"><span className="from">From the terminal</span><TicketText text={user.text} /></div>
       : <div className="you external">Sent from the terminal</div>;
   }
   return <YouMessage text={user.text} pending={user.local && !user.answered} at={user.at} images={user.images} />;

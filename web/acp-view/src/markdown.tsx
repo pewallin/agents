@@ -1,13 +1,14 @@
 // Agent text as markdown: Streamdown, which renders unfinished blocks while a reply streams.
 // Code highlighting (Shiki, through @streamdown/code) loads with this module, which the view
 // loads beside the session after its first paint, and is shared by every message.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { defaultRehypePlugins, Streamdown } from "streamdown";
 // The fade-in of words as a reply streams (Streamdown's animate plugin and its keyframes).
 import "streamdown/styles.css";
 import { CodeBlock, Quote } from "./blocks";
 import { NamedChip } from "./chips";
 import { rehypeFileLinks, rehypePathRefs } from "./paths";
+import { rehypeTicketLinks, useTicketRules, type TicketRule } from "./tickets";
 
 type Plugins = NonNullable<Parameters<typeof Streamdown>[0]["plugins"]>;
 
@@ -26,15 +27,17 @@ function textOf(children: ReactNode): string | null {
 
 /** A link: a chip when it names something the view knows (a file, a pane, a web page), else a
  *  plain link; web links open outside the view. */
-function Link({ href, children }: { href?: string; children?: ReactNode }) {
+function Link({ href, children, "data-ticket": ticket }: { href?: string; children?: ReactNode; "data-ticket"?: string }) {
   const external = typeof href === "string" && /^https?:\/\//i.test(href);
   const plain = (
-    <a href={href} className="fl" target={external ? "_blank" : undefined} rel="noreferrer"
+    <a href={href} className={ticket ? "fl ticket" : "fl"} target={external ? "_blank" : undefined} rel="noreferrer"
+      title={ticket ? href : undefined}
       onClick={(event) => { if (!external) event.preventDefault(); }}>
       {children}
     </a>
   );
-  if (!href || href.startsWith("#")) return plain;
+  // A ticket id (rehypeTicketLinks) reads as the id the text has, not as a web page's chip.
+  if (!href || href.startsWith("#") || ticket) return plain;
   const text = textOf(children);
   // A link whose text is its address shows as the chip's own short name.
   const label = text && text !== href && text.replace(/^https?:\/\//, "") !== href.replace(/^https?:\/\//, "") ? children : undefined;
@@ -83,11 +86,14 @@ const controls = { code: { copy: true, download: false }, table: false, mermaid:
  *  they and links with no scheme become file chips before the link filter, which lets web links
  *  alone through. Then the one that finds paths in the prose. */
 const [sanitize, sanitizeSchema] = defaultRehypePlugins.sanitize as unknown as [unknown, { protocols?: Record<string, string[]> }];
-const rehypePlugins = [
+/** Ticket ids (rehypeTicketLinks) become links after the link filter, to the addresses of the
+ *  user's own rules alone, and before the paths, so an id is not taken for one. */
+const rehypePlugins = (tickets: readonly TicketRule[]) => [
   defaultRehypePlugins.raw,
   [sanitize, { ...sanitizeSchema, protocols: { ...sanitizeSchema.protocols, href: [...(sanitizeSchema.protocols?.href ?? []), "file"] } }],
   rehypeFileLinks,
   defaultRehypePlugins.harden,
+  rehypeTicketLinks(tickets),
   rehypePathRefs,
 ] as Parameters<typeof Streamdown>[0]["rehypePlugins"];
 
@@ -95,6 +101,8 @@ const rehypePlugins = [
  *  fade in (by default while it streams). */
 export default function Markdown({ text, streaming, fade = streaming }: { text: string; streaming: boolean; fade?: boolean }) {
   const [plugins, setPlugins] = useState<Plugins | undefined>(() => loadedPlugins);
+  const tickets = useTicketRules();
+  const rehype = useMemo(() => rehypePlugins(tickets), [tickets]);
   useEffect(() => {
     if (plugins) return;
     let cancelled = false;
@@ -104,7 +112,7 @@ export default function Markdown({ text, streaming, fade = streaming }: { text: 
   return (
     <Streamdown mode={streaming ? "streaming" : "static"} isAnimating={streaming} plugins={plugins}
       animated={fade ? STREAMING_FADE : false}
-      components={components} controls={controls} rehypePlugins={rehypePlugins} linkSafety={{ enabled: false }}>
+      components={components} controls={controls} rehypePlugins={rehype} linkSafety={{ enabled: false }}>
       {text}
     </Streamdown>
   );
