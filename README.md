@@ -208,6 +208,12 @@ There are two modes:
   the pane shows a plain transcript. Enter in the pane gives it back, and the TUI resumes the same
   session id with its original options.
 
+A TUI command that runs tools without asking runs the view's sessions the same way. Codex's and
+Copilot's adapters take the option themselves. For the others the host acts on it: Claude's
+`--dangerously-skip-permissions` (or `--permission-mode <mode>`) puts each session in that mode,
+and Kiro's `-a` / `--trust-all-tools` and OpenCode's `--auto` make the host allow each tool call
+the agent asks about.
+
 `agents resume` wraps agents in these automatically; `agents acp-restart` converts an agent that
 was started without one, on the same session.
 
