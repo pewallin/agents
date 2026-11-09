@@ -22,7 +22,7 @@ import { runHandoffSession } from "./acp-handoff.js";
 import { getResourceRoot, getSelfArgv, getStateDir, isCompiledBinary } from "./paths.js";
 import { reportState } from "./state.js";
 import { kiroResumeSessionId, listKiroSessions } from "./kiro-sessions.js";
-import { claudeApprovals, kiroApprovals, opencodeApprovals, type AcpApprovalPolicy } from "./acp-approvals.js";
+import { claudeLaunchSettings, kiroLaunchSettings, opencodeLaunchSettings, type AcpLaunchSettings } from "./acp-launch-settings.js";
 
 /** What the view's clients see, reported as the pane's agent state: the app's "needs you" dot
  *  lights while a permission waits in the view, as it does for one in the terminal. */
@@ -83,9 +83,10 @@ export interface AcpAgentEntry {
   /** Hand-off agents whose store moves a session on under another id: the session that goes on
    *  from `sessionId` in `cwd` (Kiro 3's copy of a Kiro 2 session). */
   continuedSession?(sessionId: string, cwd: string, tuiCommand: string): string;
-  /** Hand-off agents whose adapter takes no option for it: what the host does for a TUI command
-   *  that runs tools without asking (acp-approvals.ts). */
-  approvals?(tuiCommand: string): AcpApprovalPolicy | undefined;
+  /** Hand-off agents: what the TUI command sets on a session (mode or agent, model, effort,
+   *  running tools without asking) that the adapter takes no option for; the host sets it on each
+   *  session (acp-launch-settings.ts). */
+  launchSettings?(tuiCommand: string): AcpLaunchSettings | undefined;
 }
 
 function shellQuote(value: string): string {
@@ -275,7 +276,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
       return bundledAdapter(CLAUDE_ACP_COMMAND, { CLAUDE_CODE_EXECUTABLE: resolved });
     },
     ...sessionOptions(["--resume", "-r", "--session-id"], ["--continue", "-c"], (id) => ["--resume", id]),
-    approvals: claudeApprovals,
+    launchSettings: claudeLaunchSettings,
     // Claude Code reports its session as it starts, and writes it with the first prompt:
     // ~/.claude/projects/<project>/<session>.jsonl.
     sessionWritten: (sessionId) => {
@@ -294,7 +295,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     tested: true,
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "opencode"), args: ["acp"], env: { ...process.env } }),
     ...sessionOptions(["--session", "-s"], ["--continue", "-c", "--fork"], (id) => ["--session", id]),
-    approvals: opencodeApprovals,
+    launchSettings: opencodeLaunchSettings,
   },
   "pi-acp": {
     id: "pi-acp",
@@ -327,7 +328,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     tested: false,
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "kiro-cli"), args: kiroAcpArgs(tuiCommand), env: { ...process.env } }),
     ...sessionOptions(["--resume-id"], ["--resume"], (id) => ["--resume-id", id]),
-    approvals: kiroApprovals,
+    launchSettings: (tuiCommand) => kiroLaunchSettings(tuiCommand),
     // Kiro keeps a lock beside a session while a process has it open (its TUI or an ACP agent),
     // and logs to $TMPDIR/kiro-log/kiro-chat.log (kiro.dev/docs/cli/acp).
     sessionLock: (sessionId) => kiroSessionLock(sessionId),
@@ -406,7 +407,7 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
 
   if (tuiCommand) {
     // The TUI runs whatever happens to the view: a host that cannot start only costs the view.
-    const host = problem || !agentCommand ? undefined : { webRoot, agentCommand, approvals: agent.approvals?.(tuiCommand) };
+    const host = problem || !agentCommand ? undefined : { webRoot, agentCommand, launchSettings: agent.launchSettings?.(tuiCommand) };
     // A spawned worker's brief, given apart from its TUI command so the view can send it.
     const promptFile = option(args, "--first-prompt-file");
     let firstPrompt: string | undefined;
