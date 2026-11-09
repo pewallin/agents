@@ -162,6 +162,15 @@ function directories(path: string): string[] {
 }
 
 /** The first thing the user asked in a Kiro 3 session: its title until Kiro gives it one. */
+/** Whether a session's messages hold `marker`: a session only opened has no prompt. */
+function hasLine(messagesPath: string, marker: string): boolean {
+  try {
+    return readFileSync(messagesPath, "utf8").includes(marker);
+  } catch {
+    return false;
+  }
+}
+
 function firstPrompt(messagesPath: string): string | undefined {
   try {
     for (const line of readFileSync(messagesPath, "utf8").split("\n").slice(0, 200)) {
@@ -178,9 +187,10 @@ function firstPrompt(messagesPath: string): string | undefined {
  * sessions (<root>/<workspace hash>/<id>/session.json, with messages.jsonl once a turn ran) and
  * Kiro 2's (<root>/cli/<id>.json). A Kiro 2 session Kiro 3 has copied is left out for its newest
  * copy, which is where it goes on; so is a Kiro 3 session with a Kiro 2 session's id (an ACP load
- * makes one), which the TUI refuses as ambiguous.
+ * makes one), which the TUI refuses as ambiguous. A session only opened (no prompt in it) is left
+ * out, unless it is `current`, the one a pane has open.
  */
-export function kiroHistoryForCwd(cwd: string, root: string = kiroSessionsRoot()): KiroHistoryEntry[] {
+export function kiroHistoryForCwd(cwd: string, root: string = kiroSessionsRoot(), current?: string): KiroHistoryEntry[] {
   const folder = realPath(cwd);
   const v3: KiroHistoryEntry[] = [];
   for (const workspace of directories(root)) {
@@ -190,6 +200,7 @@ export function kiroHistoryForCwd(cwd: string, root: string = kiroSessionsRoot()
       const messages = join(directory, "messages.jsonl");
       if (!existsSync(messages)) continue;
       const session = readJson(join(directory, "session.json"));
+      if ((session?.id ?? name) !== current && !hasLine(messages, '"type":"user"')) continue;
       const paths = session?.workspacePaths;
       if (!session || !Array.isArray(paths) || typeof paths[0] !== "string" || realPath(paths[0]) !== folder) continue;
       const stored = typeof session.title === "string" ? session.title.trim() : "";
@@ -206,6 +217,7 @@ export function kiroHistoryForCwd(cwd: string, root: string = kiroSessionsRoot()
       const session = readJson(join(root, "cli", name));
       if (!session || typeof session.cwd !== "string" || realPath(session.cwd) !== folder) continue;
       const sessionId = typeof session.session_id === "string" ? session.session_id : name.slice(0, -".json".length);
+      if (sessionId !== current && !hasLine(join(root, "cli", `${name.slice(0, -".json".length)}.jsonl`), '"kind":"Prompt"')) continue;
       const title = typeof session.title === "string" && session.title.trim() ? session.title.trim() : "Kiro session";
       v2.push({ sessionId, title, updatedAt: seconds(session.updated_at) ?? seconds(session.created_at) ?? 0 });
     }

@@ -371,6 +371,8 @@ function isClaudeConversationUserEntry(entry: {
   if (!text) return false;
   if (text.includes("<local-command-caveat>")) return false;
   if (text.trim().startsWith("Caveat:")) return false;
+  // A command run in Claude Code itself (/login, /model) and what it printed.
+  if (text.includes("<command-name>") || text.includes("<local-command-stdout>")) return false;
   return true;
 }
 
@@ -515,13 +517,21 @@ function listCodexHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?
   try {
     const sqlCwd = cwdRaw.replace(/'/g, "''");
     const queryLimit = Math.max(limit, Math.min(250, limit * 8));
-    const sql = `select id, title, model, updated_at from threads where cwd='${sqlCwd}' order by updated_at desc limit ${queryLimit};`;
+    // A subagent's thread (a guardian's approval review, a spawned explorer) is Codex talking to
+    // itself, not a conversation of yours.
+    const sql = `select id, title, model, updated_at, rollout_path from threads where cwd='${sqlCwd}' and source not like '{"subagent"%' order by updated_at desc limit ${queryLimit};`;
     const raw = exec(`sqlite3 -json ${JSON.stringify(dbPath)} ${JSON.stringify(sql)}`);
     if (!raw) return [];
-    const rows = JSON.parse(raw) as Array<{ id?: string; title?: string; model?: string; updated_at?: number }>;
+    const rows = JSON.parse(raw) as Array<{ id?: string; title?: string; model?: string; updated_at?: number; rollout_path?: string }>;
     const sessionIndex = readCodexSessionIndex();
     return rows
       .filter((row) => !!row.id)
+      .filter((row) => {
+        if (row.rollout_path && existsSync(row.rollout_path)) codexSessionPathCache.set(row.id!, row.rollout_path);
+        // A thread only opened (an ACP view nobody wrote in) has no prompt and no reply.
+        if (row.id === currentSessionId) return true;
+        return findCodexSessionPath(row.id) ? codexConversationActivityAt(row.id!) !== undefined : !!row.title;
+      })
       .map((row): AgentSessionHistoryItem => {
         const indexedTitle = sessionIndex.get(row.id!);
         const isCurrent = !!currentSessionId && row.id === currentSessionId;
@@ -658,14 +668,18 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
     let firstUserTitle: string | undefined;
     let model: string | undefined;
     let latestActivityAt: number | undefined;
+    // Something said to Claude or by it: a session only opened, or with only /login, is left out.
+    let hasConversation = false;
 
     for (const line of lines) {
       if (!line) continue;
       try {
         const entry = JSON.parse(line) as any;
         if (entry?.type === "assistant") {
+          hasConversation = true;
           latestActivityAt = latestTimestamp(latestActivityAt, parseSessionTimestamp(entry.timestamp));
         } else if (entry?.type === "user" && isClaudeConversationUserEntry(entry)) {
+          hasConversation = true;
           latestActivityAt = latestTimestamp(latestActivityAt, parseSessionTimestamp(entry.timestamp));
         }
 
@@ -690,6 +704,8 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
       } catch {}
     }
 
+    const isCurrent = !!currentSessionId && sessionId === currentSessionId;
+    if (!hasConversation && !isCurrent) return null;
     const mtimeMs = statSync(filePath).mtimeMs;
     const resolvedTitle = renamedTitle || indexEntry?.summary || firstUserTitle || summarizeText(indexEntry?.firstPrompt) || sessionId;
     const titleSource = renamedTitle ? "rename"
@@ -702,7 +718,7 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
       titleSource,
       ...(model ? { model } : {}),
       updatedAt: latestActivityAt || indexEntry?.modifiedAt || Math.round(mtimeMs / 1000),
-      ...(currentSessionId && sessionId === currentSessionId ? { current: true } : {}),
+      ...(isCurrent ? { current: true } : {}),
       ...resumeInfoFields("claude", { sessionId }),
     };
   } catch {
@@ -729,6 +745,7 @@ function listClaudeHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
         .map(([sessionId, entry]): AgentSessionHistoryItem | null => {
           const transcriptPath = entry.transcriptPath || join(dir, `${sessionId}.jsonl`);
           if (existsSync(transcriptPath)) return parseClaudeHistoryEntry(transcriptPath, currentSessionId, entry);
+          if (!entry.firstPrompt && !entry.summary && sessionId !== currentSessionId) return null;
           return {
             sessionId,
             title: entry.summary || summarizeText(entry.firstPrompt) || sessionId,
@@ -831,6 +848,8 @@ function parsePiHistoryEntry(filePath: string, currentSessionId?: string): Agent
       } catch {}
     }
 
+    // A session only opened: nothing said to Pi or by it.
+    if (latestActivityAt === undefined && sessionId !== currentSessionId) return null;
     const title = sessionInfoTitle || firstPromptTitle || sessionId;
     return {
       sessionId,
@@ -1002,8 +1021,11 @@ function parseCopilotHistoryEntry(sessionDir: string, currentSessionId?: string)
     const workspaceMeta = parseCopilotWorkspaceYaml(join(sessionDir, "workspace.yaml"));
     const eventsPath = join(sessionDir, "events.jsonl");
     const eventLines = existsSync(eventsPath) ? readFileSync(eventsPath, "utf-8").split("\n") : [];
+    const activityAt = extractLatestCopilotConversationActivityAt(eventLines);
+    // A session only opened: no message to Copilot or from it.
+    if (activityAt === undefined && sessionId !== currentSessionId) return null;
     const { title, titleSource } = resolveCopilotHistoryTitle(workspaceMeta, eventLines);
-    const updatedAt = extractLatestCopilotConversationActivityAt(eventLines)
+    const updatedAt = activityAt
       || workspaceMeta.updatedAt
       || Math.round(statSync(sessionDir).mtimeMs / 1000);
     return {
@@ -1020,11 +1042,11 @@ function parseCopilotHistoryEntry(sessionDir: string, currentSessionId?: string)
 }
 
 function listKiroHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?: string): AgentSessionHistoryItem[] {
-  const entries = kiroHistoryForCwd(cwdRaw);
   // The pane may still name the Kiro 2 session that Kiro 3 goes on with in a copy.
   const current = currentSessionId
     ? kiroContinuedSession(currentSessionId)
     : undefined;
+  const entries = kiroHistoryForCwd(cwdRaw, undefined, current);
   return entries.slice(0, limit).map((entry) => ({
     sessionId: entry.sessionId,
     title: entry.title,
@@ -1079,6 +1101,10 @@ function listOpenCodeHistoryForCwd(cwdRaw: string, limit: number, currentSession
       from session s
       join project p on p.id=s.project_id
       where p.worktree='${sqlCwd}'
+        and (
+          s.id='${(currentSessionId || "").replace(/'/g, "''")}'
+          or exists (select 1 from message m where m.session_id = s.id and json_extract(m.data, '$.role') = 'user')
+        )
       order by activity_updated desc
       limit ${limit};
     `;
@@ -1108,12 +1134,13 @@ function listCursorHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
       .filter((name) => name.endsWith(".json"))
       .map((name) => join(dir, name))
       .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
-      .slice(0, limit)
       .map((filePath): AgentSessionHistoryItem | null => {
         try {
           const transcript = JSON.parse(readFileSync(filePath, "utf-8")) as any[];
-          const title = summarizeText(transcript.find((entry) => entry?.role === "user")?.text);
           const sessionId = basename(filePath, ".json");
+          // A session only opened: no message to Cursor or from it.
+          if (!transcript.some((entry) => entry?.role === "user" || entry?.role === "assistant") && sessionId !== currentSessionId) return null;
+          const title = summarizeText(transcript.find((entry) => entry?.role === "user")?.text);
           return {
             sessionId,
             title: title || sessionId,
@@ -1125,7 +1152,8 @@ function listCursorHistoryForCwd(cwdRaw: string, limit: number, currentSessionId
           return null;
         }
       })
-      .filter((item): item is AgentSessionHistoryItem => item !== null);
+      .filter((item): item is AgentSessionHistoryItem => item !== null)
+      .slice(0, limit);
   } catch {
     return [];
   }

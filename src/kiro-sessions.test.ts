@@ -73,7 +73,7 @@ describe("Kiro sessions", () => {
     }
   });
 
-  it("lists a folder's conversations as Kiro's TUI resumes them", () => {
+  it("lists a folder's conversations as Kiro's TUI resumes them, not one only opened", () => {
     const root = mkdtempSync(join(tmpdir(), "kiro-sessions-"));
     const v3 = (id: string, fields: Record<string, unknown>, messages?: string) => {
       const directory = join(root, "abc123", id);
@@ -86,9 +86,14 @@ describe("Kiro sessions", () => {
       writeFileSync(join(root, "cli", "aaaaaaaa-1111-2222-3333-444444444444.json"), JSON.stringify({ session_id: "aaaaaaaa-1111-2222-3333-444444444444", cwd: "/repo", title: "old", updated_at: "2026-10-19T07:00:00Z" }));
       writeFileSync(join(root, "cli", "bbbbbbbb-1111-2222-3333-444444444444.json"), JSON.stringify({ session_id: "bbbbbbbb-1111-2222-3333-444444444444", cwd: "/repo", title: "never copied", updated_at: "2026-10-01T07:00:00Z" }));
       writeFileSync(join(root, "cli", "cccccccc-1111-2222-3333-444444444444.json"), JSON.stringify({ session_id: "cccccccc-1111-2222-3333-444444444444", cwd: "/elsewhere", title: "other folder", updated_at: "2026-10-01T07:00:00Z" }));
-      v3("cli_aaaaaaaa-1111-2222-3333-444444444444_new", { title: "old", lastModifiedAt: "2026-11-07T12:00:00Z", modelId: "claude-sonnet" }, "{}\n");
-      v3("cli_aaaaaaaa-1111-2222-3333-444444444444_older", { title: "old", lastModifiedAt: "2026-11-02T12:00:00Z" }, "{}\n");
-      v3("aaaaaaaa-1111-2222-3333-444444444444", { title: "New Session", lastModifiedAt: "2026-11-09T08:00:00Z" }, "{}\n");
+      writeFileSync(join(root, "cli", "dddddddd-1111-2222-3333-444444444444.json"), JSON.stringify({ session_id: "dddddddd-1111-2222-3333-444444444444", cwd: "/repo", title: "only opened", updated_at: "2026-10-02T07:00:00Z" }));
+      const prompt = `{"version":"v1","kind":"Prompt","data":{"content":[{"kind":"text","data":"hi"}]}}\n`;
+      for (const id of ["aaaaaaaa", "bbbbbbbb", "cccccccc"]) writeFileSync(join(root, "cli", `${id}-1111-2222-3333-444444444444.jsonl`), prompt);
+      const user = `{"payload":{"type":"user","content":"hi"}}\n`;
+      v3("cli_aaaaaaaa-1111-2222-3333-444444444444_new", { title: "old", lastModifiedAt: "2026-11-07T12:00:00Z", modelId: "claude-sonnet" }, user);
+      v3("cli_aaaaaaaa-1111-2222-3333-444444444444_older", { title: "old", lastModifiedAt: "2026-11-02T12:00:00Z" }, user);
+      v3("aaaaaaaa-1111-2222-3333-444444444444", { title: "New Session", lastModifiedAt: "2026-11-09T08:00:00Z" }, user);
+      v3("sess_opened", { title: "New Session", lastModifiedAt: "2026-11-09T10:00:00Z" }, `{"payload":{"type":"agent_note","content":"<session_context>"}}\n`);
       v3("sess_new", { title: "New Session", lastModifiedAt: "2026-11-08T08:00:00Z" }, `{"payload":{"type":"user","content":"Fix the build\\nnow"}}\n`);
       v3("sess_empty", { title: "New Session", lastModifiedAt: "2026-11-09T09:00:00Z" });
       expect(kiroHistoryForCwd("/repo", root).map((entry) => [entry.sessionId, entry.title])).toEqual([
@@ -96,6 +101,8 @@ describe("Kiro sessions", () => {
         ["cli_aaaaaaaa-1111-2222-3333-444444444444_new", "old"],
         ["bbbbbbbb-1111-2222-3333-444444444444", "never copied"],
       ]);
+      // The one a pane has open is listed, said or not.
+      expect(kiroHistoryForCwd("/repo", root, "sess_opened").map((entry) => entry.sessionId)[0]).toBe("sess_opened");
       expect(kiroHistoryForCwd("/nowhere", root)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
