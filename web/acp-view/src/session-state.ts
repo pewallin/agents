@@ -33,7 +33,11 @@ export interface ToolCall {
 
 /** One entry of the conversation, in order. A tool call is kept by id in `toolCalls`. */
 export type Item =
-  | { type: "user"; id: string; text: string; images: number; local?: boolean; at?: number;
+  | { type: "user"; id: string; text: string; local?: boolean; at?: number;
+      /** The images and files sent with it, shown under its text. */
+      attachments: SentAttachment[];
+      /** Attachments of our own prompt the agent's echo of it has yet to repeat. */
+      unechoed?: number;
       /** A prompt of ours the agent has answered, whether or not it echoed it. */
       answered?: boolean;
       /** A turn another client started (the pane's TUI): Codex does not pass its prompt on. */
@@ -43,6 +47,18 @@ export type Item =
       images?: Array<{ mimeType: string; data: string }> }
   | { type: "thought"; id: string; text: string; at?: number }
   | { type: "tool"; id: string; at?: number };
+
+/** An image or file sent with a message: a picture by its bytes, a file by its path, or both. A
+ *  pasted image the agent took as an image has no name. */
+export interface SentAttachment {
+  kind: "image" | "file";
+  name: string;
+  mimeType?: string;
+  data?: string;
+  path?: string;
+}
+
+type UserMessage = Extract<Item, { type: "user" }>;
 
 export interface PermissionRequest {
   /** Our id for the pending request (the JSON-RPC id it came with). */
@@ -105,7 +121,7 @@ export type SessionAction =
   | { type: "update"; update: SessionUpdate; at?: number }
   | { type: "loading" }
   | { type: "loaded"; modes?: SessionModeState | null; configOptions?: SessionConfigOption[] | null }
-  | { type: "promptSent"; text: string; images?: number; at?: number }
+  | { type: "promptSent"; blocks: ContentBlock[]; at?: number }
   | { type: "promptEnded" }
   | { type: "permissionRequested"; request: PermissionRequest }
   | { type: "permissionAnswered"; id: string }
@@ -122,6 +138,71 @@ function textOf(block: ContentBlock): string {
   return "";
 }
 
+const IMAGE_NAME = /\.(png|jpe?g|gif|webp|svg|bmp|ico|heic|tiff?)$/i;
+
+/** Whether the message's text names the file as @path: the link that came with it is the
+ *  mention's, which the text already shows. */
+function mentions(text: string, path: string): boolean {
+  for (const match of text.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
+    const named = match[1].replace(/^\.\//, "");
+    if (path === named || path.endsWith(`/${named}`)) return true;
+  }
+  return false;
+}
+
+/** What a block of a message of ours attaches: an image, or a file it links to or embeds. None for
+ *  text, a page or a pane, and a link the text names as @path. */
+export function sentAttachment(block: ContentBlock, text: string): SentAttachment | null {
+  if (block.type === "image") {
+    const path = block.uri?.startsWith("file://") ? plainPath(block.uri) : undefined;
+    return { kind: "image", name: path?.split("/").pop() ?? "", mimeType: block.mimeType, data: block.data, ...(path ? { path } : {}) };
+  }
+  const uri = block.type === "resource_link" ? block.uri : block.type === "resource" ? block.resource.uri : "";
+  const pasted = uri.startsWith("pasted:");
+  if (!uri.startsWith("file://") && !pasted) return null;
+  const path = pasted ? undefined : plainPath(uri);
+  if (path && mentions(text, path)) return null;
+  const name = block.type === "resource_link" ? block.name : path?.split("/").pop() ?? decodeURIComponent(uri.slice("pasted:".length));
+  const mimeType = block.type === "resource_link" ? block.mimeType ?? undefined : block.type === "resource" ? block.resource.mimeType ?? undefined : undefined;
+  const image = mimeType?.startsWith("image/") || IMAGE_NAME.test(path ?? name);
+  return { kind: image ? "image" : "file", name, ...(mimeType ? { mimeType } : {}), ...(path ? { path } : {}) };
+}
+
+/** A message of ours as the view shows it: its text, and what it attaches. */
+export function sentMessage(blocks: ContentBlock[]): { text: string; attachments: SentAttachment[] } {
+  const text = blocks.map((block) => (block.type === "text" ? block.text : "")).join("");
+  return { text, attachments: blocks.flatMap((block) => sentAttachment(block, text) ?? []) };
+}
+
+// A file link as an agent writes one into its history of a message of ours: Claude and Codex keep
+// an attached file as `[@name](file://…)`, Codex an image as `[@image](data:…)`, and Codex an
+// embedded file as its link and its text in a <context> block.
+const LINKED = /[ \t]*\[@([^\]\n]*)\]\(((?:file:\/\/|data:image\/)[^)\s]+)\)(?:\n<context ref="[^"\n]*">\n[\s\S]*?\n<\/context>)?[ \t]*/g;
+
+/** A message of ours as it shows: the files and images its text links to as an agent keeps them
+ *  in its history are attachments under it, not links in the text, and a link to a file the text
+ *  names as @path is the mention's. One the message already has is not shown twice. */
+export function shownMessage(text: string, attachments: SentAttachment[]): { text: string; attachments: SentAttachment[] } {
+  if (!text.includes("[@")) return { text, attachments };
+  const links: SentAttachment[] = [];
+  const rest = text.replace(LINKED, (_whole, name: string, uri: string) => {
+    const data = uri.match(/^data:(image\/[\w.+-]+);base64,(.*)$/);
+    if (data) links.push({ kind: "image", name: "", mimeType: data[1], data: data[2] });
+    else {
+      const path = plainPath(uri);
+      links.push({ kind: IMAGE_NAME.test(path) ? "image" : "file", name: name || path.split("/").pop() || path, path });
+    }
+    return " ";
+  }).replace(/[ \t]+(\n|$)/g, "$1").trim();
+  const shown = [...attachments];
+  for (const link of links) {
+    if (link.path && mentions(rest, link.path)) continue;
+    if (shown.some((entry) => (link.path && entry.path === link.path) || (link.data && entry.data === link.data))) continue;
+    shown.push(link);
+  }
+  return { text: rest, attachments: shown };
+}
+
 /** Adds a chunk to the open message of its kind, or opens one. A chunk with another message id,
  *  or any other item in between, starts a new message. */
 function appendChunk(
@@ -131,36 +212,49 @@ function appendChunk(
   messageId: string | null | undefined,
   at: number | undefined,
 ): SessionState {
+  if (kind === "user") return appendUserChunk(state, block, messageId, at);
   const text = textOf(block);
-  const image = block.type === "image" ? 1 : 0;
-  if (!text && !image) return state;
   if (kind === "agent" && block.type === "image") return appendAgentImage(state, block, messageId, at);
+  if (!text) return state;
   const items = state.items;
   const last = items.at(-1);
-
-  if (kind === "user") {
-    // Our own prompt, shown at once: the agent may echo it back (other clients' prompts it always
-    // reports); the echo confirms it rather than adding it again.
-    const pending = [...items].reverse().find((item) => item.type === "user" && item.local);
-    if (pending && pending.type === "user" && pending.text.startsWith(text)) {
-      return {
-        ...state,
-        items: items.map((item) => (item === pending ? { ...pending, local: false, id: messageId ?? pending.id } : item)),
-      };
-    }
-  }
-
   if (last && last.type === kind && (!messageId || last.id === messageId)) {
-    const merged = last.type === "user"
-      ? { ...last, text: last.text + text, images: last.images + image }
-      : { ...last, text: last.text + text };
-    return { ...state, items: [...items.slice(0, -1), merged] };
+    return { ...state, items: [...items.slice(0, -1), { ...last, text: last.text + text }] };
   }
   const id = messageId ?? `${kind}-${state.nextLocalId}`;
-  const item: Item = kind === "user"
-    ? { type: "user", id, text, images: image, at }
-    : { type: kind, id, text, at };
-  return { ...state, items: [...items, item], nextLocalId: state.nextLocalId + 1 };
+  return { ...state, items: [...items, { type: kind, id, text, at }], nextLocalId: state.nextLocalId + 1 };
+}
+
+/** A chunk of a user message: its text, or an image or file sent with it. The agent may echo our
+ *  own prompt back (other clients' prompts it always reports); the echo confirms what the view
+ *  already shows rather than adding it again. */
+function appendUserChunk(state: SessionState, block: ContentBlock, messageId: string | null | undefined, at: number | undefined): SessionState {
+  const items = state.items;
+  const last = items.at(-1);
+  const open = last && last.type === "user" && (!messageId || last.id === messageId) ? last : undefined;
+  const pending = [...items].reverse().find((item): item is UserMessage => item.type === "user" && item.local === true);
+  const confirm = (item: UserMessage, changes: Partial<UserMessage>) => ({
+    ...state, items: items.map((entry) => (entry === item ? { ...item, ...changes } : entry)),
+  });
+
+  if (block.type === "text" || (block.type === "resource_link" && !block.uri.startsWith("file://"))) {
+    const text = textOf(block);
+    if (!text) return state;
+    if (pending && pending.text.startsWith(text)) return confirm(pending, { local: false, id: messageId ?? pending.id });
+    if (open) return { ...state, items: [...items.slice(0, -1), { ...open, text: open.text + text }] };
+    const id = messageId ?? `user-${state.nextLocalId}`;
+    return { ...state, items: [...items, { type: "user", id, text, attachments: [], at }], nextLocalId: state.nextLocalId + 1 };
+  }
+
+  const attachment = sentAttachment(block, open?.text ?? pending?.text ?? "");
+  if (!attachment) return state;
+  if (pending && (pending.unechoed ?? 0) > 0) {
+    return confirm(pending, { local: false, id: messageId ?? pending.id, unechoed: (pending.unechoed ?? 0) - 1 });
+  }
+  if (open && (open.unechoed ?? 0) > 0) return confirm(open, { unechoed: (open.unechoed ?? 0) - 1 });
+  if (open) return { ...state, items: [...items.slice(0, -1), { ...open, attachments: [...open.attachments, attachment] }] };
+  const id = messageId ?? `user-${state.nextLocalId}`;
+  return { ...state, items: [...items, { type: "user", id, text: "", attachments: [attachment], at }], nextLocalId: state.nextLocalId + 1 };
 }
 
 function appendAgentImage(state: SessionState, block: Extract<ContentBlock, { type: "image" }>, messageId: string | null | undefined, at: number | undefined): SessionState {
@@ -234,7 +328,7 @@ function startsTurn(state: SessionState, update: SessionUpdate, at: number | und
     externalTurnPending: false,
     typedInTerminal: typed ? undefined : state.typedInTerminal,
     nextLocalId: state.nextLocalId + 1,
-    items: [...state.items, { type: "user", id, text: typed, images: 0, external: true, at }],
+    items: [...state.items, { type: "user", id, text: typed, attachments: [], external: true, at }],
   };
 }
 
@@ -307,9 +401,10 @@ export function reduce(state: SessionState, action: SessionAction): SessionState
       };
     case "promptSent": {
       const id = `local-${state.nextLocalId}`;
+      const { text, attachments } = sentMessage(action.blocks);
       return {
         ...state,
-        items: [...state.items, { type: "user", id, text: action.text, images: action.images ?? 0, local: true, at: action.at }],
+        items: [...state.items, { type: "user", id, text, attachments, unechoed: attachments.length, local: true, at: action.at }],
         nextLocalId: state.nextLocalId + 1,
         prompting: true,
         activity: "working",

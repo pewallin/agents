@@ -145,8 +145,7 @@ export function connectSession(options: {
       return { ...response, sessionId };
     },
     async prompt(blocks) {
-      const text = blocks.map((block) => (block.type === "text" ? block.text : "")).join("");
-      dispatch({ type: "promptSent", text, images: blocks.filter((block) => block.type === "image").length, at: Date.now() });
+      dispatch({ type: "promptSent", blocks, at: Date.now() });
       try {
         await agent.request("session/prompt", { sessionId, prompt: blocks });
       } finally {
@@ -159,7 +158,6 @@ export function connectSession(options: {
         await this.prompt(blocks);
         return "prompted";
       }
-      const text = blocks.map((block) => (block.type === "text" ? block.text : "")).join("");
       // promptRequired: a turn that ended meanwhile gets the message as a prompt of the view's own,
       // whose answer the view follows like any other.
       const result = await agent.request("_session/steering", {
@@ -170,7 +168,8 @@ export function connectSession(options: {
         return "prompted";
       }
       // The agent does not show what it was steered with as a message of its own.
-      dispatch({ type: "update", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } }, at: Date.now() });
+      const at = Date.now();
+      for (const content of blocks) dispatch({ type: "update", update: { sessionUpdate: "user_message_chunk", content }, at });
       return "steered";
     },
     async promptCapabilities() {

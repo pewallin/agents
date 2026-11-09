@@ -7,6 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { diffLines } from "diff";
 import { useCoordination, workerNamed } from "./coordination";
 import type { FileChange } from "./turns";
+import type { SentAttachment } from "./session-state";
 import { APP_HANDLERS, appHandler, THUMBNAIL_SCHEME } from "./bridge";
 
 export type ChipTarget =
@@ -617,6 +618,50 @@ function ResolvedStrip({ names, made, host, version }: { names: string[]; made: 
         );
       })}
       {paths.length > 4 && <div className="snap more">+{paths.length - 4}</div>}
+    </div>
+  );
+}
+
+/** The images and files sent with a message of ours, under its text: a picture of each, opened
+ *  on click (Quick Look in Agents Next). An image the view has only as bytes (pasted, or replayed
+ *  from the session's history) is saved to a file first. */
+export function SentAttachments({ attachments }: { attachments: SentAttachment[] }) {
+  const host = useContext(ChipHostContext);
+  const saved = useRef(new Map<SentAttachment, Promise<string>>());
+  const open = useCallback((attachment: SentAttachment) => {
+    if (!host) return;
+    const pathOf = (): Promise<string> => {
+      if (attachment.path) return Promise.resolve(attachment.path);
+      let saving = saved.current.get(attachment);
+      if (!saving) {
+        const extension = attachment.mimeType?.split("/")[1]?.replace("jpeg", "jpg") ?? "png";
+        saving = host.hostJson<{ path: string }>("/api/attachment", { name: attachment.name || `Image.${extension}`, data: attachment.data ?? "" }).then((value) => value.path);
+        saving.catch(() => saved.current.delete(attachment));
+        saved.current.set(attachment, saving);
+      }
+      return saving;
+    };
+    void pathOf().then((path) => {
+      const rel = path.startsWith(`${host.cwd}/`) ? path.slice(host.cwd.length + 1) : path.split("/").pop()!;
+      host.open({ kind: attachment.kind, path, rel }, { alternate: false });
+    }, () => {});
+  }, [host]);
+  if (attachments.length === 0) return null;
+  return (
+    <div className="strip you-attachments">
+      {attachments.map((attachment, index) => {
+        const src = attachment.data
+          ? `data:${attachment.mimeType || "image/png"};base64,${attachment.data}`
+          : host && attachment.path ? thumbnailURL(host, attachment.path) : undefined;
+        const openable = Boolean(host && (attachment.path || attachment.data));
+        return (
+          <figure key={index} className={`snap${openable ? "" : " still"}`} title={attachment.path ?? attachment.name}
+            onClick={openable ? () => open(attachment) : undefined}>
+            <div className="mini">{attachment.kind === "image" || src ? <Thumbnail src={src} /> : <Icon kind="file" />}</div>
+            {attachment.name && <figcaption>{attachment.name}</figcaption>}
+          </figure>
+        );
+      })}
     </div>
   );
 }

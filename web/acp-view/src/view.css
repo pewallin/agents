@@ -639,7 +639,9 @@ th, td { overflow-wrap: break-word; }
 .att .qx { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border: 0; background: none; color: var(--faint); border-radius: 4px; padding: 0; cursor: pointer; }
 .att .qx:hover { color: var(--fg); background: var(--tint); }
 .att .qx svg { width: 9px; height: 9px; margin: 0; color: inherit; }
-.you-images { display: block; margin-top: 4px; font-size: calc(var(--fs) - 2px); color: var(--dim); }
+.you-attachments { margin: 2px 0; white-space: normal; }
+.you-body + .you-attachments { margin-top: 8px; }
+.you-attachments .snap.still { cursor: default; }
 
 /* A path in a code block that exists: a link as in the text, without changing the code's colours. */
 .cpath { cursor: pointer; text-decoration: underline dotted; text-decoration-color: var(--faint); text-underline-offset: 3px; }

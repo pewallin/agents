@@ -14,9 +14,9 @@ import type { ContentBlock, SessionConfigOption } from "@agentclientprotocol/sdk
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type AllowAll } from "./acp-connection";
 import { choicesOf, currentName, settingLabel, settingTitle, splitOptions } from "./session-options";
 import { errorDetail } from "./errors";
-import { attention, emptySession, reduce, type PermissionRequest, type SessionAction, type SessionState, type ToolCall } from "./session-state";
+import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
-import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
+import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
@@ -676,7 +676,7 @@ function TicketText({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-function YouMessage({ text, pending, at, images = 0 }: { text: string; pending?: boolean; at?: number; images?: number }) {
+function YouMessage({ text, pending, at, attachments = [] }: { text: string; pending?: boolean; at?: number; attachments?: SentAttachment[] }) {
   const body = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(false);
   const [open, setOpen] = useState(false);
@@ -702,8 +702,8 @@ function YouMessage({ text, pending, at, images = 0 }: { text: string; pending?:
     // none (the agent does not say when it was sent), so it shows none rather than a wrong one.
     <div className={`you${pending ? " pending" : ""}${folds ? " folds" : ""}${folded ? " folded" : ""}`}>
       {at !== undefined && <span className="when you-when">{clockTime(at)}</span>}
-      <div ref={body} className="you-body" style={folded ? { maxHeight: limit } : undefined}><TicketText text={text} /></div>
-      {images > 0 && <span className="you-images">{images === 1 ? "1 image" : `${images} images`}</span>}
+      {text && <div ref={body} className="you-body" style={folded ? { maxHeight: limit } : undefined}><TicketText text={text} /></div>}
+      <SentAttachments attachments={attachments} />
       {folds && (
         <button type="button" className="you-more" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
           {open ? "Show less" : "Show more"}
@@ -725,7 +725,13 @@ function UserItem({ user }: { user: NonNullable<Turn["user"]> }) {
       ? <div className="you external with-text"><span className="from">From the terminal</span><TicketText text={user.text} /></div>
       : <div className="you external">Sent from the terminal</div>;
   }
-  return <YouMessage text={user.text} pending={user.local && !user.answered} at={user.at} images={user.images} />;
+  return <SentMessage user={user} />;
+}
+
+/** A message of ours, with what it attaches under it. */
+function SentMessage({ user }: { user: NonNullable<Turn["user"]> }) {
+  const shown = useMemo(() => shownMessage(user.text, user.attachments), [user.text, user.attachments]);
+  return <YouMessage text={shown.text} pending={user.local && !user.answered} at={user.at} attachments={shown.attachments} />;
 }
 
 function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void; onSend: (text: string) => void }) {

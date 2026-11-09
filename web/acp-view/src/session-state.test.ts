@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attention, emptySession, reduce, type SessionAction, type SessionState } from "./session-state";
+import { attention, emptySession, reduce, shownMessage, type SessionAction, type SessionState } from "./session-state";
 
 const run = (actions: SessionAction[], start: SessionState = emptySession()) => actions.reduce(reduce, start);
 const text = (t: string) => ({ type: "text" as const, text: t });
@@ -16,7 +16,7 @@ describe("session state", () => {
 
   it("takes our prompt as delivered once the agent answers, though it never echoes it (Kiro)", () => {
     const state = run([
-      { type: "promptSent", text: "Kör", at: 5 },
+      { type: "promptSent", blocks: [text("Kör")], at: 5 },
       { type: "update", update: { sessionUpdate: "agent_message_chunk", content: text("Ok"), messageId: "m1" } },
     ]);
     expect(state.items[0]).toMatchObject({ type: "user", text: "Kör", local: true, answered: true });
@@ -47,15 +47,15 @@ describe("session state", () => {
 
   it("shows a prompt at once and takes the agent's echo of it as the same message", () => {
     const state = run([
-      { type: "promptSent", text: "Kör testerna", at: 10 },
+      { type: "promptSent", blocks: [text("Kör testerna")], at: 10 },
       { type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Kör testerna"), messageId: "u1" } },
     ]);
-    expect(state.items).toEqual([{ type: "user", id: "u1", text: "Kör testerna", images: 0, local: false, at: 10 }]);
+    expect(state.items).toEqual([{ type: "user", id: "u1", text: "Kör testerna", attachments: [], unechoed: 0, local: false, at: 10 }]);
     expect(state.prompting).toBe(true);
   });
 
   it("needs you while a permission waits, works during a turn, idles after", () => {
-    let state = run([{ type: "promptSent", text: "x" }]);
+    let state = run([{ type: "promptSent", blocks: [text("x")] }]);
     expect(attention(state)).toBe("working");
     state = reduce(state, { type: "permissionRequested", request: { id: "p1", toolCall: { toolCallId: "t" }, options: [] } });
     expect(attention(state)).toBe("needs-you");
@@ -138,7 +138,7 @@ describe("a turn the pane's TUI starts", () => {
   });
 
   it("gets no marker for a turn of ours", () => {
-    let state = reduce(emptySession(), { type: "promptSent", text: "hi", at: 1 });
+    let state = reduce(emptySession(), { type: "promptSent", blocks: [text("hi")], at: 1 });
     state = reduce(state, { type: "update", update: active, at: 2 });
     state = reduce(state, { type: "update", update: tool, at: 3 });
     state = reduce(state, { type: "update", update: idle, at: 4 });
@@ -148,7 +148,7 @@ describe("a turn the pane's TUI starts", () => {
 
 describe("a turn the view stops", () => {
   it("is marked stopped by its user item, once", () => {
-    let state = reduce(emptySession(), { type: "promptSent", text: "go", at: 1 });
+    let state = reduce(emptySession(), { type: "promptSent", blocks: [text("go")], at: 1 });
     const id = state.items[0].id;
     state = reduce(state, { type: "stopped" });
     state = reduce(state, { type: "stopped" });
@@ -172,5 +172,58 @@ describe("a turn the terminal started", () => {
     state = reduce(state, { type: "update", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "On it" } }, at: 2000 });
     expect(state.items[0]).toMatchObject({ type: "user", external: true, text: "⟢ agents · Worker ui is done · read /p/m.md" });
     expect(state.typedInTerminal).toBeUndefined();
+  });
+
+  it("keeps the images and files sent with a prompt, and the agent's echo of them adds none", () => {
+    const image = { type: "image" as const, mimeType: "image/png", data: "AAAA" };
+    const link = { type: "resource_link" as const, uri: "file:///tmp/agents/Pasted%20notes.pdf", name: "Pasted notes.pdf" };
+    const mention = { type: "resource_link" as const, uri: "file:///r/src/app.ts", name: "app.ts" };
+    const state = run([
+      { type: "promptSent", blocks: [text("Titta på @src/app.ts"), mention, image, link], at: 10 },
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Titta på @src/app.ts"), messageId: "u1" } },
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: mention, messageId: "u1" } },
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: image, messageId: "u1" } },
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: link, messageId: "u1" } },
+    ]);
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]).toMatchObject({
+      type: "user", id: "u1", text: "Titta på @src/app.ts", local: false,
+      attachments: [
+        { kind: "image", name: "", mimeType: "image/png", data: "AAAA" },
+        { kind: "file", name: "Pasted notes.pdf", path: "/tmp/agents/Pasted notes.pdf" },
+      ],
+    });
+  });
+
+  it("shows the images of a message replayed from the history, and an image-only message", () => {
+    const state = run([
+      { type: "loading" },
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Vad är detta?"), messageId: "u1" } },
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: { type: "image", mimeType: "image/png", data: "AAAA" }, messageId: "u1" } },
+      { type: "update", update: { sessionUpdate: "agent_message_chunk", content: text("En katt"), messageId: "m1" } },
+      { type: "update", update: { sessionUpdate: "user_message_chunk", content: { type: "image", mimeType: "image/jpeg", data: "BBBB" }, messageId: "u2" } },
+      { type: "loaded" },
+    ]);
+    const users = state.items.filter((item) => item.type === "user");
+    expect(users).toMatchObject([
+      { text: "Vad är detta?", attachments: [{ kind: "image", data: "AAAA" }] },
+      { text: "", attachments: [{ kind: "image", mimeType: "image/jpeg", data: "BBBB" }] },
+    ]);
+  });
+
+  it("shows the file and image links an agent keeps in its history as attachments, not text", () => {
+    // Claude keeps an attached file as a link in the text; Codex an image as a data link and an
+    // embedded file as its link and a <context> block. A mention's link is the mention's.
+    const shown = shownMessage(
+      "Jämför @src/app.ts [@app.ts](file:///r/src/app.ts) [@shot.png](file:///tmp/agents/shot.png)\n[@image](data:image/png;base64,AAAA)\n"
+        + "[@notes.md](file:///r/notes.md)\n<context ref=\"file:///r/notes.md\">\n# Notes\n</context>",
+      [{ kind: "image", name: "", mimeType: "image/png", data: "AAAA" }],
+    );
+    expect(shown.text).toBe("Jämför @src/app.ts");
+    expect(shown.attachments).toEqual([
+      { kind: "image", name: "", mimeType: "image/png", data: "AAAA" },
+      { kind: "image", name: "shot.png", path: "/tmp/agents/shot.png" },
+      { kind: "file", name: "notes.md", path: "/r/notes.md" },
+    ]);
   });
 });
