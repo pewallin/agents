@@ -17,6 +17,7 @@ import { sleep } from "./placement.js";
 import { oneLine, processTable } from "./processes.js";
 import { readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { respawnMarker } from "./promote.js";
+import { getRuntimeTempDir } from "../paths.js";
 
 // A hand-off agent that starts in its ACP view: `acp-session` starts it with no TUI and gives the
 // brief to its host, which prompts the agent with it over ACP. The TUI command keeps the brief
@@ -62,8 +63,7 @@ export function promptHosted(paneID, text, steer = false) {
 // The pane's ACP view host, from the metadata the agents CLI writes for it (the rule of the app's
 // WorkspacePaneRuntimeMetadata): <AGENTS_TMP_DIR or AGENTS_HOME/runtime/tmp>/acp-session/pane-N.json.
 export function acpViewHost(paneID) {
-  const home = process.env.AGENTS_HOME || path.join(os.homedir(), ".agents", "agents-app");
-  const tmp = process.env.AGENTS_TMP_DIR || path.join(home, "runtime", "tmp");
+  const tmp = getRuntimeTempDir();
   const number = String(paneID).replace(/^%/, "");
   if (!/^\d+$/.test(number)) return undefined;
   try {

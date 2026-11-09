@@ -10,9 +10,9 @@
 // Agents that take steering over ACP itself (`_session/steering`: Codex, Claude) are steered by
 // the view directly and do not come here.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { getRuntimeTempDir } from "./paths.js";
 
 export interface QueuedMessage {
   id: string;
@@ -31,8 +31,7 @@ export function steerInboxDirectory(env: NodeJS.ProcessEnv = process.env): strin
   const serverPid = env.TMUX?.split(",")[1];
   const pane = env.TMUX_PANE;
   if (!serverPid || !pane?.startsWith("%")) return undefined;
-  const home = env.AGENTS_HOME || join(env.AGENTS_SHARED_HOME || join(homedir(), ".agents"), env.AGENTS_PRODUCT_DIRNAME || "agents-app");
-  return join(env.AGENTS_TMP_DIR || join(home, "runtime", "tmp"), "steer", `${serverPid}-pane-${pane.slice(1)}`);
+  return join(getRuntimeTempDir(env), "steer", `${serverPid}-pane-${pane.slice(1)}`);
 }
 
 function readJson(path: string): Record<string, unknown> | undefined {

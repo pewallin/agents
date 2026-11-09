@@ -13,7 +13,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, re
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
-import { getBuildInfo, getSelfArgv, getStateDir } from "./paths.js";
+import { getBuildInfo, getSelfArgv, getStateDir, getRuntimeTempDir } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
@@ -263,11 +263,11 @@ const CONTENT_TYPES: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
-/** Where the panes' ACP hosts keep their metadata: AGENTS_TMP_DIR, else AGENTS_HOME's
- *  runtime/tmp, else the app's. `acp-session` and `codex-session` start with this rule, and Agents
- *  Next finds a pane's host by it (WorkspacePaneRuntimeMetadata). */
+/** Where the panes' ACP hosts keep their metadata (paths.ts: AGENTS_TMP_DIR, else the agents
+ *  home's runtime/tmp). `acp-session` and `codex-session` start with this rule, and Agents Next
+ *  finds a pane's host by it (AgentsPaths in AgentsCore). */
 export function acpHostRuntimeTempDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.AGENTS_TMP_DIR || join(env.AGENTS_HOME || join(env.HOME || "", ".agents", "agents-app"), "runtime", "tmp");
+  return getRuntimeTempDir(env);
 }
 
 export function acpHostMetadataPath(runtimeTempDir: string, paneId: string): string {

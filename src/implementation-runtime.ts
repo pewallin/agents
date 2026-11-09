@@ -5,6 +5,7 @@ import { scan } from "./scanner.js";
 import { execFileCapture } from "./shell.js";
 import { createWorkspaceOrThrow, type WorkspaceLaunchResult } from "./workspace.js";
 import { resumeAgentSession } from "./resume.js";
+import { getRemoteHostConfigPath } from "./paths.js";
 
 export type AgentsTargetKind = "local" | "ssh";
 export type ImplementationCheckoutRole = "landing" | "execution";
@@ -281,14 +282,7 @@ export interface TargetAgentSessionsOptions extends TargetListOptions {
   targetId?: string;
 }
 
-const REMOTE_HOST_CONFIG_PATH = path.join(
-  homedir(),
-  ".agents",
-  "agents-app",
-  "app",
-  "config",
-  "remote-hosts.json",
-);
+const REMOTE_HOST_CONFIG_PATH = getRemoteHostConfigPath();
 
 function fail(input: ConstructorParameters<typeof AgentsRuntimeError>[0]): never {
   throw new AgentsRuntimeError(input);

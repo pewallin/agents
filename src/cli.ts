@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import type { ModelSource } from "./state.js";
 import type { AgentDoneRecordInput } from "./done.js";
 import { switchBack } from "./back.js";
-import { getBuildInfo, getSelfArgv } from "./paths.js";
+import { getBuildInfo, getRuntimeTempDir, getSelfArgv } from "./paths.js";
 import { insideTmux } from "./tmux-env.js";
 import {
   runCodexAppServerWebSocketProxy,
@@ -95,15 +95,13 @@ if (firstArg === "claude-acp") {
 }
 if (firstArg === "acp-restart") {
   const { runAcpRestart } = await import("./acp-restart.js");
-  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
-  process.exit(await runAcpRestart(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp")));
+  process.exit(await runAcpRestart(args.slice(1), getRuntimeTempDir()));
 }
 if (firstArg === "acp-host-supervise") {
   process.exit(await (await import("./acp-host-supervisor.js")).runHostSupervisor(args.slice(1)));
 }
 if (firstArg === "acp-restart-host") {
-  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
-  process.exit(await (await import("./acp-restart-host.js")).runAcpRestartHost(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp")));
+  process.exit(await (await import("./acp-restart-host.js")).runAcpRestartHost(args.slice(1), getRuntimeTempDir()));
 }
 if (firstArg === "codex-thread-settings") {
   const value = (name: string) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
@@ -123,8 +121,7 @@ if (firstArg === "codex-thread-settings") {
 }
 if (firstArg === "acp-prompt") {
   const { runAcpPrompt } = await import("./acp-host-cli.js");
-  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
-  process.exit(await runAcpPrompt(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp")));
+  process.exit(await runAcpPrompt(args.slice(1), getRuntimeTempDir()));
 }
 // The agents with an ACP view and how each gets it (agent-registry.ts), for Agents Next and its
 // agents-app-control, which keep no table of their own.
@@ -157,8 +154,7 @@ if (firstArg === "review-server") {
 }
 if (firstArg === "acp-session") {
   const { runAcpSessionCommand } = await import("./acp-host-cli.js");
-  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
-  await runAcpSessionCommand(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp"));
+  await runAcpSessionCommand(args.slice(1), getRuntimeTempDir());
 }
 
 // Fast path: `agents back` should feel instant and does not need Commander/Ink.
@@ -258,8 +254,7 @@ function isFreshPath(path: string, ttlMs: number): boolean {
 }
 
 function agentsRuntimeTempDir(): string {
-  const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
-  return process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp");
+  return getRuntimeTempDir();
 }
 
 function runCodexUpdatePreflight(argv: string[]): void {

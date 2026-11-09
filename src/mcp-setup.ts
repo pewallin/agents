@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, accessS
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
 import { execFileSync } from "child_process";
-import { getAgentsHome } from "./paths.js";
+import { getAgentsHome, getSharedAppControlPath } from "./paths.js";
 import { appendElement, insertMember, removeElement, removeMember } from "./json-text.js";
 import type { SetupResult } from "./setup.js";
 
@@ -41,7 +41,7 @@ const CLAUDE_ALLOW_RULE = "mcp__agents";
 /** The app's stable launcher for agents-app-control: the same path across app updates, so the
  *  harnesses' config never changes and never asks for a new review. */
 export function mcpCommandPath(): string {
-  return process.env.AGENTS_MCP_COMMAND || join(homedir(), ".agents", "agents-app", "bin", "agents-app-control");
+  return process.env.AGENTS_MCP_COMMAND || getSharedAppControlPath();
 }
 
 function isOurCommand(command: unknown, args: unknown): boolean {

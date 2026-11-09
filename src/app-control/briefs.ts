@@ -16,6 +16,7 @@ import { oneLine } from "./processes.js";
 import { readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { subWorkerLead } from "./spawn-support.js";
 import { readFileOr } from "./supervisor-control.js";
+import { getSharedAppControlPath } from "../paths.js";
 
 // Settings the shared command keeps as they were where it was written, so an agent whose
 // harness runs commands with another environment still reaches this app instance.
@@ -29,7 +30,7 @@ export const PINNED_ENVIRONMENT = [
 // the CLI finds the agent that runs it by its process tree (see resolveLocalSourcePane), so no
 // agent needs a script of its own. Each app instance (suite) has its own.
 export function sharedCLIPath() {
-  return path.join(os.homedir(), ".agents", process.env.AGENTS_PRODUCT_DIRNAME || "agents-app", "bin", "agents-app-control");
+  return getSharedAppControlPath();
 }
 
 export function coordinatorCLIName(uuid) {

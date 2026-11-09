@@ -7,8 +7,8 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createConnection } from "node:net";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAppRuntimeDir } from "./paths.js";
 
 export interface AppControlTarget {
   socketPath: string;
@@ -17,8 +17,7 @@ export interface AppControlTarget {
 
 /** Where the app's control socket is, as agents-app-control finds it. */
 export function appControlTarget(env: NodeJS.ProcessEnv = process.env): AppControlTarget {
-  const runtime = env.AGENTS_APP_RUNTIME_DIR
-    || join(homedir(), ".agents", env.AGENTS_PRODUCT_DIRNAME || "agents-app", "app", "runtime");
+  const runtime = getAppRuntimeDir(env);
   return {
     socketPath: env.AGENTS_APP_SOCKET_PATH || join(runtime, "app-control.sock"),
     tokenPath: env.AGENTS_APP_TOKEN_PATH || env.AGENTS_APP_CONTROL_TOKEN_PATH || join(runtime, "app-control.token"),

@@ -15,6 +15,7 @@ import { AT_PROMPT_STATES, SHELL_COMMANDS, paneRunsAgent, processTable } from ".
 import { coordinationPaneRecords, readJSON, writeFileAtomic } from "./program.js";
 import { appInputState, supervisorLog, userIsWriting } from "./supervisor.js";
 import { agentStatuses, processAlive } from "./supervisor-control.js";
+import { getRuntimeTempDir } from "../paths.js";
 
 // Steering: a message into the turn an agent is working on, through its harness's own API, never
 // keys typed into a busy terminal. Codex is the one harness here with such an API: its app-server's
@@ -26,8 +27,7 @@ import { agentStatuses, processAlive } from "./supervisor-control.js";
 // pid of that codex-session. The endpoint counts only when that pid runs inside the target pane
 // now: a pane number may belong to another tmux server, or to an earlier pane.
 export function codexEndpointDirectory() {
-  const home = process.env.AGENTS_HOME || path.join(os.homedir(), ".agents", "agents-app");
-  return path.join(process.env.AGENTS_TMP_DIR || path.join(home, "runtime", "tmp"), "codex-app-server");
+  return path.join(getRuntimeTempDir(), "codex-app-server");
 }
 
 export function processDescendsFrom(table, pid, ancestor) {
@@ -207,8 +207,7 @@ export async function findSteered(target, id) {
 // <id>.taken at a safe point of its turn, and writes <id>.ack.json (steered, then acknowledged
 // where it can tell). Withdrawing is the same rename to <id>.withdrawn: one of the two wins.
 export function agentsTmpDirectory() {
-  const home = process.env.AGENTS_HOME || path.join(process.env.AGENTS_SHARED_HOME || path.join(os.homedir(), ".agents"), process.env.AGENTS_PRODUCT_DIRNAME || "agents-app");
-  return process.env.AGENTS_TMP_DIR || path.join(home, "runtime", "tmp");
+  return getRuntimeTempDir();
 }
 
 export function steerInboxDirectory(paneID) {

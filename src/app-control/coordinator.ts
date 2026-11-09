@@ -18,6 +18,7 @@ import { coordinationPaneRecords, coordinatorLeads, ensurePaneUUID, notifyApp, p
 import { isPaneRefText } from "./send.js";
 import { appRequestIfRunning } from "./supervisor.js";
 import { readFileOr } from "./supervisor-control.js";
+import { getUserInstructionsPath } from "../paths.js";
 
 // A worker takes its coordinator's terminal background, so it is seen as that coordinator's.
 export function paneBackgroundStyle(paneID) {
@@ -82,7 +83,7 @@ export function protocolText(file, program, cli) {
 // What the user wants every coordinator and worker to know, whatever the program: language,
 // conventions, tone. The app's Settings edits the same file.
 export function userInstructionsPath() {
-  return process.env.AGENTS_INSTRUCTIONS_PATH || path.join(os.homedir(), ".agents", "instructions.md");
+  return getUserInstructionsPath();
 }
 
 export function userInstructions() {

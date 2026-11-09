@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { agentsCLI } from "./agent-state.js";
 import { fail } from "./output.js";
 import { readJSON } from "./program.js";
+import { getProductHome } from "../paths.js";
 
 export function splitShellWords(input) {
   const words = [];
@@ -268,8 +269,7 @@ export function codexSupportsNoDaemon(executable) {
 // The agent profiles the app's menu offers: config.json of the app's suite, plus the built-in
 // agents it offers without one.
 export function agentProfiles() {
-  const suite = process.env.AGENTS_PRODUCT_DIRNAME || "agents-app";
-  const file = process.env.AGENTS_APP_CONFIG_PATH || path.join(os.homedir(), ".agents", suite, "config.json");
+  const file = process.env.AGENTS_APP_CONFIG_PATH || path.join(getProductHome(), "config.json");
   const configured = readJSON(file, {}).profiles || {};
   const profiles = { claude: { command: "claude" }, codex: { command: "codex" }, pi: { command: "pi" } };
   for (const [id, record] of Object.entries(configured)) {

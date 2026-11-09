@@ -6,13 +6,13 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fail } from "./output.js";
+import { getAppRuntimeDir } from "../paths.js";
 
 export function runtimeDirectory() {
   if (process.env.AGENTS_APP_RUNTIME_DIR) {
     return process.env.AGENTS_APP_RUNTIME_DIR;
   }
-  const suite = process.env.AGENTS_PRODUCT_DIRNAME || "agents-app";
-  return path.join(os.homedir(), ".agents", suite, "app", "runtime");
+  return getAppRuntimeDir();
 }
 
 export function socketPath() {

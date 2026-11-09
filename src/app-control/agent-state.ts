@@ -6,13 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { paneIDFromRef } from "./panes.js";
+import { getStateDir } from "../paths.js";
 
 // Where the agents CLI keeps each pane's state, as it resolves it (src/paths.ts in pewallin/agents).
 export function agentStateDirectory() {
-  if (process.env.AGENTS_STATE_DIR) return process.env.AGENTS_STATE_DIR;
-  if (process.env.AGENTS_HOME) return path.join(process.env.AGENTS_HOME, "state");
-  const shared = process.env.AGENTS_SHARED_HOME || path.join(os.homedir(), ".agents");
-  return path.join(shared, process.env.AGENTS_PRODUCT_DIRNAME || "agents-app", "state");
+  return getStateDir();
 }
 
 export function readAgentStateForPane(pane) {

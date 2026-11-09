@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getBuildInfo, getSelfArgv } from "../paths.js";
+import { getBuildInfo, getSelfArgv, getSharedAgentsHome } from "../paths.js";
 
 /** The command that runs agents-app-control: this CLI with `app-control`. */
 export function appControlArgv(): string[] {
@@ -58,7 +58,7 @@ export function appControlSkillDirectory(): string | undefined {
   const home = os.homedir();
   const candidates = [
     process.env.AGENTS_APP_CONTROL_SKILL_DIR,
-    path.join(home, ".agents", "skills", "agents-app-control"),
+    path.join(getSharedAgentsHome(), "skills", "agents-app-control"),
     path.join(home, ".claude", "skills", "agents-app-control"),
     path.join(home, ".kiro", "skills", "agents-app-control"),
   ].filter((candidate): candidate is string => Boolean(candidate));

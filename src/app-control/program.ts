@@ -13,6 +13,7 @@ import { fail, usage } from "./output.js";
 import { failIfTMuxUnreachable, localPaneRef, paneIDFromRef, resolveLocalSourcePane, runTMux, runTMuxRequired, setPaneOption, tmuxPaneOption } from "./panes.js";
 import { sleep } from "./placement.js";
 import { paneRunsAgent } from "./processes.js";
+import { getProgramsDir } from "../paths.js";
 
 // Without tmux (a restart, a server that does not answer) the list is empty, or with `strict`
 // undefined: to the supervisor an unanswered list is not a list of no panes.
@@ -130,7 +131,7 @@ export function defaultProgramDirectory(sessionName, windowName) {
 }
 
 export function programsRoot() {
-  return path.join(os.homedir(), ".agents", "programs");
+  return getProgramsDir();
 }
 
 // A program made for a folder says so in program.json: { folder, repo }.

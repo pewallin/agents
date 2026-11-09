@@ -55,19 +55,34 @@ export function getSelfArgv(): string[] {
   return process.argv[1] ? [process.execPath, process.argv[1]] : [];
 }
 
+// Every folder the CLI and the app share is worked out here, from two names: the shared folder
+// (~/.agents, AGENTS_SHARED_HOME) and the app's folder in it (agents-app, AGENTS_PRODUCT_DIRNAME,
+// which a private app instance sets). Renaming the app changes DEFAULT_PRODUCT_DIRNAME alone.
+// Agents Next follows the same rules (AgentsPaths in AgentsCore).
 const DEFAULT_SHARED_FOLDER = ".agents";
-const DEFAULT_PRODUCT_DIRNAME = "agents-app";
+export const DEFAULT_PRODUCT_DIRNAME = "agents-app";
+
+function homeOf(env: NodeJS.ProcessEnv): string {
+  return env.HOME || homedir();
+}
+
+/** ~/.agents: the folder several agents share (skills, the user's instructions, programs). */
+export function getSharedAgentsHome(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AGENTS_SHARED_HOME || join(homeOf(env), DEFAULT_SHARED_FOLDER);
+}
+
+/** The app instance's folder in it: ~/.agents/agents-app, or a private instance's own. */
+export function getProductHome(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getSharedAgentsHome(env), env.AGENTS_PRODUCT_DIRNAME || DEFAULT_PRODUCT_DIRNAME);
+}
 
 function resolveSharedAgentsHome(): string {
-  return process.env.AGENTS_SHARED_HOME || join(homedir(), DEFAULT_SHARED_FOLDER);
+  return getSharedAgentsHome();
 }
 
-function resolveAgentsProductDirname(): string {
-  return process.env.AGENTS_PRODUCT_DIRNAME || DEFAULT_PRODUCT_DIRNAME;
-}
-
-function resolveAgentsHome(): string {
-  return process.env.AGENTS_HOME || join(resolveSharedAgentsHome(), resolveAgentsProductDirname());
+/** Where the CLI keeps its state: AGENTS_HOME, else the app instance's folder. */
+function resolveAgentsHome(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AGENTS_HOME || getProductHome(env);
 }
 
 export function getAgentsHome(): string {
@@ -95,12 +110,38 @@ export function getLogsDir(): string {
   return process.env.AGENTS_LOG_DIR || join(resolveAgentsHome(), "logs");
 }
 
-export function getRuntimeDir(): string {
-  return process.env.AGENTS_RUNTIME_DIR || join(resolveAgentsHome(), "runtime");
+export function getRuntimeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AGENTS_RUNTIME_DIR || join(resolveAgentsHome(env), "runtime");
 }
 
-export function getRuntimeTempDir(): string {
-  return process.env.AGENTS_TMP_DIR || join(getRuntimeDir(), "tmp");
+/** ACP hosts' metadata, steer inboxes and Codex app-server endpoints of the panes. */
+export function getRuntimeTempDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AGENTS_TMP_DIR || join(getRuntimeDir(env), "tmp");
+}
+
+/** The app's own runtime folder: its control socket and token. */
+export function getAppRuntimeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AGENTS_APP_RUNTIME_DIR || join(getProductHome(env), "app", "runtime");
+}
+
+/** The command every agent of the app instance runs agents-app-control by. */
+export function getSharedAppControlPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getProductHome(env), "bin", "agents-app-control");
+}
+
+/** Where coordinators keep their programs (briefs, reports, messages), shared by app instances. */
+export function getProgramsDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getSharedAgentsHome(env), "programs");
+}
+
+/** What the user wants every coordinator and worker to know; the app's Settings edits it. */
+export function getUserInstructionsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AGENTS_INSTRUCTIONS_PATH || join(getSharedAgentsHome(env), "instructions.md");
+}
+
+/** The app's remote hosts. */
+export function getRemoteHostConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getProductHome(env), "app", "config", "remote-hosts.json");
 }
 
 export function getRuntimeStateEventsPath(): string {

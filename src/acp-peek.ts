@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { getProgramsDir } from "./paths.js";
 
 export const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".heic", ".tif", ".tiff"]);
 
@@ -30,7 +31,7 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, maxBuffer?: n
 
 /** Where coordinators keep their programs (briefs, reports, messages): the view reads those too. */
 export function programsRoot(): string {
-  return join(homedir(), ".agents", "programs");
+  return getProgramsDir();
 }
 
 /** The real path of an absolute path in the coordination's programs, or a path inside the pane's
