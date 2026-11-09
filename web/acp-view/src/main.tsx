@@ -10,7 +10,7 @@ import { StrictMode, createContext, lazy, Suspense, useCallback, type ComponentP
 import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
-import type { ContentBlock, SessionConfigOption } from "@agentclientprotocol/sdk";
+import type { ContentBlock, PlanEntry, SessionConfigOption } from "@agentclientprotocol/sdk";
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type AllowAll } from "./acp-connection";
 import { choicesOf, currentName, settingLabel, settingTitle, splitOptions } from "./session-options";
 import { errorDetail } from "./errors";
@@ -29,6 +29,7 @@ import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpe
 import { announceBridge, APP_ACTIONS, APP_HANDLERS, appHandler, definePageEntry, PAGE_ENTRIES, PAGE_EVENTS, type AppHandler } from "./bridge";
 import { gateFromHost, initialGate, nextViewPhase, type GatePhase, type ViewPhase } from "./opening";
 import { typedTicketTokens, useTicketRules } from "./tickets";
+import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
 import "./view.css";
 
 announceBridge();
@@ -1739,18 +1740,46 @@ function SendButton({ ready, flying, label }: { ready: boolean; flying: boolean;
   );
 }
 
+/** The agent's todo list above the field: the step under way and how many are done, which opens to
+ *  every step with its mark. */
 function PlanLine() {
   const plan = useSession((s) => s.plan);
-  if (plan.length === 0 || plan.every((entry) => entry.status === "completed")) return null;
-  const done = plan.filter((entry) => entry.status === "completed").length;
+  const working = useSession((s) => attention(s) !== "idle");
+  const [open, setOpen] = useState(storedPlanOpen);
+  const summary = planSummary(plan);
+  if (!planShown(summary, working)) return null;
+  const toggle = () => setOpen((value) => { storePlanOpen(!value); return !value; });
+  const { current, done, total } = summary;
   return (
-    <details className="quiet plan-line">
-      <summary>Plan, {done} of {plan.length} done <Chevron /></summary>
-      <ol className="plist">
-        {plan.map((entry, index) => <li key={index} className={`plan-${entry.status}`}>{entry.content}</li>)}
-      </ol>
-    </details>
+    <div className={`plan-line${open ? " open" : ""}`} aria-label="Plan">
+      <button type="button" className="pl-head" onClick={toggle} aria-expanded={open} title={open ? "Hide the plan" : "Show the plan"}>
+        {open ? <span className="pl-now">Plan</span> : <>
+          <PlanMark status={current?.status ?? "completed"} working={working} />
+          <span className="pl-now">{current?.content ?? "All done"}</span>
+        </>}
+        <span className="pl-count">{done}/{total}</span>
+        <Chevron />
+      </button>
+      {open && (
+        <ol className="pl-list">
+          {plan.map((entry, index) => (
+            <li key={index} className={`pl-item ${entry.status}`}>
+              <PlanMark status={entry.status} working={working} />
+              <span className="pl-text">{entry.content}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
   );
+}
+
+function PlanMark({ status, working }: { status: PlanEntry["status"]; working: boolean }) {
+  if (status === "completed") {
+    return <svg className="pl-mark done" viewBox="0 0 12 12" aria-label="Done"><path d="M2.2 6.4l2.5 2.5 5.1-5.4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+  }
+  if (status === "in_progress") return <span className={`pl-mark now${working ? " spin" : ""}`} aria-label="Under way" />;
+  return <span className="pl-mark todo" aria-label="To do" />;
 }
 
 function Conversation({ session, info }: { session: AcpSession; info: HostInfo }) {

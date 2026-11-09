@@ -228,11 +228,29 @@ th, td { overflow-wrap: break-word; }
 .choice { all: unset; cursor: pointer; display: flex; gap: 10px; align-items: baseline; padding: 5px 8px; border-radius: 8px; color: var(--fg2); }
 .choice:hover, .choice.sel { background: color-mix(in srgb, var(--hue) 14%, var(--tint2)); color: var(--fg); }
 .choice .k2 { font: calc(var(--fs-mono) - .5px) var(--mono); color: var(--faint); width: 10px; flex: none; }
-.plist { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; color: var(--fg); }
-.plist li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
-.plist .plan-completed { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--faint); }
-.plist .plan-in_progress { font-weight: 500; }
-.plan-line { padding: 0 8px; }
+/* the agent's todo list, docked above the field: the step under way, opening to every step */
+.plan-line { display: flex; flex-direction: column; gap: 4px; padding: 0 6px; font-size: calc(var(--fs) - 1px); }
+.pl-head { all: unset; cursor: pointer; display: flex; align-items: center; gap: 7px; max-width: 100%; box-sizing: border-box; align-self: flex-start;
+  padding: 2px 8px 2px 6px; border-radius: 6px; color: var(--fg2); -webkit-user-select: none; user-select: none; }
+.pl-head:hover { color: var(--fg); background: var(--tint); }
+.pl-head:focus-visible { outline: 1.5px solid var(--acc); outline-offset: 1px; }
+.pl-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-line.open .pl-now { color: var(--dim); }
+.pl-count { flex: none; color: var(--dim); font-variant-numeric: tabular-nums; }
+.pl-head .chev { flex: none; width: 9px; height: 9px; color: var(--dim); transition: transform .15s; }
+.plan-line.open .pl-head .chev { transform: rotate(90deg); }
+.pl-list { list-style: none; margin: 0; padding: 4px; display: flex; flex-direction: column; max-height: 38vh; overflow-y: auto; border-radius: 10px;
+  background: var(--field); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: 0 0 0 1px var(--edge); }
+.pl-item { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; color: var(--fg2); line-height: 1.4; }
+.pl-item .pl-mark { transform: translateY(1px); }
+.pl-item.in_progress { color: var(--fg); font-weight: 500; }
+.pl-item.completed .pl-text { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--faint); }
+.pl-mark { flex: none; width: 11px; height: 11px; box-sizing: border-box; border-radius: 50%; }
+.pl-mark.todo { border: 1.3px solid var(--faint); }
+.pl-mark.now { border: 1.5px solid var(--acc); background: radial-gradient(circle, var(--acc) 0 2px, transparent 2.5px); }
+.pl-mark.now.spin { background: none; border-right-color: transparent; animation: spin .9s linear infinite; }
+.pl-mark.done { border-radius: 0; width: 12px; height: 12px; margin: 0 -0.5px; color: var(--ok); }
+@media (prefers-reduced-motion: reduce) { .pl-mark.now.spin { animation: none; border-right-color: var(--acc); } }
 
 /* the field: floating */
 /* The field floats over the end of the conversation, which scrolls on under it. */
