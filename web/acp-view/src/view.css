@@ -630,10 +630,11 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 /* What the agent said between steps, folded: its first words on one quiet line. */
 .trail .remark .ln .tp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* What the agent says stands apart from its steps: room above and below, a shade brighter. */
-.trail .remark { margin: 5px 0; }
-.trail .remark .ln .tp { color: var(--fg2); }
+.trail .remark { margin: 9px 0; font-size: var(--fs); }
+.trail .remark .ln .tp { color: var(--fg); }
 .trail .remark .ln.can-open:hover .tp { color: var(--fg); }
-.trail .remark.open { cursor: default; color: var(--fg2); }
+.trail .remark.open { cursor: default; color: var(--fg); }
+.trail .remark.open strong { color: inherit; }
 
 /* What a click and a ⌘-click on the link do, under its peek. */
 .peek-hint { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hair); font-size: calc(var(--fs) - 2.5px); color: var(--faint); }
