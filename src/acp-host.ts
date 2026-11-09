@@ -16,6 +16,7 @@ import { createInterface } from "node:readline";
 import { getBuildInfo, getStateDir } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
+import { AcpApprovals, type AcpApprovalPolicy } from "./acp-approvals.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
@@ -59,6 +60,8 @@ export interface AcpHostOptions {
   /** The warm spare may open the host's own session (startHostedSession); otherwise that session
    *  gets a process started for it. */
   spareCanHost?: boolean;
+  /** The pane command runs tools without asking (acp-approvals.ts): what the host does for that. */
+  approvals?: AcpApprovalPolicy;
   port?: number;
   /** The address and token of a host of this pane that ended without closing (it crashed): a
    *  view still open on it reconnects to this one. */
@@ -480,7 +483,15 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       views.set(client, view);
       const child = takeAgent();
       log(`view ${client} connected${takesOver ? " (taking over)" : ""}, agent ${child.pid}`);
+      const approvals = options.approvals && new AcpApprovals(options.approvals, (line) => {
+        diagnostics.message(client, "host→agent", line);
+        child.stdin?.write(`${line}\n`);
+      }, log, (line) => {
+        diagnostics.message(client, "host→view", line);
+        if (ws.readyState === ws.OPEN) ws.send(line);
+      });
       const link = bridge(ws, child, log, {
+        approvals,
         onAgentLine: (line) => {
           diagnostics.message(client, "agent→view", line);
           view.sessions.agentLine(line);
@@ -586,6 +597,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       const child = takeAgent(false);
       log(`the host starts a session of its own, agent ${child.pid}${child === warm ? " (started ahead)" : ""}`);
       const session = new HostedSession(child, {
+        approvals: options.approvals,
         onAgentLine: (line) => {
           diagnostics.message(0, "agent→host", line);
           activity.agentLine(0, line);
@@ -688,6 +700,9 @@ function bridge(
   child: ChildProcess,
   log: (message: string) => void,
   taps: Pick<AcpHostOptions, "onAgentLine"> & {
+    /** Answers or asks the agent itself where the pane's command says so; what it handles goes
+     *  no further. */
+    approvals?: AcpApprovals;
     /** Sees each message from the client; a reply it returns goes back instead of the message going on. */
     onClientLine?: (line: string) => string | undefined;
     onClose?: (code: number, reason: string) => void;
@@ -705,6 +720,7 @@ function bridge(
   const lines = createInterface({ input: child.stdout! });
   lines.on("line", (line) => {
     if (!line.trim()) return;
+    if (taps.approvals?.agentLine(line)) return;
     taps.onAgentLine?.(line);
     if (ws.readyState === ws.OPEN) ws.send(line);
   });
@@ -716,6 +732,7 @@ function bridge(
       if (ws.readyState === ws.OPEN) ws.send(reply);
       return;
     }
+    taps.approvals?.clientLine(text);
     child.stdin?.write(text.endsWith("\n") ? text : `${text}\n`);
   });
   ws.on("close", (code, reason) => { taps.onClose?.(code, reason.toString()); finish(); });

@@ -8,6 +8,7 @@
 // the agent's questions (permissions) wait for a view when none is attached.
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
+import { AcpApprovals, type AcpApprovalPolicy } from "./acp-approvals.js";
 
 type Id = string | number;
 
@@ -35,6 +36,8 @@ export interface HostedSessionTaps {
   /** Each line to the agent. */
   onClientLine?: (line: string) => void;
   log?: (message: string) => void;
+  /** The pane command runs tools without asking (acp-approvals.ts). */
+  approvals?: AcpApprovalPolicy;
 }
 
 export interface HostedView {
@@ -56,8 +59,10 @@ export class HostedSession {
   private readonly asks = new Map<string, string>();
   private view: { send: (line: string) => void; ids: Map<string, Id> } | undefined;
   private readonly exited: Promise<void>;
+  private readonly approvals: AcpApprovals | undefined;
 
   constructor(private readonly child: ChildProcess, private readonly taps: HostedSessionTaps = {}) {
+    this.approvals = taps.approvals && new AcpApprovals(taps.approvals, (line) => this.toAgent(line), taps.log, (line) => this.fromAgent(line));
     createInterface({ input: child.stdout! }).on("line", (line) => { if (line.trim()) this.fromAgent(line); });
     this.exited = new Promise((resolve) => child.once("exit", () => {
       for (const waiting of this.pending.values()) waiting.reject(new Error("the agent exited"));
@@ -154,6 +159,7 @@ export class HostedSession {
   }
 
   private toAgent(line: string): void {
+    this.approvals?.clientLine(line);
     this.taps.onClientLine?.(line);
     this.child.stdin?.write(`${line}\n`);
   }
@@ -170,9 +176,11 @@ export class HostedSession {
   }
 
   private fromAgent(line: string): void {
+    if (this.approvals?.agentLine(line)) return;
     this.taps.onAgentLine?.(line);
     const message = parse(line);
     if (!message) return;
+    this.followMode(message);
     const key = message.id === undefined || message.id === null ? undefined : String(message.id);
     if (key !== undefined && message.method === undefined) {
       const own = this.pending.get(key);
@@ -193,6 +201,14 @@ export class HostedSession {
     if (key !== undefined) this.asks.set(key, line);
     else if (message.method === "session/update" && message.params?.sessionId === this.sessionId) this.history.push(line);
     this.view?.send(line);
+  }
+
+  /** A view that loads the session later is given the mode it is in now, not the one it opened in. */
+  private followMode(message: Message): void {
+    const update = message.params?.update as { sessionUpdate?: unknown; currentModeId?: unknown } | undefined;
+    if (message.method !== "session/update" || message.params?.sessionId !== this.sessionId || update?.sessionUpdate !== "current_mode_update") return;
+    const modes = this.opened?.modes as Record<string, unknown> | undefined;
+    if (this.opened && modes && typeof update.currentModeId === "string") this.opened = { ...this.opened, modes: { ...modes, currentModeId: update.currentModeId } };
   }
 
   private fromView(view: { send: (line: string) => void; ids: Map<string, Id> }, line: string): void {

@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
 import { reportViewActivity, type AcpAgentEntry } from "./acp-host-cli.js";
+import type { AcpApprovalPolicy } from "./acp-approvals.js";
 import { getStateDir } from "./paths.js";
 
 export interface HandoffSessionInput {
@@ -26,7 +27,7 @@ export interface HandoffSessionInput {
   cwd: string;
   tuiCommand: string;
   runtimeTempDir: string;
-  host?: { webRoot: string; agentCommand: { command: string; args: string[]; env: NodeJS.ProcessEnv } };
+  host?: { webRoot: string; agentCommand: { command: string; args: string[]; env: NodeJS.ProcessEnv }; approvals?: AcpApprovalPolicy };
   /** Why there is no host, shown nowhere but the log: the TUI runs regardless. */
   problem?: string;
   /** The app opens the pane in its ACP view: the agent starts there, its TUI only on the way
@@ -567,6 +568,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         webRoot: input.host.webRoot,
         cwd,
         agentCommand: input.host.agentCommand,
+        approvals: input.host.approvals,
         // The host's own session is the only one its views use: a spare helps only an agent
         // whose spare can open it.
         warmSpare: agent.spareCanHost === true,
