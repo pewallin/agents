@@ -6,7 +6,7 @@
 //
 // The look: a reading column, the agent's text straight on the page, its work as quiet gray lines
 // that open on demand, one floating field to write in.
-import { StrictMode, createContext, lazy, Suspense, useCallback, type ComponentProps, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { StrictMode, createContext, lazy, Suspense, useCallback, type ComponentProps, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
@@ -27,6 +27,7 @@ import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, opti
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import { announceBridge, APP_ACTIONS, APP_HANDLERS, appHandler, definePageEntry, PAGE_ENTRIES, PAGE_EVENTS, type AppHandler } from "./bridge";
+import { gateFromHost, initialGate, nextViewPhase, type GatePhase, type ViewPhase } from "./opening";
 import "./view.css";
 
 announceBridge();
@@ -1927,11 +1928,9 @@ function openChip(target: ChipTarget, options: { alternate: boolean; command?: b
  *  Codex's thread is known from the pane's app-server before its first prompt, though no hook has
  *  reported it yet. */
 function SessionGate({ info }: { info: HostInfo }) {
-  const [resolved, setResolved] = useState<{ id: string | null; persisted?: boolean; busy?: boolean; startsNew?: boolean; problem?: string } | null>(
-    sessionId === "current" ? null : { id: sessionId },
-  );
+  const [gate, setGate] = useState<GatePhase>(() => initialGate(sessionId));
   useEffect(() => {
-    if (sessionId !== "current") return;
+    if (gate.kind !== "finding") return;
     // An agent just started opens its session a moment after its host is up.
     // An agent held up as it starts (a question in its terminal, TerminalWait) has none for as
     // long as it is held up: the view goes on waiting, and opens the session once it has one.
@@ -1951,31 +1950,29 @@ function SessionGate({ info }: { info: HostInfo }) {
     };
     current().then(
       (value) => {
-        // A hand-off agent whose TUI had no session yet: the view starts one.
-        if (value.sessionId === null) { setResolved({ id: null, startsNew: true }); return; }
-        setResolved({ id: value.sessionId, persisted: value.persisted !== false, busy: value.busy === true });
+        setGate(gateFromHost(value));
         // A reload opens the same thread, whatever the pane has open then.
-        history.replaceState(null, "", `/thread/${encodeURIComponent(value.sessionId)}${location.search}${location.hash}`);
+        if (value.sessionId !== null) history.replaceState(null, "", `/thread/${encodeURIComponent(value.sessionId)}${location.search}${location.hash}`);
       },
-      (error: unknown) => setResolved({ id: null, problem: error instanceof Error ? error.message : String(error) }),
+      (error: unknown) => setGate({ kind: "no-session", problem: error instanceof Error ? error.message : String(error) }),
     );
   }, []);
   // codex-acp does not follow a turn that is already running when it loads the thread.
-  const waiting = resolved?.id && resolved.persisted !== false && resolved.busy ? resolved.id : null;
   useEffect(() => {
-    if (!waiting) return;
+    if (gate.kind !== "waiting-for-idle") return;
     let stopped = false;
-    void untilIdle(waiting, () => stopped).then(() => { if (!stopped) setResolved({ id: waiting, persisted: true }); });
+    const waiting = gate.sessionId;
+    void untilIdle(waiting, () => stopped).then(() => { if (!stopped) setGate({ kind: "open", sessionId: waiting }); });
     return () => { stopped = true; };
-  }, [waiting]);
-  if (!resolved) return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} showsTail /></>;
-  if (resolved.startsNew) return <SessionView info={info} sessionId={null} />;
-  if (!resolved.id) return <Notice>The pane has no {info.agent.name} session yet{resolved.problem ? ` (${resolved.problem})` : ""}.</Notice>;
-  if (waiting) return <Opening text={`${info.agent.name} is working; the session shows when it is done`} />;
-  if (resolved.persisted === false) {
-    return <FirstPrompt info={info} sessionId={resolved.id} onStarted={() => setResolved({ id: resolved.id, persisted: true })} />;
+  }, [gate]);
+  switch (gate.kind) {
+    case "finding": return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} showsTail /></>;
+    case "starts-new": return <SessionView info={info} sessionId={null} />;
+    case "no-session": return <Notice>The pane has no {info.agent.name} session yet{gate.problem ? ` (${gate.problem})` : ""}.</Notice>;
+    case "waiting-for-idle": return <Opening text={`${info.agent.name} is working; the session shows when it is done`} />;
+    case "first-prompt": return <FirstPrompt info={info} sessionId={gate.sessionId} onStarted={() => setGate({ kind: "open", sessionId: gate.sessionId })} />;
+    case "open": return <SessionView info={info} sessionId={gate.sessionId} />;
   }
-  return <SessionView info={info} sessionId={resolved.id} />;
 }
 
 interface TerminalScreen {
@@ -2129,46 +2126,42 @@ function FirstPrompt({ info, sessionId, onStarted }: { info: HostInfo; sessionId
 /** The session, loaded and followed live; with no session given, one the view starts. */
 function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | null }) {
   const dispatch = useSession((s) => s.dispatch);
-  const [error, setError] = useState<{ title: string; detail: { message: string; data?: string } } | null>(null);
+  const [phase, send] = useReducer(nextViewPhase, { kind: "connecting" } as ViewPhase);
+  // A new connection for a retry, or for "Take over here", which asks the host for the session
+  // another view has.
   const [reconnects, setReconnects] = useState(0);
-  const [takenOver, setTakenOver] = useState(false);
-  const [cannotLoad, setCannotLoad] = useState<CannotLoadSession | null>(null);
-  const [openElsewhere, setOpenElsewhere] = useState(false);
-  // "Take over here" connects again, asking the host for the session another view has.
   const [takeOvers, setTakeOvers] = useState(0);
-  const takeOverHere = () => { setOpenElsewhere(false); setTakenOver(false); setTakeOvers((count) => count + 1); };
-  const [loaded, setLoaded] = useState(false);
+  const takeOverHere = () => setTakeOvers((count) => count + 1);
   const opening = useOpeningConversation((s) => s.text);
   const session = useMemo(() => token
     ? connectSession({
       url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`,
       sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, takeOver: takeOvers > 0,
-      onTakenOver: () => setTakenOver(true),
+      onTakenOver: () => send({ type: "taken-over" }),
     })
     : null, [info.cwd, info.agent.id, dispatch, takeOvers, reconnects]);
 
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    setError(null);
-    setLoaded(false);
+    send({ type: "connect" });
     Promise.all([session.load(), markdownReady.catch(() => undefined)])
       .then(([loadedSession]) => {
         if (cancelled) return;
         // A reload opens the session the view started.
         if (!sessionId) history.replaceState(null, "", `/thread/${encodeURIComponent(loadedSession.sessionId)}${location.search}${location.hash}`);
         mark("loaded");
-        setLoaded(true);
+        send({ type: "loaded" });
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
-        if (reason instanceof CannotLoadSession) { setCannotLoad(reason); return; }
-        if (reason instanceof OpenElsewhere) { session.close(); setOpenElsewhere(true); return; }
-        setError({ title: "The session could not be opened", detail: errorDetail(reason) });
+        if (reason instanceof CannotLoadSession) { send({ type: "cannot-load", version: reason.agentInfo?.version }); return; }
+        if (reason instanceof OpenElsewhere) { session.close(); send({ type: "open-elsewhere" }); return; }
+        send({ type: "failed", failure: { title: "The session could not be opened", detail: errorDetail(reason) } });
       });
     session.closed.then(
-      () => { if (!cancelled) setError({ title: `The connection to ${info.agent.name} closed`, detail: { message: "The host ended the connection or the agent exited." } }); },
-      (reason: unknown) => { if (!cancelled) setError({ title: `The connection to ${info.agent.name} broke`, detail: errorDetail(reason) }); },
+      () => { if (!cancelled) send({ type: "failed", failure: { title: `The connection to ${info.agent.name} closed`, detail: { message: "The host ended the connection or the agent exited." } } }); },
+      (reason: unknown) => { if (!cancelled) send({ type: "failed", failure: { title: `The connection to ${info.agent.name} broke`, detail: errorDetail(reason) } }); },
     );
     return () => { cancelled = true; };
   }, [session, info.agent.name]);
@@ -2176,41 +2169,42 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
   // Another conversation is opening in the pane: its connection ends as the pane's agent starts
   // again, which is no error to show.
   if (opening) return <Opening text={opening} />;
-  if (cannotLoad) {
-    const version = cannotLoad.agentInfo?.version;
-    // Copilot's changelog has ACP sessions resumed from 1.0.95 (0.0.406 cannot load one).
-    const minimum = info.agent.id === "github-copilot-cli" ? "1.0.95 or later" : "a version that can";
-    return (
-      <Notice>
-        <div>
-          This {info.agent.name}{version ? ` (${version})` : ""} can't open its session in the web view: it cannot load an existing session (ACP <code>session/load</code>).
-          <br />Update {info.agent.name} to {minimum}, or go on in the terminal.
-        </div>
-      </Notice>
-    );
+  switch (phase.kind) {
+    case "cannot-load": {
+      // Copilot's changelog has ACP sessions resumed from 1.0.95 (0.0.406 cannot load one).
+      const minimum = info.agent.id === "github-copilot-cli" ? "1.0.95 or later" : "a version that can";
+      return (
+        <Notice>
+          <div>
+            This {info.agent.name}{phase.version ? ` (${phase.version})` : ""} can't open its session in the web view: it cannot load an existing session (ACP <code>session/load</code>).
+            <br />Update {info.agent.name} to {minimum}, or go on in the terminal.
+          </div>
+        </Notice>
+      );
+    }
+    case "taken-over":
+      return (
+        <Notice>
+          <div>The session was taken over by another view. <button type="button" className="link" onClick={takeOverHere}>Take it back here</button></div>
+        </Notice>
+      );
+    case "open-elsewhere":
+      return (
+        <Notice>
+          <div>The session is already open in another view. <button type="button" className="link" onClick={takeOverHere}>Take over here</button></div>
+        </Notice>
+      );
+    case "failed":
+      return <ErrorNotice title={phase.failure.title} error={phase.failure.detail} agentName={info.agent.name}
+        onRetry={() => setReconnects((count) => count + 1)} />;
+    case "connecting":
+      return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} /></>;
+    case "open":
+      if (!session) return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} /></>;
+      // An agent that shares its session live (Codex) runs its TUI beside the view: one held up by a
+      // question as it starts says so over its conversation, for a while after the view opens.
+      return <><Conversation session={session} info={info} /><TerminalWait agentName={info.agent.name} forMs={TERMINAL_PROMPT_WATCH_MS} /></>;
   }
-  if (takenOver) {
-    return (
-      <Notice>
-        <div>The session was taken over by another view. <button type="button" className="link" onClick={takeOverHere}>Take it back here</button></div>
-      </Notice>
-    );
-  }
-  if (openElsewhere) {
-    return (
-      <Notice>
-        <div>The session is already open in another view. <button type="button" className="link" onClick={takeOverHere}>Take over here</button></div>
-      </Notice>
-    );
-  }
-  if (error) {
-    return <ErrorNotice title={error.title} error={error.detail} agentName={info.agent.name}
-      onRetry={() => setReconnects((count) => count + 1)} />;
-  }
-  if (!session || !loaded) return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} /></>;
-  // An agent that shares its session live (Codex) runs its TUI beside the view: one held up by a
-  // question as it starts says so over its conversation, for a while after the view opens.
-  return <><Conversation session={session} info={info} /><TerminalWait agentName={info.agent.name} forMs={TERMINAL_PROMPT_WATCH_MS} /></>;
 }
 
 /** A review opened as a pane of its own (/review/<id>): its comments go back to the view that
