@@ -21,6 +21,7 @@ import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost } from "./acp-ho
 import { runHandoffSession } from "./acp-handoff.js";
 import { getResourceRoot, getSelfArgv, getStateDir, isCompiledBinary } from "./paths.js";
 import { reportState } from "./state.js";
+import { kiroResumeSessionId, listKiroSessions } from "./kiro-sessions.js";
 
 /** What the view's clients see, reported as the pane's agent state: the app's "needs you" dot
  *  lights while a permission waits in the view, as it does for one in the terminal. */
@@ -78,6 +79,9 @@ export interface AcpAgentEntry {
   /** Hand-off agents that name a session before writing it: whether it has been written. A
    *  session never written has nothing to load, so the view starts one of its own. */
   sessionWritten?(sessionId: string): boolean;
+  /** Hand-off agents whose store moves a session on under another id: the session that goes on
+   *  from `sessionId` in `cwd` (Kiro 3's copy of a Kiro 2 session). */
+  continuedSession?(sessionId: string, cwd: string, tuiCommand: string): string;
 }
 
 function shellQuote(value: string): string {
@@ -321,6 +325,8 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     // and logs to $TMPDIR/kiro-log/kiro-chat.log (kiro.dev/docs/cli/acp).
     sessionLock: (sessionId) => kiroSessionLock(sessionId),
     sessionLocks: () => kiroSessionLocks(),
+    continuedSession: (sessionId, cwd, tuiCommand) =>
+      kiroResumeSessionId(sessionId, cwd, (folder) => listKiroSessions(folder, executableOf(tuiCommand, "kiro-cli"))),
     logFiles: () => [process.env.KIRO_CHAT_LOG_FILE || join(tmpdir(), "kiro-log", "kiro-chat.log")],
   },
 };

@@ -11,6 +11,7 @@ import { respawnPane } from "./tmux-respawn.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
 import { handOffAgentId } from "./acp-restart.js";
+import { kiroResumeSessionId } from "./kiro-sessions.js";
 
 export type AgentSessionResumeCode =
   | "agent-not-idle"
@@ -308,8 +309,8 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     };
   }
 
-  const target = resolveResumeTarget(options);
-  if (!target) {
+  const requested = resolveResumeTarget(options);
+  if (!requested) {
     return {
       ok: false,
       code: "missing-target",
@@ -320,6 +321,16 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
       status: pane.status,
     };
   }
+
+  const resumeAgent = normalizeAgentName(options.agent || pane.agent);
+  const snapshot = readStateSnapshot();
+  const cwd = stateWorkspaceCwd(resumeAgent, pane.tmuxPaneId, snapshot)
+    || stateWorkspaceCwd(pane.agent, pane.tmuxPaneId, snapshot)
+    || (pane.cwd ? normalizeHistoryCwd(pane.cwd) : process.cwd());
+  // Kiro 3 goes on with a Kiro 2 session in a copy of its own: resume that copy (kiro-sessions.ts).
+  const target = resumeAgent === "kiro" && requested.targetKind === "session-id"
+    ? { ...requested, target: kiroResumeSessionId(requested.target, cwd) }
+    : requested;
 
   if (agentStatusRequiresForce(pane.status) && !options.force) {
     return {
@@ -336,7 +347,6 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     };
   }
 
-  const resumeAgent = normalizeAgentName(options.agent || pane.agent);
   const reasoningEffort = resumeAgent === "codex" && target.targetKind === "session-id"
     ? codexReasoningEffortForSession(target.target)
     : undefined;
@@ -360,10 +370,6 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     };
   }
 
-  const snapshot = readStateSnapshot();
-  const cwd = stateWorkspaceCwd(resumeAgent, pane.tmuxPaneId, snapshot)
-    || stateWorkspaceCwd(pane.agent, pane.tmuxPaneId, snapshot)
-    || (pane.cwd ? normalizeHistoryCwd(pane.cwd) : process.cwd());
   const command = renderShellCommand(invocation.argv);
   const respawnCommand = renderResumeRespawnCommand(invocation.argv, { agentsArgv: getSelfArgv() });
 

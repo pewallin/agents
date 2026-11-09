@@ -373,6 +373,9 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   const picked = agent.pickedSession?.(tuiCommand);
   let tuiSession: string | undefined = picked === "unknown" ? undefined : picked;
   let tuiSessionUnknown = picked === "unknown";
+  /** The session that goes on from `id` (Kiro 3's copy of a Kiro 2 session), asked only when a
+   *  session changes hands: asking Kiro takes a moment. */
+  const continued = (id: string | undefined) => id && agent.continuedSession ? agent.continuedSession(id, cwd, tuiCommand) : id;
   let tui: ChildProcess | undefined;
   let reader: Interface | undefined;
   let host: AcpHost | undefined;
@@ -427,7 +430,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     // All of the transcript is written before the TUI writes to the pane: one writer at a time.
     await transcript.drained();
     mode = "tui";
-    const id = sessionId ?? startedSession;
+    const id = continued(sessionId ?? startedSession);
     sessionId = undefined;
     startedSession = undefined;
     tuiSession = id;
@@ -456,7 +459,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   const handOff = async (id: string): Promise<{ status: number; message?: string; session?: string | null; retry?: boolean }> => {
     if (mode === "view") {
       const current = sessionId ?? startedSession ?? null;
-      return id === "current" || id === current
+      return id === "current" || id === current || (current !== null && continued(id) === current)
         ? { status: 200, session: current }
         : { status: 409, message: `The view has another ${agent.name} session.` };
     }
@@ -470,7 +473,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     }
     mode = "switching";
     status(`Stopping ${agent.name} in the terminal…`);
-    const asked = id === "current" ? tuiSession : id;
+    const asked = continued(id === "current" ? tuiSession : id);
     sessionId = !asked || agent.sessionWritten?.(asked) === false ? undefined : asked;
     startedSession = undefined;
     await stopTui();
@@ -600,7 +603,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     log(`${agent.name} starts in the view${tuiSession ? ` on session ${tuiSession}` : ""}`);
     // The app knows the pane's agent from its state before any TUI or hook reports it.
     reportViewActivity(agent.stateAgent, paneId)("idle");
-    sessionId = await hostSession(tuiSession);
+    sessionId = await hostSession(continued(tuiSession));
     inView();
     if (sessionId && input.firstPrompt) {
       // The app shows the view while the agent waits: a hand-off agent at work cannot be

@@ -123,6 +123,8 @@ export function planAcpRestart(input: {
   stateOf: (stateAgent: string) => AgentState | undefined;
   /** The session the agent's processes hold open (Kiro's lock files), for an agent that has one. */
   heldSession?: (registryId: string, pids: number[]) => string | undefined;
+  /** The session that goes on from a kept one (Kiro 3's copy of a Kiro 2 session). */
+  continuedSession?: (registryId: string, sessionId: string) => string;
   /** How to run this agents CLI, as shell words. */
   agentsCommand: string;
 }): RestartPlan {
@@ -142,7 +144,8 @@ export function planAcpRestart(input: {
   // The session the running agent holds is the one to resume; a reported one may be from the
   // agent before it in the pane. A command that names its session says it too.
   const held = input.heldSession?.(agent.registryId, descendants(input.processes, agentProcess.pid).map((process) => process.pid));
-  const sessionId = held ?? state?.externalSessionId?.trim() ?? resumeIdOf(words);
+  const kept = held ?? state?.externalSessionId?.trim() ?? resumeIdOf(words);
+  const sessionId = kept && !agent.live ? input.continuedSession?.(agent.registryId, kept) ?? kept : kept;
   if (!sessionId) {
     return { ok: false, agent: name, reason: "The agent has not reported its session yet; it does once it has run a turn. Restart it in ACP mode after that." };
   }
@@ -290,6 +293,10 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
     heldSession: (registryId, pids) => {
       const locks = ACP_AGENTS[registryId]?.sessionLocks?.();
       return locks ? sessionHeldBy(locks, pids) : undefined;
+    },
+    continuedSession: (registryId, sessionId) => {
+      const agent = ACP_AGENTS[registryId];
+      return agent?.continuedSession ? agent.continuedSession(sessionId, cwd, "") : sessionId;
     },
     agentsCommand: self.map(shellQuote).join(" "),
   });

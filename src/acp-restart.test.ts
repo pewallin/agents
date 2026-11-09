@@ -83,6 +83,17 @@ describe("acp-restart", () => {
     expect(plan([{ pid: 100, ppid: 1, args: "kiro-cli chat --resume-id named" }], {})).toMatchObject({ ok: true, sessionId: "named" });
   });
 
+  it("resumes Kiro 3's copy of a Kiro 2 session, not the Kiro 2 session again", () => {
+    const result = planAcpRestart({
+      paneId: "%1", panePid: 100, processes: [{ pid: 100, ppid: 1, args: "kiro-cli chat -a --v3 --resume-id a28d7390-f2ce" }],
+      stateOf: () => ({ state: "idle", externalSessionId: "a28d7390-f2ce" }),
+      continuedSession: (registryId, sessionId) => registryId === "kiro" ? `cli_${sessionId}_new` : sessionId,
+      agentsCommand: AGENTS_BIN,
+    });
+    expect(result).toMatchObject({ ok: true, sessionId: "cli_a28d7390-f2ce_new" });
+    expect(result.ok && result.command).toBe(`${AGENTS_BIN} acp-session --agent kiro --tui 'kiro-cli chat -a --v3 --resume-id cli_a28d7390-f2ce_new'`);
+  });
+
   it("respawns the pane when the pty wrapper runs Kiro itself: no shell stays to type into", () => {
     const result = plan([
       { pid: 1335, ppid: 1, args: "zsh (kiro-cli-term)" },
