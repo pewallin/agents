@@ -347,6 +347,28 @@ function resetTerminal(transcript: TranscriptPrinter): void {
   if (process.stdin.isTTY) spawnSync("stty", ["sane"], { stdio: "inherit" });
 }
 
+/**
+ * Where a hand-off pane's session is, as the app reads it from pane-N.status.json:
+ *   stopping-tui      the TUI is being stopped to hand its session to the view
+ *   waiting-for-lock  the agent still holds the session's lock
+ *   loading           the host opens the session (or starts one) for the view
+ *   in-view           the view has the session
+ *   in-terminal       the TUI has it (with `error`: a hand-off that failed and came back)
+ *   no-view           this pane has no view (`error` says why)
+ * `step` is the line the app shows while it waits. Bump the version when a field changes meaning.
+ */
+export type AcpHandoffPhase = "stopping-tui" | "waiting-for-lock" | "loading" | "in-view" | "in-terminal" | "no-view";
+export const ACP_HANDOFF_STATUS_VERSION = 1;
+export interface AcpHandoffStatus {
+  version: number;
+  processId: number;
+  agent: string;
+  phase: AcpHandoffPhase;
+  step: string;
+  error?: string;
+  at: string;
+}
+
 export async function runHandoffSession(input: HandoffSessionInput): Promise<never> {
   const { agent, paneId, cwd, tuiCommand, runtimeTempDir } = input;
   const logPath = acpHostMetadataPath(runtimeTempDir, paneId).replace(/\.json$/, ".log");
@@ -356,17 +378,18 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
     } catch {}
   };
-  // What the pane's view waits on, for the app (pane-N.status.json): the step under way, or why
-  // the view cannot open. The app shows it instead of waiting in silence.
+  // Where the pane's session is, for the app (pane-N.status.json, AcpHandoffStatus): the phase,
+  // the line it shows for it, and why the view cannot open. The app goes by the phase.
   const statusPath = logPath.replace(/\.log$/, ".status.json");
-  const status = (step: string, error?: string) => {
+  const status = (phase: AcpHandoffPhase, step: string, error?: string) => {
     try {
-      writeFileSync(statusPath, JSON.stringify({ processId: process.pid, agent: agent.id, step, ...(error ? { error } : {}), at: new Date().toISOString() }));
+      const record: AcpHandoffStatus = { version: ACP_HANDOFF_STATUS_VERSION, processId: process.pid, agent: agent.id, phase, step, ...(error ? { error } : {}), at: new Date().toISOString() };
+      writeFileSync(statusPath, JSON.stringify(record));
     } catch {}
   };
   if (input.problem) {
     log(`no ACP view for ${agent.name}: ${input.problem}`);
-    status("no view", `${agent.name} has no ACP view here: ${input.problem}`);
+    status("no-view", "no view", `${agent.name} has no ACP view here: ${input.problem}`);
   }
 
   let mode: "tui" | "switching" | "view" = "tui";
@@ -445,7 +468,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     tuiSession = id;
     tuiSessionUnknown = false;
     setHosted(false);
-    status("in the terminal");
+    status("in-terminal", "in the terminal");
     // A session the view never prompted in was never written: nothing to resume.
     const resumable = id && agent.sessionWritten?.(id) !== false;
     startTui(resumable ? agent.resume(tuiCommand, id) : tuiCommand);
@@ -483,7 +506,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       return { status: 409, message: `${agent.name} has not said which session it has open; switch once it has run a turn.`, retry: true };
     }
     mode = "switching";
-    status(`Stopping ${agent.name} in the terminal…`);
+    status("stopping-tui", `Stopping ${agent.name} in the terminal…`);
     const asked = continued(id === "current" ? tuiSession : id);
     sessionId = !asked || agent.sessionWritten?.(asked) === false ? undefined : asked;
     startedSession = undefined;
@@ -492,11 +515,11 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     // session/load would find it still in use.
     const lock = sessionId ? agent.sessionLock?.(sessionId) : undefined;
     if (lock) {
-      status(`Waiting for ${agent.name} to release the session…`);
+      status("waiting-for-lock", `Waiting for ${agent.name} to release the session…`);
       if (await waitForLockRelease(lock, 8_000)) log(`lock ${lock} released`);
       else log(`lock ${lock} still held after 8 s, by ${lockHolder(lock) ?? "an unknown process"}; loading the session regardless`);
     }
-    status(sessionId ? "Loading the session…" : `Starting ${agent.name}…`);
+    status("loading", sessionId ? "Loading the session…" : `Starting ${agent.name}…`);
     resetTerminal(transcript);
     // The host holds the session while the view has it: the view attaches to it, and lines for
     // the agent (its coordinator's, its watches') reach it as prompts through the host.
@@ -507,7 +530,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       sessionId = undefined;
       await transcript.drained();
       startTui(back ? agent.resume!(tuiCommand, back) : tuiCommand);
-      status("back in the terminal", lastHostError ?? `${agent.name} could not open its session in the view`);
+      status("in-terminal", "back in the terminal", lastHostError ?? `${agent.name} could not open its session in the view`);
       return { status: 502, message: `${agent.name} could not open its session in the view (${lastHostError ?? "see the pane's log"}); it goes on in the terminal.` };
     }
     log(`handed session ${hostedId} to the view${sessionId ? "" : " (a new one: the TUI had none)"}`);
@@ -552,7 +575,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   /** The view has the session: the pane shows what happens there, and Enter goes back. */
   const inView = () => {
     reportSession(sessionId);
-    status("in the view");
+    status("in-view", "in the view");
     transcript.title(agent.name);
     transcript.say(`${agent.name} is in the ACP view (${sessionId ? `session ${sessionId}` : "a new session"}).\nPress Enter here to go on in the terminal.\n`);
     transcript.endReplay();
@@ -590,7 +613,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   const otherRuns = other !== undefined;
   if (otherRuns) {
     log(`host ${other.processId} still serves ${paneId}: no second host`);
-    status("no view", `another ACP host (process ${other.processId}) still serves this pane`);
+    status("no-view", "no view", `another ACP host (process ${other.processId}) still serves this pane`);
   }
   if (input.host && !otherRuns) {
     try {
@@ -632,7 +655,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       log(`host ${host.url} for ${agent.name} in ${paneId}`);
     } catch (error) {
       log(`host did not start: ${error instanceof Error ? error.message : String(error)}`);
-      status("no view", `the ACP host did not start: ${error instanceof Error ? error.message : String(error)}`);
+      status("no-view", "no view", `the ACP host did not start: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   // A command that picks a session without naming it starts in the terminal: the view would not
@@ -654,7 +677,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     }
   } else {
     startTui(input.firstTuiCommand ?? tuiCommand);
-    if (host) status("in the terminal");
+    if (host) status("in-terminal", "in the terminal");
   }
   return await new Promise<never>(() => {});
 }
