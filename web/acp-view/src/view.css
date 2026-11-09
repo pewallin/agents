@@ -122,6 +122,10 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .say blockquote { border-left: 2px solid var(--hair); padding-left: 12px; color: var(--fg2); }
 .say table { border-collapse: collapse; font-size: calc(var(--fs) - 1px); }
 .say th, .say td { padding: 3px 10px 3px 0; text-align: left; border-bottom: 1px solid var(--hair); }
+/* A table's columns are as wide as their longest word, never a letter: the text around may break
+   anywhere, but in a cell that sized each column to one character. A table too wide scrolls. */
+th, td { overflow-wrap: break-word; }
+.say th { white-space: nowrap; }
 .say hr { border: 0; border-top: 1px solid var(--hair); }
 .plain { white-space: pre-wrap; margin: 0; }
 
