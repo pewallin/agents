@@ -26,7 +26,10 @@ import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordinat
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
+import { announceBridge, APP_ACTIONS, APP_HANDLERS, appHandler, definePageEntry, PAGE_ENTRIES, PAGE_EVENTS, type AppHandler } from "./bridge";
 import "./view.css";
+
+announceBridge();
 
 // Markdown (Streamdown) and code highlighting load beside the session, after the first paint:
 // a conversation shows once both are there, so its text and code never show raw first.
@@ -241,7 +244,7 @@ function ErrorNotice({ title, error, agentName, onRetry }: {
     // A host that does not answer has nothing to add; in the app, the app adds what the host
     // left on disk (its log, its metadata) and copies the lot.
     if (!latest && OPEN_REVIEW_BESIDE) {
-      location.href = `agents-next-action://copy-acp-diagnostics#${btoa(unescape(encodeURIComponent(text)))}`;
+      location.href = `${APP_ACTIONS.copyDiagnostics}#${btoa(unescape(encodeURIComponent(text)))}`;
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       return;
@@ -268,7 +271,7 @@ function ErrorNotice({ title, error, agentName, onRetry }: {
         {stderr.length > 0 && (<><div className="d">Last output from {agentName}:</div><pre>{stderr.join("\n")}</pre></>)}
         <div className="acts">
           {hostGone && OPEN_REVIEW_BESIDE && (
-            <button type="button" className="link" onClick={() => { location.href = "agents-next-action://restart-view-host"; }}>Restart view host</button>
+            <button type="button" className="link" onClick={() => { location.href = APP_ACTIONS.restartViewHost; }}>Restart view host</button>
           )}
           {onRetry && <button type="button" className="link" onClick={onRetry}>Reconnect</button>}
           <button type="button" className="link" onClick={() => void copy()}>{copied ? "Copied" : "Copy diagnostics"}</button>
@@ -830,14 +833,13 @@ async function hostJson<T>(path: string, body?: unknown): Promise<T> {
 }
 
 // The app's context menu opens a link beside the pane through the view's host (Open Beside).
-(window as unknown as { __agentsNextOpenBeside: (url: string) => void }).__agentsNextOpenBeside = (url) => {
+definePageEntry(PAGE_ENTRIES.openBeside, (url: string) => {
   void hostJson("/api/open-page", { url }).catch(() => window.open(url, "_blank"));
-};
+});
 
 /** Sends a message to Agents Next, if the view is in it. */
-function postToApp(handler: "agentsNextACPLink" | "agentsNextACPQuickLook" | "agentsNextConversation", body: Record<string, unknown>): boolean {
-  const handlers = (window as unknown as { webkit?: { messageHandlers?: Record<string, { postMessage: (body: unknown) => void } | undefined> } }).webkit?.messageHandlers;
-  const target = handlers?.[handler];
+function postToApp(handler: AppHandler, body: Record<string, unknown>): boolean {
+  const target = appHandler(handler);
   if (!target) return false;
   target.postMessage(body);
   return true;
@@ -845,13 +847,13 @@ function postToApp(handler: "agentsNextACPLink" | "agentsNextACPQuickLook" | "ag
 
 /** Whether the view is in Agents Next on the Mac, which takes the view's links and actions. */
 function inMacApp(): boolean {
-  return Boolean((window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }).webkit?.messageHandlers?.agentsNextACPLink);
+  return Boolean(appHandler(APP_HANDLERS.link));
 }
 
 /** Whether Agents Next opens another conversation in the pane for the view (/resume, /new): it
  *  runs the resume its Conversations runs, and the pane stays in the view. */
 function conversationsInApp(): boolean {
-  return Boolean((window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }).webkit?.messageHandlers?.agentsNextConversation);
+  return Boolean(appHandler(APP_HANDLERS.conversation));
 }
 
 /** A conversation Agents Next is opening in the pane: the view says so, calmly, until the app
@@ -859,9 +861,9 @@ function conversationsInApp(): boolean {
  *  __agentsNextConversationFailed when it did not (with why, or null when it showed the pane that
  *  has the conversation), and the view is back as it was. */
 const useOpeningConversation = create<{ text: string | null; failure: string | null }>(() => ({ text: null, failure: null }));
-(window as unknown as { __agentsNextConversationFailed: (message: string | null) => void }).__agentsNextConversationFailed = (message) => {
+definePageEntry(PAGE_ENTRIES.conversationFailed, (message: string | null) => {
   useOpeningConversation.setState({ text: null, failure: message || null });
-};
+});
 
 type DictationState = "idle" | "recording" | "transcribing";
 
@@ -869,7 +871,7 @@ type DictationState = "idle" | "recording" | "transcribing";
  *  transcription provider writes it down, and the words come back into the field. Its state and
  *  its text arrive as `agents-next-dictation` events; outside the app there is no microphone. */
 function useAppDictation(onText: (text: string) => void): { available: boolean; state: DictationState; error: string | null; toggle: () => void } {
-  const handler = (window as unknown as { webkit?: { messageHandlers?: Record<string, { postMessage: (body: unknown) => void } | undefined> } }).webkit?.messageHandlers?.agentsNextDictation;
+  const handler = appHandler(APP_HANDLERS.dictation);
   const [state, setState] = useState<DictationState>("idle");
   const [error, setError] = useState<string | null>(null);
   const onTextRef = useRef(onText);
@@ -881,8 +883,8 @@ function useAppDictation(onText: (text: string) => void): { available: boolean; 
       setError(detail.error ?? null);
       if (detail.text) onTextRef.current(detail.text);
     };
-    window.addEventListener("agents-next-dictation", onEvent);
-    return () => window.removeEventListener("agents-next-dictation", onEvent);
+    window.addEventListener(PAGE_EVENTS.dictation, onEvent);
+    return () => window.removeEventListener(PAGE_EVENTS.dictation, onEvent);
   }, []);
   return {
     available: Boolean(handler),
@@ -1036,8 +1038,8 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
         element.setSelectionRange(element.value.length, element.value.length);
       });
     };
-    window.addEventListener("agents-next-quote", onQuote);
-    return () => window.removeEventListener("agents-next-quote", onQuote);
+    window.addEventListener(PAGE_EVENTS.quote, onQuote);
+    return () => window.removeEventListener(PAGE_EVENTS.quote, onQuote);
   }, []);
   const dictation = useAppDictation((text) => {
     setDraft((current) => withDictation(current, text));
@@ -1165,13 +1167,13 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   const openConversation = (conversation: PaneConversation) => {
     const pick = pickConversation(conversation);
     if (pick.kind === "current") { setField(""); setNotice("That conversation is the one open here."); return; }
-    if (pick.kind === "show") { setField(""); setNotice(null); postToApp("agentsNextConversation", { action: "show", pane: pick.pane }); return; }
+    if (pick.kind === "show") { setField(""); setNotice(null); postToApp(APP_HANDLERS.conversation, { action: "show", pane: pick.pane }); return; }
     if (pick.kind === "elsewhere") { setNotice(`That conversation is ${pick.label}: close it there to open it here.`); return; }
     if (switchBlocked) { setNotice(busyLine); return; }
     setField("");
     setNotice(null);
     useOpeningConversation.setState({ text: `Opening ${conversation.title}…`, failure: null });
-    postToApp("agentsNextConversation", {
+    postToApp(APP_HANDLERS.conversation, {
       action: "open",
       agent: history && !("problem" in history) ? history.agent : undefined,
       sessionId: conversation.sessionId,
@@ -1194,17 +1196,17 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
       if (switchBlocked) { setNotice(busyLine); return; }
       done();
       useOpeningConversation.setState({ text: "Starting a new conversation…", failure: null });
-      postToApp("agentsNextConversation", { action: "new" });
+      postToApp(APP_HANDLERS.conversation, { action: "new" });
       return;
     }
     if (id === "terminal") {
       done();
-      window.location.href = "agents-next-action://back-to-terminal";
+      window.location.href = APP_ACTIONS.backToTerminal;
       return;
     }
     if (id === "changes") {
       let count = 0;
-      window.dispatchEvent(new CustomEvent("agents-next-review-conversation", { detail: { answer: (found: number) => { count = found; } } }));
+      window.dispatchEvent(new CustomEvent(PAGE_EVENTS.reviewConversation, { detail: { answer: (found: number) => { count = found; } } }));
       if (count === 0) { setNotice("Nothing has changed in this conversation yet."); return; }
       done();
       return;
@@ -1774,8 +1776,8 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
       (event as CustomEvent<{ answer?: (count: number) => void }>).detail?.answer?.(changes.length);
       if (changes.length > 0) void openReviewRef.current(changes);
     };
-    window.addEventListener("agents-next-review-conversation", onReview);
-    return () => window.removeEventListener("agents-next-review-conversation", onReview);
+    window.addEventListener(PAGE_EVENTS.reviewConversation, onReview);
+    return () => window.removeEventListener(PAGE_EVENTS.reviewConversation, onReview);
   }, []);
   const chipHost = useMemo<ChipHost>(() => ({
     cwd: info.cwd,
@@ -1881,7 +1883,7 @@ function openChip(target: ChipTarget, options: { alternate: boolean; command?: b
   if (options.command) {
     if (target.kind === "url") { window.open(target.url, "_blank"); return; }
     if (target.kind === "file" || target.kind === "dir" || target.kind === "image") {
-      postToApp("agentsNextACPLink", { href: `${target.path}${"line" in target && target.line ? `:${target.line}` : ""}`, alternate: true });
+      postToApp(APP_HANDLERS.link, { href: `${target.path}${"line" in target && target.line ? `:${target.line}` : ""}`, alternate: true });
       return;
     }
   }
@@ -1889,13 +1891,13 @@ function openChip(target: ChipTarget, options: { alternate: boolean; command?: b
     case "file":
     case "dir":
       if (options.change && !options.alternate) { openReview([options.change]); return; }
-      postToApp("agentsNextACPLink", { href: `${target.path}${target.line ? `:${target.line}` : ""}`, alternate: options.alternate });
+      postToApp(APP_HANDLERS.link, { href: `${target.path}${target.line ? `:${target.line}` : ""}`, alternate: options.alternate });
       return;
     case "image":
-      if (!postToApp("agentsNextACPQuickLook", { path: target.path })) window.open(`/api/raw?path=${encodeURIComponent(target.path)}&token=${encodeURIComponent(token ?? "")}`, "_blank");
+      if (!postToApp(APP_HANDLERS.quickLook, { path: target.path })) window.open(`/api/raw?path=${encodeURIComponent(target.path)}&token=${encodeURIComponent(token ?? "")}`, "_blank");
       return;
     case "pane":
-      postToApp("agentsNextACPLink", { href: target.id });
+      postToApp(APP_HANDLERS.link, { href: target.id });
       return;
     case "url":
       if (options.alternate || !OPEN_REVIEW_BESIDE) { window.open(target.url, "_blank"); return; }

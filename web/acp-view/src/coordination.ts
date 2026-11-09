@@ -5,6 +5,7 @@
 //   ROLE: worker. You were started by a coordinator for task "<task>". Read your brief at <file>…
 //   <cli> agent spawn|send|report|close …                     the agent's own coordination commands
 import { create } from "zustand";
+import { definePageEntry, PAGE_ENTRIES } from "./bridge";
 
 export interface CoordinationPane {
   /** tmux pane id, %N. */
@@ -36,9 +37,9 @@ export const useCoordination = create<Coordination>(() => ({ workers: [] }));
 
 // The app hands the page the pane's coordination whenever it changes (WorkspaceACPViewCoordination).
 if (typeof window !== "undefined") {
-  (window as unknown as { __agentsNextApplyCoordination: (value: Coordination) => void }).__agentsNextApplyCoordination = (value) => {
+  definePageEntry(PAGE_ENTRIES.applyCoordination, (value: Coordination) => {
     useCoordination.setState({ ...value, workers: value.workers ?? [] }, true);
-  };
+  });
 }
 
 /** A worker waits on the user: a permission or question in its pane, or a report asking them. */

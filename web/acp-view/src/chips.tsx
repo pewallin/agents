@@ -7,6 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { diffLines } from "diff";
 import { useCoordination, workerNamed } from "./coordination";
 import type { FileChange } from "./turns";
+import { APP_HANDLERS, appHandler, THUMBNAIL_SCHEME } from "./bridge";
 
 export type ChipTarget =
   | { kind: "file" | "image" | "dir"; path: string; rel: string; line?: number }
@@ -71,7 +72,7 @@ function flush() {
 /** The app's answer for names (Agents Next only): {} anywhere else, or when it does not answer. */
 export async function askApp(names: string[]): Promise<Record<string, Resolution>> {
   const handler = typeof window !== "undefined"
-    ? (window as unknown as { webkit?: { messageHandlers?: { agentsNextACPResolve?: { postMessage: (body: unknown) => Promise<unknown> } } } }).webkit?.messageHandlers?.agentsNextACPResolve
+    ? appHandler(APP_HANDLERS.resolve) as { postMessage: (body: unknown) => Promise<unknown> } | undefined
     : undefined;
   if (!handler) return {};
   try {
@@ -516,7 +517,7 @@ const RESULT_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|bmp|heic|tiff?|pdf|html?|md
 /** A picture of a file: in Agents Next the app makes it (QLThumbnailGenerator), so PDFs, pages
  *  and reports have one too; in a browser only images have one. */
 export function thumbnailURL(host: ChipHost, path: string, size = 256, version = ""): string | undefined {
-  if (host.inApp) return `agents-next-thumbnail://thumbnail?path=${encodeURIComponent(path)}&size=${size}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
+  if (host.inApp) return `${THUMBNAIL_SCHEME}://thumbnail?path=${encodeURIComponent(path)}&size=${size}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
   return IMAGE_EXTENSIONS.test(path) ? host.rawURL(`/api/raw?path=${encodeURIComponent(path)}`) : undefined;
 }
 
