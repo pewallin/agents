@@ -564,7 +564,7 @@ code { font: var(--fs-mono) var(--mono); background: var(--tint2); border-radius
 .event.failed .what { color: var(--red); }
 .brief { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 10px; border-radius: 12px; background: color-mix(in srgb, var(--hue) 7%, transparent); }
 .brief-body { color: var(--fg2); font-size: calc(var(--fs) - .5px); }
-.brief-body.folded { -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent); mask-image: linear-gradient(to bottom, #000 60%, transparent); }
+.brief-body.folded { max-height: 4.8em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent); }
 .brief-body .you-more { margin: 4px 0 0; }
 .worker-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--dim); font-size: calc(var(--fs) - 1px); padding-bottom: 4px; border-bottom: 1px solid var(--hair); }
 .worker-line .spark { width: 11px; height: 11px; color: var(--hue); }

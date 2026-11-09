@@ -68,8 +68,9 @@ export function BriefRow({ task, brief, prompt, respawn }: { task: string; brief
   const [open, setOpen] = useState(false);
   // The brief file starts with its title and where it came from; the brief itself is under "## Brief".
   const body = text ? (text.split(/^## Brief\s*$/m)[1] ?? text).split(/^## /m)[0].trim() : null;
-  const lines = body?.split("\n") ?? [];
-  const folds = lines.length > 6;
+  // Folded, it shows its first three lines: the goal, as a rule. The ROLE line the row says already.
+  const shown = body?.replace(/^\s*ROLE:[^\n]*\n+/i, "") ?? "";
+  const folds = shown.split("\n").length > 3 || shown.length > 240;
   return (
     <div className="brief">
       <div className="event">
@@ -84,7 +85,7 @@ export function BriefRow({ task, brief, prompt, respawn }: { task: string; brief
       {body && (
         <>
           <div className={`brief-body${folds && !open ? " folded" : ""}`}>
-            <Suspense fallback={<p className="plain">{body}</p>}><Markdown text={folds && !open ? lines.slice(0, 6).join("\n") : body} streaming={false} /></Suspense>
+            <Suspense fallback={<p className="plain">{body}</p>}><Markdown text={folds && !open ? shown.split(/\n\s*\n/).slice(0, 2).join("\n\n") : body} streaming={false} /></Suspense>
           </div>
           {folds && <button type="button" className="you-more" onClick={() => setOpen(!open)}>{open ? "Show less" : "Show the whole brief"}</button>}
         </>
