@@ -626,7 +626,7 @@ function clockTime(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/** Text you typed, with its ticket ids as links (tickets.ts). */
+/** Text you typed, with its ticket ids as their chips (tickets.ts). */
 function TicketText({ text }: { text: string }) {
   const rules = useTicketRules();
   const tokens = useMemo(() => typedTicketTokens(text, rules), [text, rules]);
@@ -635,7 +635,7 @@ function TicketText({ text }: { text: string }) {
   let at = 0;
   for (const token of tokens) {
     if (token.start > at) parts.push(text.slice(at, token.start));
-    parts.push(<a key={token.start} href={token.href} className="fl ticket" target="_blank" rel="noreferrer" title={token.href}>{text.slice(token.start, token.end)}</a>);
+    parts.push(<Chip key={token.start} target={{ kind: "ticket", id: token.id, url: token.href }} label={text.slice(token.start, token.end)} />);
     at = token.end;
   }
   if (at < text.length) parts.push(text.slice(at));
@@ -1921,7 +1921,7 @@ function openChip(target: ChipTarget, options: { alternate: boolean; command?: b
   // A plain click opens a link, as on a web page; ⌘ opens a file in the editor and a web page in
   // the default browser (in a terminal, where a click places the cursor, ⌘ is what opens).
   if (options.command) {
-    if (target.kind === "url") { window.open(target.url, "_blank"); return; }
+    if (target.kind === "url" || target.kind === "ticket") { window.open(target.url, "_blank"); return; }
     if (target.kind === "file" || target.kind === "dir" || target.kind === "image") {
       postToApp(APP_HANDLERS.link, { href: `${target.path}${"line" in target && target.line ? `:${target.line}` : ""}`, alternate: true });
       return;
@@ -1940,6 +1940,7 @@ function openChip(target: ChipTarget, options: { alternate: boolean; command?: b
       postToApp(APP_HANDLERS.link, { href: target.id });
       return;
     case "url":
+    case "ticket":
       if (options.alternate || !OPEN_REVIEW_BESIDE) { window.open(target.url, "_blank"); return; }
       hostJson("/api/open-page", { url: target.url }).catch(() => window.open(target.url, "_blank"));
       return;

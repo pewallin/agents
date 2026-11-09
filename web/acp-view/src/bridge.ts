@@ -3,7 +3,7 @@
 // version it speaks (data-acp-bridge on <html>), so a view and an app of different releases are
 // noticed in the pane's log instead of failing quietly. Bump BRIDGE_VERSION when a channel or its
 // message changes.
-export const BRIDGE_VERSION = 1;
+export const BRIDGE_VERSION = 2;
 
 /** The app's message handlers (window.webkit.messageHandlers.<name>.postMessage). */
 export const APP_HANDLERS = {
@@ -13,6 +13,8 @@ export const APP_HANDLERS = {
   conversation: "agentsNextConversation",
   dictation: "agentsNextDictation",
   menu: "agentsNextACPMenu",
+  /** The title of a ticket the view links, read by the app with the user's logins (a reply). */
+  ticketTitle: "agentsNextACPTicketTitle",
 } as const;
 export type AppHandler = (typeof APP_HANDLERS)[keyof typeof APP_HANDLERS];
 

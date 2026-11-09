@@ -155,9 +155,6 @@ th, td { overflow-wrap: break-word; }
 :root[data-theme="dark"] [data-streamdown="code-block-body"] code span span { color: var(--shiki-dark, var(--sdm-c, inherit)); }
 .say .fl, .say a { color: inherit; text-decoration: underline dotted; text-decoration-color: var(--faint); text-underline-offset: 3px; }
 .say .fl:hover, .say a:hover { color: var(--acc); text-decoration-color: var(--acc); }
-/* A ticket id in a message you sent (tickets.ts), as links read in the agent's text. */
-.you a.ticket { color: inherit; text-decoration: underline dotted; text-decoration-color: currentColor; text-underline-offset: 3px; }
-.you a.ticket:hover { text-decoration-style: solid; }
 .say strong { font-weight: 600; }
 
 /* the agent's work: gray one-liners, depth on click */

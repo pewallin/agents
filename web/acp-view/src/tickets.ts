@@ -1,14 +1,14 @@
-// Ticket ids in prose (`TH-1234`) as links, by the rules the user set in Agents Next (Settings ›
+// Ticket ids in prose (`TH-1234`) as chips, by the rules the user set in Agents Next (Settings ›
 // Agents › Ticket Links, or `agents-app-control settings set agents.ticketLinks`). The app hands
 // them to the page in its look (ACPViewLook.tickets in AgentsAppCore); nothing about a tracker is
-// built in. An id is linked only as a word of its own, and never in code or inside a link.
+// built in. An id is linked only as a word of its own, and never in code or inside a link. The
+// chip's peek asks the app for the ticket's title (the ticketTitle handler), which it reads with
+// the user's logins.
 import { useSyncExternalStore } from "react";
 
 export interface TicketRule {
   /** What the id starts with, matched without regard to case. */
   prefix: string;
-  /** At most this many digits follow it; null: any number. */
-  digits: number | null;
   /** An http(s) address with {id} (the whole id) or {number} (its digits). */
   url: string;
 }
@@ -21,8 +21,7 @@ export function ticketRules(look: unknown): TicketRule[] {
     const rule = value as Partial<TicketRule> | null;
     if (!rule || typeof rule.prefix !== "string" || !rule.prefix || typeof rule.url !== "string") return [];
     if (!/^https?:\/\//i.test(rule.url) || !/\{(?:id|number)\}/.test(rule.url)) return [];
-    const digits = typeof rule.digits === "number" && rule.digits > 0 ? Math.floor(rule.digits) : null;
-    return [{ prefix: rule.prefix, digits, url: rule.url }];
+    return [{ prefix: rule.prefix, url: rule.url }];
   });
 }
 
@@ -37,8 +36,7 @@ export function ticketTokens(text: string, rules: readonly TicketRule[]): Ticket
   if (rules.length === 0 || !text) return [];
   const found: TicketToken[] = [];
   for (const rule of rules) {
-    const digits = rule.digits ? `\\d{1,${rule.digits}}` : "\\d+";
-    const pattern = new RegExp(`(?<![\\p{L}\\p{N}_\\-/.#@])${escaped(rule.prefix)}(${digits})(?![\\p{L}\\p{N}_\\-/@]|\\.\\p{L})`, "giu");
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}_\\-/.#@])${escaped(rule.prefix)}(\\d+)(?![\\p{L}\\p{N}_\\-/@]|\\.\\p{L})`, "giu");
     for (const match of text.matchAll(pattern)) {
       const start = match.index ?? 0;
       const end = start + match[0].length;
@@ -66,7 +64,8 @@ interface HastNode { type: string; tagName?: string; value?: string; properties?
 /** Where an id is the text's own: code, links, pictures and the file chips' marks. */
 const SKIPPED = new Set(["code", "pre", "a", "img", "svg", "math"]);
 
-/** A rehype plugin: each ticket id in the prose becomes a link (`a[data-ticket]`) to its address.
+/** A rehype plugin: each ticket id in the prose becomes a link (`a[data-ticket]`) to its address,
+ *  which the view shows as the ticket's chip.
  *  It runs after the link filter, so it makes only the addresses its rules allow (http and
  *  https, checked in ticketRules). */
 export function rehypeTicketLinks(rules: readonly TicketRule[]) {

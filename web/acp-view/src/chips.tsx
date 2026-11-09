@@ -13,6 +13,7 @@ export type ChipTarget =
   | { kind: "file" | "image" | "dir"; path: string; rel: string; line?: number }
   | { kind: "pane"; id: string; state?: string }
   | { kind: "url"; url: string }
+  | { kind: "ticket"; id: string; url: string }
   | { kind: "bead"; id: string; title: string; status: string }
   | { kind: "commit"; sha: string; short: string; subject: string };
 
@@ -180,6 +181,7 @@ const ICONS: Record<string, ReactNode> = {
   image: <><rect x="1.5" y="2.5" width="11" height="9" rx="1.5" /><path d="M2 10l3-3 2.5 2.5L9.5 7.5 12 10" /></>,
   pane: <><rect x="1.5" y="2" width="11" height="10" rx="1.6" /><path d="M4 5.5l2 1.5-2 1.5M7.5 9h2.5" /></>,
   url: <><circle cx="7" cy="7" r="5.5" /><path d="M1.5 7h11M7 1.5c2 2 2 9 0 11M7 1.5c-2 2-2 9 0 11" /></>,
+  ticket: <><path d="M1.5 4.5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1.2a1.4 1.4 0 0 0 0 2.6v1.2a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V8.3a1.4 1.4 0 0 0 0-2.6z" /><path d="M5 5.5v3" strokeDasharray="1 1.2" /></>,
   bead: <><circle cx="7" cy="7" r="5" /><circle cx="7" cy="7" r="1.8" /></>,
   commit: <><circle cx="7" cy="7" r="2.4" /><path d="M1 7h3.6M9.4 7H13" /></>,
 };
@@ -217,6 +219,7 @@ export function Chip({ target, label, counts = true }: { target: ChipTarget; lab
     ? shortName(target.rel)
     : target.kind === "pane" ? target.id
       : target.kind === "url" ? siteOf(target.url)
+        : target.kind === "ticket" ? target.id
         : target.kind === "bead" ? target.id
           : target.kind === "commit" ? target.short : "");
   // A changed file's chip has two parts: its name opens the file (a preview for Markdown and
@@ -239,7 +242,7 @@ export function Chip({ target, label, counts = true }: { target: ChipTarget; lab
   </>;
   return (
     <span ref={element} className={`chip ${target.kind}${change ? " changed" : ""}${split ? " split" : ""}`} role="link" tabIndex={0}
-      data-path={target.kind === "file" || target.kind === "image" || target.kind === "dir" ? `${target.path}${target.line ? `:${target.line}` : ""}` : target.kind === "url" ? target.url : target.kind === "pane" ? target.id : undefined}
+      data-path={target.kind === "file" || target.kind === "image" || target.kind === "dir" ? `${target.path}${target.line ? `:${target.line}` : ""}` : target.kind === "url" || target.kind === "ticket" ? target.url : target.kind === "pane" ? target.id : undefined}
       draggable={target.kind === "file" || target.kind === "image"}
       onDragStart={(event) => {
         if (target.kind !== "file" && target.kind !== "image") return;
@@ -333,7 +336,7 @@ export function clickHint(target: ChipTarget, changed = false): string {
     case "file": return changed ? "Click the name: open beside · the counts: this turn's changes · ⌘-click: open in the editor" : "Click: open beside · ⌘-click: open in the editor";
     case "dir": return "Click: open beside · ⌘-click: open in the editor";
     case "image": return "Click: Quick Look · ⌘-click: open in the editor";
-    case "url": return "Click: open beside · ⌘-click: open in your browser";
+    case "url": case "ticket": return "Click: open beside · ⌘-click: open in your browser";
     case "pane": return "Click: show the pane";
     case "bead": case "commit": return "Click: open beside";
   }
@@ -388,6 +391,7 @@ function PeekBody({ target, change }: { target: ChipTarget; change?: FileChange 
     case "image": return <ImagePeek path={target.path} />;
     case "pane": return <PanePeek id={target.id} />;
     case "url": return <LinkPeek url={target.url} />;
+    case "ticket": return <TicketPeek id={target.id} url={target.url} />;
     case "bead": return <BeadPeek id={target.id} />;
     case "commit": return <CommitPeek sha={target.sha} />;
   }
@@ -482,6 +486,31 @@ function LinkPeek({ url }: { url: string }) {
     <>
       <div className="peek-title">{value?.title ?? (value ? url : "…")}</div>
       <div className="peek-dim">{value?.site ?? siteOf(url)}</div>
+    </>
+  );
+}
+
+/** A ticket's title, as the app reads it with the user's logins (its tracker's page needs them);
+ *  outside the app, as the host reads the page. */
+function TicketPeek({ id, url }: { id: string; url: string }) {
+  const host = useContext(ChipHostContext);
+  const [title, setTitle] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    const app = appHandler(APP_HANDLERS.ticketTitle);
+    const asked: Promise<{ title?: string | null } | undefined> = app
+      ? Promise.resolve(app.postMessage({ url }) as Promise<{ title?: string | null }>)
+      : host ? host.hostJson<{ title: string | null }>(`/api/link?url=${encodeURIComponent(url)}`) : Promise.resolve(undefined);
+    void asked.then((value) => { if (live) setTitle(value?.title ?? null); }, () => { if (live) setTitle(null); });
+    return () => { live = false; };
+  }, [url, host]);
+  const site = siteOf(url).split("/")[0];
+  return (
+    <>
+      <div className="peek-head"><span className="mono">{id}</span><span className="peek-dim">{site}</span></div>
+      {title === undefined ? <div className="peek-dim">…</div>
+        : title ? <div className="peek-title">{title}</div>
+          : <div className="peek-dim">No title: sign in to {site} in a web pane of the app to see it.</div>}
     </>
   );
 }

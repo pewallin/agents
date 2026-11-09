@@ -6,7 +6,7 @@ import { defaultRehypePlugins, Streamdown } from "streamdown";
 // The fade-in of words as a reply streams (Streamdown's animate plugin and its keyframes).
 import "streamdown/styles.css";
 import { CodeBlock, Quote } from "./blocks";
-import { NamedChip } from "./chips";
+import { Chip, NamedChip } from "./chips";
 import { rehypeFileLinks, rehypePathRefs } from "./paths";
 import { rehypeTicketLinks, useTicketRules, type TicketRule } from "./tickets";
 
@@ -29,15 +29,15 @@ function textOf(children: ReactNode): string | null {
  *  plain link; web links open outside the view. */
 function Link({ href, children, "data-ticket": ticket }: { href?: string; children?: ReactNode; "data-ticket"?: string }) {
   const external = typeof href === "string" && /^https?:\/\//i.test(href);
+  // A ticket id (rehypeTicketLinks) is the ticket's chip, with the id as the text has it.
+  if (ticket && href && external) return <Chip target={{ kind: "ticket", id: ticket, url: href }} label={children} />;
   const plain = (
-    <a href={href} className={ticket ? "fl ticket" : "fl"} target={external ? "_blank" : undefined} rel="noreferrer"
-      title={ticket ? href : undefined}
+    <a href={href} className="fl" target={external ? "_blank" : undefined} rel="noreferrer"
       onClick={(event) => { if (!external) event.preventDefault(); }}>
       {children}
     </a>
   );
-  // A ticket id (rehypeTicketLinks) reads as the id the text has, not as a web page's chip.
-  if (!href || href.startsWith("#") || ticket) return plain;
+  if (!href || href.startsWith("#")) return plain;
   const text = textOf(children);
   // A link whose text is its address shows as the chip's own short name.
   const label = text && text !== href && text.replace(/^https?:\/\//, "") !== href.replace(/^https?:\/\//, "") ? children : undefined;
