@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileCapture } from "./shell.js";
 import { kiroSessionLocks } from "./kiro-sessions.js";
+import { normalizeAgentName, sameAgent } from "./agent-registry.js";
 import { liveLockHolder } from "./acp-handoff.js";
 import type { AgentPane } from "./scanner-types.js";
 
@@ -42,13 +43,6 @@ export interface HolderInputs {
   records: Array<{ sessionId: string; pid: number }>;
 }
 
-function sameAgent(a: string, b: string): boolean {
-  const normalize = (name: string) => {
-    const base = name.split("/").pop()?.toLowerCase() ?? name.toLowerCase();
-    return base === "kiro-cli" || base === "kiro-cli-chat" ? "kiro" : base;
-  };
-  return normalize(a) === normalize(b);
-}
 
 /** The tmux pane a process runs in: the pane whose process is it or one of its ancestors. */
 export function paneOfProcess(pid: number, inputs: Pick<HolderInputs, "tmuxPanes" | "processes">): HolderInputs["tmuxPanes"][number] | undefined {
@@ -178,9 +172,8 @@ function claudeRecords(sessionIds: Set<string>, processes: Array<{ pid: number; 
 /** The agent's own records of processes that have `sessionIds` open. */
 function agentRecords(agent: string, sessionIds: Set<string>, processes: Array<{ pid: number; args: string }>): HolderInputs["records"] {
   if (sessionIds.size === 0) return [];
-  switch (agent.split("/").pop()?.toLowerCase()) {
+  switch (normalizeAgentName(agent)) {
     case "kiro":
-    case "kiro-cli":
       return kiroRecords(sessionIds);
     case "codex":
       return codexRecords(sessionIds);

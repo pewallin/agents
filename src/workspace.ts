@@ -10,7 +10,8 @@ import { setTmuxPaneCommandMetadata } from "./tmux-pane-metadata.js";
 import { scan } from "./scanner.js";
 import type { WorkspaceDef, LaunchProfile } from "./config.js";
 import type { StateEntry, WorkspaceSnapshot } from "./state.js";
-import { splitCommandArgv } from "./command-words.js";
+import { commandWords, splitCommandArgv } from "./command-words.js";
+import { normalizeAgentName } from "./agent-registry.js";
 
 const DEFAULT_LAYOUTS: Record<string, WorkspaceDef[]> = {
   default: [
@@ -400,8 +401,7 @@ export function createWorkspace(agentCmd?: string, name?: string, layout?: strin
  *  This captures the authoritative session/cwd before preview swaps can muddy it. */
 function seedWorkspaceState(agentPaneId: string, agentCommand: string, snapshot: WorkspaceSnapshot): void {
   // Infer agent name from command (e.g. "claude --dangerously-skip-permissions" → "claude")
-  const executable = agentCommand.split(/\s+/)[0].replace(/.*\//, "").toLowerCase();
-  const agent = executable === "kiro-cli" || executable === "kiro-cli-chat" ? "kiro" : executable;
+  const agent = normalizeAgentName(commandWords(agentCommand)[0]) ?? "";
   // For tmux, also capture session name from the actual pane if not already set
   if (!snapshot.sessionName && agentPaneId.startsWith("%")) {
     try {

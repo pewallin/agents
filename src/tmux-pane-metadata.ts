@@ -1,6 +1,6 @@
-import { basename } from "path";
 import { execFileCapture } from "./shell.js";
 import { commandWords } from "./command-words.js";
+import { normalizeAgentName as registryAgentName } from "./agent-registry.js";
 
 export type TmuxPaneContentKind = "agent" | "command" | "editor" | "terminal";
 
@@ -37,17 +37,8 @@ const REPORT_METADATA_SEPARATOR = "\u001f";
 const AGENT_COMMAND_NAMES = new Set(["claude", "codex", "copilot", "kiro", "kiro-cli", "kiro-cli-chat", "opencode", "pi", "hermes"]);
 
 
-function tokenBasename(value: string | undefined): string | undefined {
-  const normalized = basename((value || "").replace(/^['"]+|['"]+$/g, "")).replace(/^-/, "").toLowerCase();
-  return normalized || undefined;
-}
 
-function normalizeAgentName(value: string | undefined): string | undefined {
-  const normalized = tokenBasename(value);
-  if (!normalized) return undefined;
-  if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
-  return normalized;
-}
+const normalizeAgentName = registryAgentName;
 
 function firstExecutableToken(command: string | undefined): string | undefined {
   if (!command) return undefined;

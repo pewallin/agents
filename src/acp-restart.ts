@@ -9,26 +9,9 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ACP_AGENTS } from "./acp-host-cli.js";
+import { acpViewAgent } from "./agent-registry.js";
 import { getSelfArgv, getStateDir } from "./paths.js";
 import { respawnPane } from "./tmux-respawn.js";
-
-/** Executables of the agents that have an ACP view, and how each gets it. */
-const AGENTS: Record<string, { stateAgent: string; registryId: string; live: boolean }> = {
-  codex: { stateAgent: "codex", registryId: "codex-acp", live: true },
-  claude: { stateAgent: "claude", registryId: "claude-acp", live: false },
-  opencode: { stateAgent: "opencode", registryId: "opencode", live: false },
-  pi: { stateAgent: "pi", registryId: "pi-acp", live: false },
-  copilot: { stateAgent: "copilot", registryId: "github-copilot-cli", live: false },
-  "kiro-cli": { stateAgent: "kiro", registryId: "kiro", live: false },
-};
-
-/** The ACP registry id an agent's executable hands its session over with (`acp-session --agent`),
- *  for every agent with an ACP view but Codex, which shares its session live. */
-export function handOffAgentId(executable: string | undefined): string | undefined {
-  const name = basename(executable ?? "").toLowerCase();
-  const agent = AGENTS[name];
-  return agent && !agent.live ? agent.registryId : undefined;
-}
 
 /** A shell integration's pty wrapper (Kiro's "zsh (kiro-cli-term)", Amazon Q's and Fig's alike)
  *  names itself after the shell it wraps: it is no shell to type into. */
@@ -75,7 +58,7 @@ export function agentWords(args: string): { name: string; words: string[] } | un
   let start = 0;
   if (RUNTIMES.has(basename(words[0])) && words.length > 1) start = 1;
   const name = basename(words[start]).toLowerCase();
-  if (!(name in AGENTS)) return undefined;
+  if (!acpViewAgent(name)) return undefined;
   // The executable as it ran (its path), not its name: the restarted pane may not find the name
   // on its PATH (a Kiro the app could not restart, 2026-11-06).
   return { name, words: [words[start], ...words.slice(start + 1)] };
@@ -136,7 +119,8 @@ export function planAcpRestart(input: {
   const agentProcess = tree.find((process) => agentWords(process.args) !== undefined);
   if (!agentProcess) return { ok: false, reason: "This pane runs no agent with an ACP view." };
   const { name, words } = agentWords(agentProcess.args)!;
-  const agent = AGENTS[name];
+  const view = acpViewAgent(name)!;
+  const agent = { ...view, stateAgent: view.agent };
   const state = input.stateOf(agent.stateAgent);
   if (state?.state && BUSY.has(state.state)) {
     return { ok: false, agent: name, reason: "The agent is working – restart it in ACP mode when it is done." };

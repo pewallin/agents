@@ -125,6 +125,26 @@ if (firstArg === "acp-prompt") {
   const agentsHome = process.env.AGENTS_HOME || join(process.env.HOME || "", ".agents", "agents-app");
   process.exit(await runAcpPrompt(args.slice(1), process.env.AGENTS_TMP_DIR || join(agentsHome, "runtime", "tmp")));
 }
+// The agents with an ACP view and how each gets it (agent-registry.ts), for Agents Next and its
+// agents-app-control, which keep no table of their own.
+if (firstArg === "acp-agents") {
+  const { ACP_VIEW_AGENTS } = await import("./agent-registry.js");
+  console.log(JSON.stringify({ agents: ACP_VIEW_AGENTS }));
+  process.exit(0);
+}
+// An agent's TUI command under the wrapper of its ACP view (codex-session or acp-session --tui),
+// printed for a launcher to run: as it is for a command of no agent with a view.
+if (firstArg === "agent-launch") {
+  const at = args.indexOf("--command");
+  const command = at >= 0 ? args[at + 1] : undefined;
+  if (!command) {
+    console.error("agent-launch needs --command <the agent's command>");
+    process.exit(2);
+  }
+  const { agentLaunchCommand } = await import("./agent-registry.js");
+  console.log(agentLaunchCommand(command, getSelfArgv()));
+  process.exit(0);
+}
 // Changes no agent made, shown in the ACP view's review (Agents Next's Changes panel).
 if (firstArg === "review") {
   process.exit(await (await import("./review-server.js")).runReviewCommand(args.slice(1)));

@@ -8,6 +8,7 @@ import { loadConfig, resolveProfile, type CommandConfigEntry } from "./config.js
 import { readStates, type StateEntry } from "./state.js";
 import { getRuntimeTempDir } from "./paths.js";
 import { commandWords, splitCommandArgv } from "./command-words.js";
+import { normalizeAgentName as registryAgentName } from "./agent-registry.js";
 
 export interface AgentRestoreCommandOptions {
   agent: string;
@@ -58,9 +59,7 @@ function tokenBasename(token: string): string {
 }
 
 function normalizeAgentName(agent: string): string {
-  const normalized = tokenBasename(agent);
-  if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
-  return normalized;
+  return registryAgentName(agent) ?? "";
 }
 
 function isShellCommandName(value: string | undefined): boolean {

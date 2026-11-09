@@ -10,7 +10,7 @@ import { getSelfArgv } from "./paths.js";
 import { respawnPane } from "./tmux-respawn.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
-import { handOffAgentId } from "./acp-restart.js";
+import { agentLaunchCommand, normalizeAgentName as registryAgentName } from "./agent-registry.js";
 import { kiroContinuedSession } from "./kiro-sessions.js";
 import { describeHolder, findSessionHolders, liveHolderInputs, type SessionHolder } from "./session-holders.js";
 import { acpHostMetadataPath, acpHostRuntimeTempDir, readAcpHostMetadata } from "./acp-host.js";
@@ -87,9 +87,7 @@ export interface ResumeStateSeed {
 type TmuxPaneLookup = (paneFilter: string) => string | undefined;
 
 function normalizeAgentName(agent: string): string {
-  const normalized = agent.split("/").pop()?.toLowerCase() || agent.toLowerCase();
-  if (normalized === "kiro-cli" || normalized === "kiro-cli-chat") return "kiro";
-  return normalized;
+  return registryAgentName(agent) ?? agent.toLowerCase();
 }
 
 function defaultBaseArgv(agent: string): string[] {
@@ -229,10 +227,6 @@ export interface ResumeRespawnOptions {
   agentsArgv?: string[];
 }
 
-function isCodexExecutable(executable?: string): boolean {
-  return (executable || "").split("/").pop()?.toLowerCase() === "codex";
-}
-
 /**
  * A resumed agent runs under the wrapper that serves its ACP view, as one the app starts does:
  * Codex through `codex-session`, which gives the pane its own app-server, and every other agent
@@ -240,13 +234,7 @@ function isCodexExecutable(executable?: string): boolean {
  * Without it the pane has no view (tmux restore, a resume from the session history).
  */
 export function renderResumeRespawnCommand(argv: string[], options: ResumeRespawnOptions = {}): string {
-  const agentCommand = shellCommand(argv);
-  const handOff = handOffAgentId(argv[0]);
-  const command = options.agentsArgv?.length && isCodexExecutable(argv[0])
-    ? shellCommand([...options.agentsArgv, "codex-session", "--command", agentCommand])
-    : options.agentsArgv?.length && handOff
-      ? shellCommand([...options.agentsArgv, "acp-session", "--agent", handOff, "--tui", agentCommand])
-      : agentCommand;
+  const command = agentLaunchCommand(shellCommand(argv), options.agentsArgv ?? []);
   return [
     `agents_prepend_path_dir() { [ -d "$1" ] || return 0; case ":$PATH:" in *":$1:"*) ;; *) PATH="$1\${PATH:+:$PATH}" ;; esac; }`,
     `agents_prepend_path_dir /opt/homebrew/bin`,
