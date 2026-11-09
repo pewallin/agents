@@ -21,8 +21,9 @@ import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost } from "./acp-ho
 import { runHandoffSession } from "./acp-handoff.js";
 import { getResourceRoot, getSelfArgv, getStateDir, isCompiledBinary } from "./paths.js";
 import { reportState } from "./state.js";
-import { kiroResumeSessionId, listKiroSessions } from "./kiro-sessions.js";
+import { kiroContinuedSession, kiroSessionLock, kiroSessionLocks, kiroSetting } from "./kiro-sessions.js";
 import { claudeLaunchSettings, kiroLaunchSettings, opencodeLaunchSettings, type AcpLaunchSettings } from "./acp-launch-settings.js";
+import { commandWords, shellCommand } from "./command-words.js";
 
 /** What the view's clients see, reported as the pane's agent state: the app's "needs you" dot
  *  lights while a permission waits in the view, as it does for one in the terminal. */
@@ -82,7 +83,7 @@ export interface AcpAgentEntry {
   sessionWritten?(sessionId: string): boolean;
   /** Hand-off agents whose store moves a session on under another id: the session that goes on
    *  from `sessionId` in `cwd` (Kiro 3's copy of a Kiro 2 session). */
-  continuedSession?(sessionId: string, cwd: string, tuiCommand: string): string;
+  continuedSession?(sessionId: string): string;
   /** Hand-off agents: what the TUI command sets on a session (mode or agent, model, effort,
    *  running tools without asking) that the adapter takes no option for; the host sets it on each
    *  session (acp-launch-settings.ts). */
@@ -92,9 +93,6 @@ export interface AcpAgentEntry {
   offersAllowAll?: boolean;
 }
 
-function shellQuote(value: string): string {
-  return /^[A-Za-z0-9_./:=@%+-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-}
 
 /** The command's words without the options that pick a session, then the agent's own. */
 function resumeWith(
@@ -103,7 +101,7 @@ function resumeWith(
   dropFlags: string[],
   add: (sessionId: string) => string[],
 ): (sessionId: string) => string {
-  const words = tuiCommand.trim().split(/\s+/).filter(Boolean);
+  const words = commandWords(tuiCommand);
   const kept: string[] = [];
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
@@ -115,7 +113,7 @@ function resumeWith(
     if (dropWithValue.some((option) => word.startsWith(`${option}=`))) continue;
     kept.push(word);
   }
-  return (sessionId) => [...kept, ...add(sessionId).map(shellQuote)].join(" ");
+  return (sessionId) => shellCommand([...kept, ...add(sessionId)]);
 }
 
 /** A hand-off agent's options that pick a session: those with a session id, those without one,
@@ -128,16 +126,16 @@ function sessionOptions(
   return {
     resume: (tuiCommand, sessionId) => resumeWith(tuiCommand, withValue, flags, add)(sessionId),
     pickedSession: (tuiCommand) => {
-      const words = tuiCommand.trim().split(/\s+/).filter(Boolean);
+      const words = commandWords(tuiCommand);
       for (let index = 0; index < words.length; index += 1) {
         const word = words[index];
         // A fork is a new session from another: which one only the agent knows.
         if (word === "--fork" || word.startsWith("--fork=")) return "unknown";
         const inline = withValue.find((option) => word.startsWith(`${option}=`));
-        if (inline) return word.slice(inline.length + 1).replace(/^['"]|['"]$/g, "") || "unknown";
+        if (inline) return word.slice(inline.length + 1) || "unknown";
         if (withValue.includes(word)) {
           const next = words[index + 1];
-          return next && !next.startsWith("-") ? next.replace(/^['"]|['"]$/g, "") : "unknown";
+          return next && !next.startsWith("-") ? next : "unknown";
         }
         if (flags.includes(word)) return "unknown";
       }
@@ -160,7 +158,7 @@ const COPILOT_SESSION_OPTIONS: Record<string, boolean> = {
  * permissions, sandbox), so the session behaves in the view as it does in the terminal.
  */
 export function copilotAcpArgs(tuiCommand: string | undefined): string[] {
-  const words = tuiCommand?.trim().split(/\s+/).slice(1) ?? [];
+  const words = commandWords(tuiCommand).slice(1);
   const carried: string[] = [];
   for (let index = 0; index < words.length; index++) {
     const word = words[index];
@@ -176,54 +174,25 @@ export function copilotAcpArgs(tuiCommand: string | undefined): string[] {
 }
 
 /**
- * Kiro's session locks (`{"pid": …}` while a process has the session open): Kiro 2 keeps
- * <root>/cli/<session>.lock, Kiro 3 <root>/<workspace hash>/<session>/.lock.
- */
-export function kiroSessionLocks(root: string = join(homedir(), ".kiro", "sessions")): Array<{ sessionId: string; path: string }> {
-  const locks: Array<{ sessionId: string; path: string }> = [];
-  const entries = (directory: string) => {
-    try {
-      return readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-  };
-  for (const entry of entries(join(root, "cli"))) {
-    if (entry.isFile() && entry.name.endsWith(".lock")) locks.push({ sessionId: entry.name.slice(0, -".lock".length), path: join(root, "cli", entry.name) });
-  }
-  for (const workspace of entries(root)) {
-    if (!workspace.isDirectory() || workspace.name === "cli") continue;
-    for (const session of entries(join(root, workspace.name))) {
-      const path = join(root, workspace.name, session.name, ".lock");
-      if (session.isDirectory() && !session.name.startsWith(".") && existsSync(path)) locks.push({ sessionId: session.name, path });
-    }
-  }
-  return locks;
-}
-
-/** Where Kiro keeps a session's lock: beside the session in Kiro 3, in cli/ in Kiro 2. */
-export function kiroSessionLock(sessionId: string, root: string = join(homedir(), ".kiro", "sessions")): string {
-  return kiroSessionLocks(root).find((lock) => lock.sessionId === sessionId)?.path
-    ?? join(root, "cli", `${sessionId}.lock`);
-}
-
-/**
  * `kiro-cli acp` with the engine the pane's TUI runs: a session is kept by the engine that made
- * it, and v2 (acp's default) answers "Session not found" for a v3 session. v3 asks the client for
- * an access token (`_kiro/auth/getAccessToken`) unless it uses the CLI's own login.
+ * it, and v2 (acp's default) answers "Session not found" for a v3 session, so the view started
+ * a new one. The command's own engine option comes first, then the TUI's setting: `acp` has a
+ * setting of its own (acp.agentEngine) and does not follow the TUI's. v3 asks the client for an
+ * access token (`_kiro/auth/getAccessToken`) unless it uses the CLI's own login.
  */
-export function kiroAcpArgs(tuiCommand: string | undefined): string[] {
-  const words = tuiCommand?.trim().split(/\s+/) ?? [];
+export function kiroAcpArgs(tuiCommand: string | undefined, chatEngine: () => string | undefined = () => kiroSetting("chat.agentEngine")): string[] {
+  const words = commandWords(tuiCommand);
   const engineIndex = words.findIndex((word) => word === "--agent-engine");
   const inline = words.find((word) => word.startsWith("--agent-engine="))?.slice("--agent-engine=".length);
   const engine = inline ?? (engineIndex >= 0 ? words[engineIndex + 1] : undefined)
-    ?? (words.includes("--v3") ? "v3" : words.includes("--v2") ? "v2" : words.includes("--v1") ? "v1" : undefined);
+    ?? (words.includes("--v3") ? "v3" : words.includes("--v2") ? "v2" : words.includes("--v1") ? "v1" : undefined)
+    ?? chatEngine();
   if (!engine) return ["acp"];
   return engine === "v3" ? ["acp", "--agent-engine", "v3", "--auth-method", "cli"] : ["acp", "--agent-engine", engine];
 }
 
 function executableOf(tuiCommand: string | undefined, name: string): string {
-  const first = tuiCommand?.trim().split(/\s+/)[0];
+  const first = commandWords(tuiCommand)[0];
   return first && first.split("/").pop() === name ? first : name;
 }
 
@@ -338,8 +307,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     // and logs to $TMPDIR/kiro-log/kiro-chat.log (kiro.dev/docs/cli/acp).
     sessionLock: (sessionId) => kiroSessionLock(sessionId),
     sessionLocks: () => kiroSessionLocks(),
-    continuedSession: (sessionId, cwd, tuiCommand) =>
-      kiroResumeSessionId(sessionId, cwd, (folder) => listKiroSessions(folder, executableOf(tuiCommand, "kiro-cli"))),
+    continuedSession: (sessionId) => kiroContinuedSession(sessionId),
     logFiles: () => [process.env.KIRO_CHAT_LOG_FILE || join(tmpdir(), "kiro-log", "kiro-chat.log")],
   },
 };

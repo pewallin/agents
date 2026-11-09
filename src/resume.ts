@@ -1,9 +1,9 @@
 import { scan, matchesHistoryPaneFilter } from "./scanner.js";
-import { codexReasoningEffortForSession, renderShellCommand, normalizeHistoryCwd } from "./scanner-history.js";
+import { codexReasoningEffortForSession, normalizeHistoryCwd } from "./scanner-history.js";
 import { stateWorkspaceCwd } from "./scanner-state-runtime.js";
 import { clearStateExternalSessionId, readStateSnapshot, reportState } from "./state.js";
 import { resolveProfile, type LaunchProfile } from "./config.js";
-import { splitCommandArgv } from "./workspace.js";
+import { shellCommand, splitCommandArgv } from "./command-words.js";
 import { execFileCapture } from "./shell.js";
 import { setTmuxPaneCommandMetadata } from "./tmux-pane-metadata.js";
 import { getSelfArgv } from "./paths.js";
@@ -11,7 +11,7 @@ import { respawnPane } from "./tmux-respawn.js";
 import type { AgentPane, AgentStatus } from "./scanner-types.js";
 import type { AgentSessionResumeTargetKind, AgentSessionResumeStrategy } from "./scanner-history.js";
 import { handOffAgentId } from "./acp-restart.js";
-import { kiroResumeSessionId } from "./kiro-sessions.js";
+import { kiroContinuedSession } from "./kiro-sessions.js";
 import { describeHolder, findSessionHolders, liveHolderInputs, type SessionHolder } from "./session-holders.js";
 import { acpHostMetadataPath, acpHostRuntimeTempDir, readAcpHostMetadata } from "./acp-host.js";
 import { rmSync } from "node:fs";
@@ -240,12 +240,12 @@ function isCodexExecutable(executable?: string): boolean {
  * Without it the pane has no view (tmux restore, a resume from the session history).
  */
 export function renderResumeRespawnCommand(argv: string[], options: ResumeRespawnOptions = {}): string {
-  const agentCommand = renderShellCommand(argv);
+  const agentCommand = shellCommand(argv);
   const handOff = handOffAgentId(argv[0]);
   const command = options.agentsArgv?.length && isCodexExecutable(argv[0])
-    ? renderShellCommand([...options.agentsArgv, "codex-session", "--command", agentCommand])
+    ? shellCommand([...options.agentsArgv, "codex-session", "--command", agentCommand])
     : options.agentsArgv?.length && handOff
-      ? renderShellCommand([...options.agentsArgv, "acp-session", "--agent", handOff, "--tui", agentCommand])
+      ? shellCommand([...options.agentsArgv, "acp-session", "--agent", handOff, "--tui", agentCommand])
       : agentCommand;
   return [
     `agents_prepend_path_dir() { [ -d "$1" ] || return 0; case ":$PATH:" in *":$1:"*) ;; *) PATH="$1\${PATH:+:$PATH}" ;; esac; }`,
@@ -379,7 +379,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     || (pane.cwd ? normalizeHistoryCwd(pane.cwd) : process.cwd());
   // Kiro 3 goes on with a Kiro 2 session in a copy of its own: resume that copy (kiro-sessions.ts).
   const target = resumeAgent === "kiro" && requested.targetKind === "session-id"
-    ? { ...requested, target: kiroResumeSessionId(requested.target, cwd) }
+    ? { ...requested, target: kiroContinuedSession(requested.target) }
     : requested;
 
   // Most agents let a second process open a session another has open, and both write it
@@ -440,7 +440,7 @@ export function resumeAgentSession(options: ResumeAgentSessionOptions): AgentSes
     };
   }
 
-  const command = renderShellCommand(invocation.argv);
+  const command = shellCommand(invocation.argv);
   const respawnCommand = renderResumeRespawnCommand(invocation.argv, { agentsArgv: getSelfArgv() });
 
   try {

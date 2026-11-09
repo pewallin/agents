@@ -10,6 +10,7 @@ import { setTmuxPaneCommandMetadata } from "./tmux-pane-metadata.js";
 import { scan } from "./scanner.js";
 import type { WorkspaceDef, LaunchProfile } from "./config.js";
 import type { StateEntry, WorkspaceSnapshot } from "./state.js";
+import { splitCommandArgv } from "./command-words.js";
 
 const DEFAULT_LAYOUTS: Record<string, WorkspaceDef[]> = {
   default: [
@@ -196,71 +197,6 @@ function applyProfileEnv(command: string, env?: Record<string, string>): string 
   return `${exports.join("; ")}; ${command}`;
 }
 
-export function splitCommandArgv(command: string): string[] {
-  const argv: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  const pushCurrent = () => {
-    if (current.length > 0) {
-      argv.push(current);
-      current = "";
-    }
-  };
-
-  for (const ch of command) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-
-    if (quote === "'") {
-      if (ch === "'") {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-
-    if (quote === '"') {
-      if (ch === '"') {
-        quote = null;
-      } else if (ch === "\\") {
-        escaping = true;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-
-    if (/\s/.test(ch)) {
-      pushCurrent();
-      continue;
-    }
-
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-
-    if (ch === "\\") {
-      escaping = true;
-      continue;
-    }
-
-    current += ch;
-  }
-
-  if (escaping) throw new Error("Invalid command: trailing escape");
-  if (quote) throw new Error("Invalid command: unterminated quote");
-  pushCurrent();
-
-  if (argv.length === 0) throw new Error("No command specified and no defaultCommand in config");
-  return argv;
-}
 
 function buildLauncherScript(cwd: string, argv: string[], env?: Record<string, string>): string {
   const exports = renderEnvExports(env);

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { kiroSessionLock, kiroSessionLocks } from "./acp-host-cli.js";
+import { kiroSessionLock, kiroSessionLocks } from "./kiro-sessions.js";
 import { agentWords, codexResumeCommand, isPtyWrapper, planAcpRestart, sessionHeldBy, type PaneProcess } from "./acp-restart.js";
 
 const AGENTS_BIN = "/Users/me/.agents/agents-cli/app/agents";

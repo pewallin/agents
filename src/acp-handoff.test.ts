@@ -203,8 +203,13 @@ describe("kiroAcpArgs", () => {
     expect(kiroAcpArgs("kiro-cli chat -a --v3 --resume-id sess_1")).toEqual(["acp", "--agent-engine", "v3", "--auth-method", "cli"]);
     expect(kiroAcpArgs("kiro-cli chat --agent-engine v2")).toEqual(["acp", "--agent-engine", "v2"]);
     expect(kiroAcpArgs("kiro-cli chat --agent-engine=v3")).toEqual(["acp", "--agent-engine", "v3", "--auth-method", "cli"]);
-    expect(kiroAcpArgs("kiro-cli chat")).toEqual(["acp"]);
-    expect(kiroAcpArgs(undefined)).toEqual(["acp"]);
+    const none = () => undefined;
+    expect(kiroAcpArgs("kiro-cli chat", none)).toEqual(["acp"]);
+    expect(kiroAcpArgs(undefined, none)).toEqual(["acp"]);
+    // A command that names no engine runs the TUI's setting, which acp does not follow by itself:
+    // a resumed v3 session would otherwise open on v2 and come back as a new one.
+    expect(kiroAcpArgs("kiro-cli chat --tui --resume-id cli_a_b", () => "v3")).toEqual(["acp", "--agent-engine", "v3", "--auth-method", "cli"]);
+    expect(kiroAcpArgs("kiro-cli chat --v2", () => "v3")).toEqual(["acp", "--agent-engine", "v2"]);
     const command = agents.kiro.command({ tuiCommand: "/opt/kiro/bin/kiro-cli chat -a --v3 --resume-id sess_1", runtimeTempDir: "/tmp" });
     expect(command.command).toBe("/opt/kiro/bin/kiro-cli");
     expect(command.args).toEqual(["acp", "--agent-engine", "v3", "--auth-method", "cli"]);

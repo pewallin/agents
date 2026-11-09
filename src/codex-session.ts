@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { basename, dirname, join } from "path";
-import { splitCommandArgv } from "./agent-restore.js";
+import { splitCommandArgv } from "./command-words.js";
 import { spawnSync } from "child_process";
 import { execFileInheritUntilExit, spawnBackgroundLogged, type ManagedBackgroundProcess } from "./shell.js";
 import { getSelfArgv } from "./paths.js";

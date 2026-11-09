@@ -1,5 +1,6 @@
 import { basename } from "path";
 import { execFileCapture } from "./shell.js";
+import { commandWords } from "./command-words.js";
 
 export type TmuxPaneContentKind = "agent" | "command" | "editor" | "terminal";
 
@@ -35,60 +36,6 @@ const REPORT_METADATA_SEPARATOR = "\u001f";
 
 const AGENT_COMMAND_NAMES = new Set(["claude", "codex", "copilot", "kiro", "kiro-cli", "kiro-cli-chat", "opencode", "pi", "hermes"]);
 
-function splitCommandArgv(command: string): string[] {
-  const argv: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  const pushCurrent = () => {
-    if (current.length > 0) {
-      argv.push(current);
-      current = "";
-    }
-  };
-
-  for (const ch of command) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-      else current += ch;
-      continue;
-    }
-
-    if (quote === '"') {
-      if (ch === '"') quote = null;
-      else if (ch === "\\") escaping = true;
-      else current += ch;
-      continue;
-    }
-
-    if (/\s/.test(ch)) {
-      pushCurrent();
-      continue;
-    }
-
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-
-    if (ch === "\\") {
-      escaping = true;
-      continue;
-    }
-
-    current += ch;
-  }
-
-  pushCurrent();
-  return argv;
-}
 
 function tokenBasename(value: string | undefined): string | undefined {
   const normalized = basename((value || "").replace(/^['"]+|['"]+$/g, "")).replace(/^-/, "").toLowerCase();
@@ -104,7 +51,7 @@ function normalizeAgentName(value: string | undefined): string | undefined {
 
 function firstExecutableToken(command: string | undefined): string | undefined {
   if (!command) return undefined;
-  const argv = splitCommandArgv(command);
+  const argv = commandWords(command);
   let skipNext = false;
   for (const token of argv) {
     if (skipNext) {

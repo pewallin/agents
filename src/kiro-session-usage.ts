@@ -1,13 +1,14 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
+import { kiroSessionsRoot } from "./kiro-sessions.js";
 
 // Context size and spend of a Kiro session, read from Kiro's own session files. Kiro's hooks
 // carry neither, so the scanner reads them for the session id the hook reported.
 //
-//   CLI store: ~/.kiro/sessions/cli/<id>.json, session_state.conversation_metadata.user_turn_metadatas[]
+// The two stores are kiro-sessions.ts's Kiro 2 and Kiro 3 stores:
+//   Kiro 2: <root>/cli/<id>.json, session_state.conversation_metadata.user_turn_metadatas[]
 //     with metering_usage [{ value, unit: "credit" }] and final_context_usage_percentage per turn.
-//   v2 store:  ~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl, events { payload: { type, ... } }:
+//   Kiro 3: <root>/<workspace>/sess_<id>/messages.jsonl, events { payload: { type, ... } }:
 //     usage_summary.promptTurnSummaries[].usage (credits) and session_metadata key contextUsage
 //     { usagePercentage }; session.json beside it names the modelId.
 //
@@ -22,9 +23,6 @@ export interface KiroSessionUsage {
 
 const KIRO_SPEND_UNIT = "credits";
 
-export function kiroSessionsRoot(): string {
-  return process.env.AGENTS_KIRO_SESSIONS_DIR || join(homedir(), ".kiro", "sessions");
-}
 
 /** The context window of a Kiro model: one the session names, else by model family. */
 export function kiroContextWindow(modelId?: string, named?: number): number {

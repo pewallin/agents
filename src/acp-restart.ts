@@ -296,7 +296,7 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
     },
     continuedSession: (registryId, sessionId) => {
       const agent = ACP_AGENTS[registryId];
-      return agent?.continuedSession ? agent.continuedSession(sessionId, cwd, "") : sessionId;
+      return agent?.continuedSession ? agent.continuedSession(sessionId) : sessionId;
     },
     agentsCommand: self.map(shellQuote).join(" "),
   });

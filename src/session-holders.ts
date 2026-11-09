@@ -16,7 +16,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileCapture } from "./shell.js";
-import { kiroSessionLocks } from "./acp-host-cli.js";
+import { kiroSessionLocks } from "./kiro-sessions.js";
 import { liveLockHolder } from "./acp-handoff.js";
 import type { AgentPane } from "./scanner-types.js";
 

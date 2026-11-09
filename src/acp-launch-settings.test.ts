@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import {
-  AcpLaunchSettingsApplier, allowOption, claudeLaunchSettings, kiroLaunchSettings, kiroSetting, opencodeLaunchSettings, settingRequest,
+  AcpLaunchSettingsApplier, allowOption, claudeLaunchSettings, kiroLaunchSettings, opencodeLaunchSettings, settingRequest,
   type AcpLaunchSettings,
 } from "./acp-launch-settings.js";
 import { ACP_AGENTS } from "./acp-host-cli.js";
@@ -66,17 +66,6 @@ describe("what the pane's command sets on a session", () => {
     const defaults = (key: string) => key === "chat.defaultAgent" ? "agents-reporting" : undefined;
     expect(kiroLaunchSettings("kiro-cli chat -a", defaults)).toEqual({ options: { mode: "agents-reporting" }, allowAll: true });
     expect(kiroLaunchSettings("kiro-cli chat --agent=plan", defaults)).toEqual({ options: { mode: "plan" } });
-  });
-
-  it("reads Kiro's settings file", () => {
-    const dir = mkdtempSync(join(tmpdir(), "kiro-settings-"));
-    try {
-      writeFileSync(join(dir, "cli.json"), JSON.stringify({ "chat.defaultAgent": "agents-reporting" }));
-      expect(kiroSetting("chat.defaultAgent", join(dir, "cli.json"))).toBe("agents-reporting");
-      expect(kiroSetting("chat.defaultAgent", join(dir, "missing.json"))).toBeUndefined();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("reads OpenCode's", () => {

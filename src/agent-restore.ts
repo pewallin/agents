@@ -7,6 +7,7 @@ import { codexReasoningEffortForSession } from "./scanner-history.js";
 import { loadConfig, resolveProfile, type CommandConfigEntry } from "./config.js";
 import { readStates, type StateEntry } from "./state.js";
 import { getRuntimeTempDir } from "./paths.js";
+import { commandWords, splitCommandArgv } from "./command-words.js";
 
 export interface AgentRestoreCommandOptions {
   agent: string;
@@ -31,70 +32,6 @@ export interface TmuxResurrectMetadataCapture {
   launchCommand: string;
 }
 
-export function splitCommandArgv(command: string): string[] {
-  const argv: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  const pushCurrent = () => {
-    if (current.length > 0) {
-      argv.push(current);
-      current = "";
-    }
-  };
-
-  for (const ch of command) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-
-    if (quote === "'") {
-      if (ch === "'") {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-
-    if (quote === '"') {
-      if (ch === '"') {
-        quote = null;
-      } else if (ch === "\\") {
-        escaping = true;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-
-    if (/\s/.test(ch)) {
-      pushCurrent();
-      continue;
-    }
-
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-
-    if (ch === "\\") {
-      escaping = true;
-      continue;
-    }
-
-    current += ch;
-  }
-
-  if (escaping) throw new Error("Invalid command: trailing escape");
-  if (quote) throw new Error("Invalid command: unterminated quote");
-  pushCurrent();
-  if (argv.length === 0) throw new Error("No command specified");
-  return argv;
-}
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
@@ -135,11 +72,7 @@ function isAgentCommandName(value: string | undefined): boolean {
 }
 
 function commandArgv(command: string): string[] {
-  try {
-    return splitCommandArgv(command);
-  } catch {
-    return command.trim().split(/\s+/).filter(Boolean);
-  }
+  return commandWords(command);
 }
 
 function executableTokens(command: string): string[] {

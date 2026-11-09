@@ -384,7 +384,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   let tuiSessionUnknown = picked === "unknown";
   /** The session that goes on from `id` (Kiro 3's copy of a Kiro 2 session), asked only when a
    *  session changes hands: asking Kiro takes a moment. */
-  const continued = (id: string | undefined) => id && agent.continuedSession ? agent.continuedSession(id, cwd, tuiCommand) : id;
+  const continued = (id: string | undefined) => id && agent.continuedSession ? agent.continuedSession(id) : id;
   let tui: ChildProcess | undefined;
   let reader: Interface | undefined;
   let host: AcpHost | undefined;

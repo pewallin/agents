@@ -8,9 +8,8 @@
 //             view's pickers show them and can change them
 //   allowAll  the command runs tools without asking (`kiro-cli chat -a`, `opencode --auto`): the
 //             host answers each permission request with the agent's allow option
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { commandWords } from "./command-words.js";
+import { kiroSetting } from "./kiro-sessions.js";
 
 /** A session setting by what it is: "mode" (the agent's mode or agent), "model", "effort", or
  *  the id of one of the agent's own config options ("agent" for Claude's agents). */
@@ -199,7 +198,7 @@ export class AcpLaunchSettingsApplier {
 
 /** The command's words up to `--`, after which come its prompt's. */
 function words(command: string): string[] {
-  const list = command.trim().split(/\s+/).filter(Boolean).map((word) => word.replace(/^['"]|['"]$/g, ""));
+  const list = commandWords(command);
   const end = list.indexOf("--");
   return end >= 0 ? list.slice(0, end) : list;
 }
@@ -237,16 +236,6 @@ export function claudeLaunchSettings(tuiCommand: string): AcpLaunchSettings | un
     effort: valueOf(list, "--effort"),
     agent: valueOf(list, "--agent"),
   });
-}
-
-/** One of Kiro's settings (~/.kiro/settings/cli.json). */
-export function kiroSetting(key: string, settingsPath: string = join(homedir(), ".kiro", "settings", "cli.json")): string | undefined {
-  try {
-    const value = JSON.parse(readFileSync(settingsPath, "utf8"))?.[key];
-    return typeof value === "string" && value ? value : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /**

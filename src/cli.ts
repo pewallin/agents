@@ -235,6 +235,7 @@ const [
   codexSessionMod,
   codexSharedAppServer,
   sessionHolders,
+  scannerHistory,
 ] = await Promise.all([
   import("commander"),
   import("./scanner.js"),
@@ -253,12 +254,14 @@ const [
   import("./codex-session.js"),
   import("./codex-shared-app-server.js"),
   import("./session-holders.js"),
+  import("./scanner-history.js"),
 ]);
 
 const { Command } = commander;
 const { scan, runtimeStates, getSessionHistory, detectAgentProcess, externalSessionIdFromProcessArgs } = scanner;
 const { createAppBundle } = bundleMod;
 const { markOpenElsewhere, describeHolder } = sessionHolders;
+const { sessionTranscriptPath } = scannerHistory;
 const { reportState, reportContext, reportContributorState, clearPrimaryState, getAgentStateEntry } = state;
 const { setup, uninstall, autoSetupIfNeeded, doctor, probeHooks, shadowingAgentsOnPath, hookRuntimeOwner, setupMcpServer, uninstallMcpServer, doctorMcpServer } = setupMod;
 const hookLogHint = () => "logs/hooks.log in the agents home";
@@ -810,6 +813,22 @@ program
         console.log(`${marker} ${formatTs(session.updatedAt)}${model}  ${session.title}${elsewhere}`);
       }
     }
+  });
+
+program
+  .command("session-file")
+  .description("Print the transcript file an agent's harness keeps of a session")
+  .requiredOption("--agent <name>", "Agent (claude, codex, pi, kiro)")
+  .requiredOption("--session <id>", "The agent's session id")
+  .option("--json", "Output as JSON ({ file } or { file: null })")
+  .action((opts) => {
+    const file = sessionTranscriptPath(opts.agent, opts.session);
+    if (opts.json) {
+      console.log(JSON.stringify({ file: file ?? null }));
+      return;
+    }
+    if (!file) process.exit(1);
+    console.log(file);
   });
 
 program

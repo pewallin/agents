@@ -2,7 +2,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, join } from "path";
 import { exec } from "./shell.js";
-import { kiroContinuedSession, kiroHistoryForCwd } from "./kiro-sessions.js";
+import { shellCommand } from "./command-words.js";
+import { kiroContinuedSession, kiroHistoryForCwd, kiroSessionTranscript } from "./kiro-sessions.js";
 
 export interface AgentSessionHistoryItem {
   sessionId: string;
@@ -35,7 +36,7 @@ export interface AgentSessionResumeInfo {
 
 const claudeRenameCache = new Map<string, { mtimeMs: number; title?: string }>();
 const codexSessionIndexPath = join(homedir(), ".codex", "session_index.jsonl");
-const codexSessionsRoot = join(homedir(), ".codex", "sessions");
+const codexSessionsRoot = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "sessions");
 let codexSessionIndexCache: { mtimeMs: number; entries: Map<string, string> } | null = null;
 let codexStateDbPathCache: string | null | undefined;
 const codexTitleCache = new Map<string, { dbPath?: string; dbMtimeMs?: number; sessionIndexMtimeMs?: number; title?: string }>();
@@ -262,7 +263,7 @@ export function getHistoryResumeInfo(
         strategy: "restart",
         target: opts.sessionId,
         targetKind: "session-id",
-        command: renderShellCommand(claudeArgv),
+        command: shellCommand(claudeArgv),
         argv: claudeArgv,
       };
     case "codex":
@@ -273,7 +274,7 @@ export function getHistoryResumeInfo(
         strategy: "restart",
         target: opts.sessionId,
         targetKind: "session-id",
-        command: renderShellCommand(codexArgv),
+        command: shellCommand(codexArgv),
         argv: codexArgv,
       };
     case "copilot":
@@ -282,7 +283,7 @@ export function getHistoryResumeInfo(
         strategy: "restart",
         target: opts.sessionId,
         targetKind: "session-id",
-        command: renderShellCommand(copilotArgv),
+        command: shellCommand(copilotArgv),
         argv: copilotArgv,
       };
     case "pi":
@@ -292,7 +293,7 @@ export function getHistoryResumeInfo(
         strategy: "switch-in-place",
         target: opts.sessionPath,
         targetKind: "session-path",
-        command: renderShellCommand(piArgv),
+        command: shellCommand(piArgv),
         argv: piArgv,
       };
     case "opencode":
@@ -301,7 +302,7 @@ export function getHistoryResumeInfo(
         strategy: "restart",
         target: opts.sessionId,
         targetKind: "session-id",
-        command: renderShellCommand(opencodeArgv),
+        command: shellCommand(opencodeArgv),
         argv: opencodeArgv,
       };
     case "kiro":
@@ -310,7 +311,7 @@ export function getHistoryResumeInfo(
         strategy: "restart",
         target: opts.sessionId,
         targetKind: "session-id",
-        command: renderShellCommand(kiroArgv),
+        command: shellCommand(kiroArgv),
         argv: kiroArgv,
       };
     default:
@@ -331,14 +332,6 @@ function resumeInfoFields(agent: string, opts: { sessionId: string; sessionPath?
     : {};
 }
 
-export function shellQuote(arg: string): string {
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(arg)) return arg;
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
-
-export function renderShellCommand(argv: string[]): string {
-  return argv.map(shellQuote).join(" ");
-}
 
 function textFromContent(value: unknown): string | undefined {
   if (typeof value === "string") return value;
@@ -1030,7 +1023,7 @@ function listKiroHistoryForCwd(cwdRaw: string, limit: number, currentSessionId?:
   const entries = kiroHistoryForCwd(cwdRaw);
   // The pane may still name the Kiro 2 session that Kiro 3 goes on with in a copy.
   const current = currentSessionId
-    ? kiroContinuedSession(currentSessionId, entries.map((entry) => ({ sessionId: entry.sessionId, source: "v3", updatedAt: new Date(entry.updatedAt * 1000).toISOString() })))
+    ? kiroContinuedSession(currentSessionId)
     : undefined;
   return entries.slice(0, limit).map((entry) => ({
     sessionId: entry.sessionId,
@@ -1179,4 +1172,43 @@ export function loadHistoryForAgent(agent: string, cwdRaw: string, limit: number
       return [];
   }
   return items.map(withShortTitle);
+}
+
+/**
+ * The transcript an agent's harness keeps of a session, by its id: Claude Code's
+ * projects/<dir>/<id>.jsonl, Codex's rollout-…-<id>.jsonl, Pi's sessions/<dir>/<time>_<id>.jsonl,
+ * Kiro's (kiro-sessions.ts). For `agents session-file`: a coordinator points the agent after
+ * another at the transcript of the one before it.
+ */
+export function sessionTranscriptPath(agent: string, sessionId: string): string | undefined {
+  if (!/^[A-Za-z0-9._-]{4,128}$/.test(sessionId)) return undefined;
+  const inSubdirectories = (root: string, matches: (name: string) => boolean): string | undefined => {
+    let folders: string[] = [];
+    try {
+      folders = readdirSync(root);
+    } catch {
+      return undefined;
+    }
+    for (const folder of folders) {
+      try {
+        const hit = readdirSync(join(root, folder)).find(matches);
+        if (hit) return join(root, folder, hit);
+      } catch {}
+    }
+    return undefined;
+  };
+  switch (basename(agent).toLowerCase()) {
+    case "claude":
+      return inSubdirectories(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects"), (name) => name === `${sessionId}.jsonl`);
+    case "codex":
+      return findCodexSessionPath(sessionId);
+    case "pi":
+      return inSubdirectories(join(homedir(), ".pi", "agent", "sessions"), (name) => name.endsWith(`_${sessionId}.jsonl`));
+    case "kiro":
+    case "kiro-cli":
+    case "kiro-cli-chat":
+      return kiroSessionTranscript(sessionId);
+    default:
+      return undefined;
+  }
 }
