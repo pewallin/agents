@@ -103,6 +103,24 @@ export function changesOf(calls: ToolCall[]): FileChange[] {
   return [...byPath.values()];
 }
 
+// Kiro ends its text with a note of how it handled a message it was steered with: "[STEERING
+// steer-<id>: what it did]", and "[STEERING notify-<id>: …]" for a notice of its own. Its TUI shows
+// what a steer note says without the brackets and drops a notice's; so does the view, and it hides
+// a note still coming in.
+const STEERING_NOTE = /(\s*)\[STEERING ((?:steer|notify)-[^\s:\]]+): (.+?)\](\s*)/gs;
+const STEERING_NOTE_COMING = /\[STEERING(?: (?:(?:steer|notify)-[^\s:\]]*(?::[^\]]*)?)?)?$/s;
+
+export function withoutSteeringNotes(text: string): string {
+  if (!text.includes("[STEERING")) return text;
+  return text
+    .replace(STEERING_NOTE, (whole, before: string, id: string, note: string, after: string, at: number) => {
+      if (id.startsWith("steer-")) return `${before}${note}${after}`;
+      if (at === 0 || at + whole.length === text.length) return "";
+      return /\n[ \t\r]*\n/.test(before) || /\n[ \t\r]*\n/.test(after) ? "\n\n" : before.includes("\n") || after.includes("\n") ? "\n" : " ";
+    })
+    .replace(STEERING_NOTE_COMING, "");
+}
+
 export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Turn[] {
   const turns: Turn[] = [];
   let open: { turn: Turn; tail: Array<Extract<Item, { type: "agent" }>> } | undefined;
@@ -139,7 +157,8 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
     if (!open) { begin(); thinking = undefined; }
     const current = open!;
     if (item.type === "agent") {
-      current.tail.push(item);
+      const text = withoutSteeringNotes(item.text);
+      current.tail.push(text === item.text ? item : { ...item, text });
       touch(item.at);
       continue;
     }

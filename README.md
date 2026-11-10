@@ -199,9 +199,10 @@ folder's earlier conversations and `/new` starts one; Agents Next opens the one 
 pane, which stays in the view (docs/acp-view-client.md).
 
 The host also keeps a per-pane message queue that survives reloads, routes steering (ACP
-`_session/steering` for Codex and Claude, the steer inbox for Pi, queued otherwise), and serves
-file, commit and bead peeks restricted to the pane's directory. It snapshots each turn's changes
-with a temporary git index, so the user's index, stashes and branches are untouched.
+`_session/steering` for Codex and Claude, Kiro's own `_session/steer`, the steer inbox for Pi,
+queued otherwise), and serves file, commit and bead peeks restricted to the pane's directory. It
+snapshots each turn's changes with a temporary git index, so the user's index, stashes and
+branches are untouched.
 
 `agents review` opens the same review page the view shows beside an agent, for changes no
 agent made: the working tree against `--base` (default `HEAD`, untracked files included) or one

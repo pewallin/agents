@@ -18,6 +18,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
 import { AcpUsageFill } from "./acp-usage-fill.js";
+import { KiroSteering } from "./kiro-steering.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { answerTerminalPrompt, readTerminalScreen } from "./terminal-prompt.js";
@@ -631,8 +632,16 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         diagnostics.message(client, "host→view", line);
         if (ws.readyState === ws.OPEN) ws.send(line);
       });
+      const steering = options.agent.id === "kiro" ? new KiroSteering((line) => {
+        diagnostics.message(client, "host→agent", line);
+        child.stdin?.write(`${line}\n`);
+      }, (line) => {
+        diagnostics.message(client, "host→view", line);
+        if (ws.readyState === ws.OPEN) ws.send(line);
+      }, log) : undefined;
       const link = bridge(ws, child, log, {
         launchSettings: applier,
+        steering,
         onAgentLine: (line) => {
           diagnostics.message(client, "agent→view", line);
           usage?.agentLine(line);
@@ -744,6 +753,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       log(`the host starts a session of its own, agent ${child.pid}${child === warm ? " (started ahead)" : ""}`);
       const session = new HostedSession(child, {
         launchSettings,
+        kiroSteering: options.agent.id === "kiro",
         sessionUsage: options.sessionUsage,
         onAgentLine: (line) => {
           diagnostics.message(0, "agent→host", line);
@@ -853,6 +863,8 @@ function bridge(
     /** Asks or answers the agent itself where the pane's command says so; what it handles goes
      *  no further. */
     launchSettings?: AcpLaunchSettingsApplier;
+    /** Translates steering for an agent that has its own way to take it (Kiro). */
+    steering?: KiroSteering;
     /** Sees each message from the client; a reply it returns goes back instead of the message going on. */
     onClientLine?: (line: string) => string | undefined;
     onClose?: (code: number, reason: string) => void;
@@ -868,8 +880,10 @@ function bridge(
     if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close();
   };
   const lines = createInterface({ input: child.stdout! });
-  lines.on("line", (line) => {
-    if (!line.trim()) return;
+  lines.on("line", (raw) => {
+    if (!raw.trim()) return;
+    const line = taps.steering ? taps.steering.agentLine(raw) : raw;
+    if (line === undefined) return;
     if (taps.launchSettings?.agentLine(line)) return;
     taps.onAgentLine?.(line);
     if (ws.readyState === ws.OPEN) ws.send(line);
@@ -882,6 +896,7 @@ function bridge(
       if (ws.readyState === ws.OPEN) ws.send(reply);
       return;
     }
+    if (taps.steering?.clientLine(text)) return;
     taps.launchSettings?.clientLine(text);
     child.stdin?.write(text.endsWith("\n") ? text : `${text}\n`);
   });

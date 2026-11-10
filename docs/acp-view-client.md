@@ -53,10 +53,21 @@ works`, or `Queue a message for when OpenCode is done`).
   and Claude. The view sends it with `idleBehavior: "promptRequired"`, so a turn that ended in the
   meantime gets it as a prompt of the view's own. Claude takes it at once (its running command
   goes to the background) and answers in the same turn.
+- **Kiro, through the host** (src/kiro-steering.ts): kiro-cli 3.1 takes a message into its turn
+  with an extension of its own, `_session/steer {sessionId, message}`, in both engines (v2 and
+  v3). It delivers the message at the turn's next tool boundary, or at its end, where the turn
+  goes on with it. The host says in Kiro's initialize answer that it takes steering and turns the
+  view's `_session/steering` into `_session/steer`. Kiro also queues a message when no turn runs
+  and keeps it for the next prompt, so the host answers `promptRequired` itself when no prompt of
+  that process runs, and withdraws a steer (`_session/steer/clear`) that Kiro queued after the
+  turn had ended. Kiro steers with text only: an image goes in the queue. Kiro ends its answer
+  with a note of how it handled the message (`[STEERING steer-<id>: …]`); the view shows the note
+  without its brackets, as Kiro's TUI does. A reload shows the steered message as a message of
+  yours.
 - **Through the pane's steer inbox** (docs/steer-inbox.md): Pi, with the agents extension, which
   runs under pi-acp too. The view asks the host (`POST /api/steer`); the host writes the inbox
   and waits for the ack. A message Pi has not taken when the turn ends is withdrawn and queued.
-- **Neither** (OpenCode, Kiro, Copilot): the message is queued, and the view says so.
+- **Neither** (OpenCode, Copilot): the message is queued, and the view says so.
 
 The queue lives in the pane's host (src/acp-queue.ts, `/api/queue`), not the page: it survives a
 reload, every view of the pane shows the same, a queued message can be edited (click it) or
@@ -76,7 +87,7 @@ there. Measured on the Mac mini with the adapters the CLI bundles or starts.
 | --- | --- | --- | --- | --- | --- | --- |
 | Opens the pane's session | ✓ hand-off | ✓ live, shared with the TUI | ✓ hand-off | ✓ hand-off | ✓ hand-off | – no `session/load` (0.0.406) |
 | Slash commands | ✓ ~106 | ✓ built-ins, prompts, skills | ✓ ~45 | ✓ ~43 | ✓ 5 | – none advertised |
-| Steering into the turn | ✓ ACP | ✓ ACP | – queued | ✓ steer inbox (not checked live: Pi ran no model turn here) | – queued | – queued |
+| Steering into the turn | ✓ ACP | ✓ ACP | – queued | ✓ steer inbox (not checked live: Pi ran no model turn here) | ✓ Kiro's `_session/steer`, through the host (checked live with kiro-cli 3.1, v2 and v3) | – queued |
 | Queue (edit, remove, survives reload) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Modes / permission modes | ✓ 5 modes (/mode) | ✓ | ✓ build, plan | ~ its modes are thinking levels | ✓ 8 modes | ✓ agent, plan |
 | Model switch | ✓ /model | ✓ | ✓ | ✓ | – | – |

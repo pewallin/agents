@@ -17,8 +17,9 @@ export interface AcpSession {
   load(): Promise<LoadSessionResponse & { sessionId: string }>;
   prompt(blocks: ContentBlock[]): Promise<void>;
   /** Adds to the turn in progress, for an agent that takes steering over ACP (`_session/steering`:
-   *  Codex, Claude): "steered" when it went into the running turn, "prompted" when the turn had
-   *  ended, or the agent takes no steering, and it went as a prompt of its own. */
+   *  Codex, Claude, and Kiro through the pane's host, src/kiro-steering.ts): "steered" when it
+   *  went into the running turn, "prompted" when the turn had ended, or the agent takes no
+   *  steering, and it went as a prompt of its own. */
   steer(blocks: ContentBlock[]): Promise<"steered" | "prompted">;
   /** Whether the agent takes steering over ACP (its initialize says so); known once it answers. */
   steering(): Promise<boolean>;

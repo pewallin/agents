@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySession, reduce, type SessionAction } from "./session-state";
-import { buildTurns, changesOf, conversationChanges, countLines, describeCall, duration, groupSteps, groupSummary, oneLine, shortPath, thoughtSummary } from "./turns";
+import { buildTurns, changesOf, withoutSteeringNotes, conversationChanges, countLines, describeCall, duration, groupSteps, groupSummary, oneLine, shortPath, thoughtSummary } from "./turns";
 import { changedWords, commentsMessage, diffRows, linePieces, splitPath } from "./review";
 
 const text = (t: string) => ({ type: "text" as const, text: t });
@@ -218,5 +218,21 @@ describe("tool output", async () => {
     expect(unfenced("```console\n$ ls\na\n```\n")).toBe("$ ls\na");
     expect(unfenced("plain\n```\nnot all\n```")).toBe("plain\n```\nnot all\n```");
     expect(unfenced("```\na\n```\ntext\n```\nb\n```")).toBe("```\na\n```\ntext\n```\nb\n```");
+  });
+});
+
+describe("Kiro's steering notes", () => {
+  it("shows what a steer note says without its brackets, drops a notice's, and hides one coming in", () => {
+    expect(withoutSteeringNotes("BANANA\n\n[STEERING steer-6cb99d39: Stopped the list as asked.]")).toBe("BANANA\n\nStopped the list as asked.");
+    expect(withoutSteeringNotes("Done.\n\n[STEERING notify-1: Workflow finished.]")).toBe("Done.");
+    expect(withoutSteeringNotes("One [STEERING notify-2: x] two")).toBe("One two");
+    expect(withoutSteeringNotes("Done.\n\n[STEERING steer-6cb9: Stopp")).toBe("Done.\n\n");
+    expect(withoutSteeringNotes("No notes here")).toBe("No notes here");
+  });
+
+  it("applies to the agent's answer in a turn", () => {
+    let state = reduce(emptySession(), { type: "promptSent", blocks: [text("Facts")], at: 1 });
+    state = reduce(state, { type: "update", update: { sessionUpdate: "agent_message_chunk", content: text("BANANA\n[STEERING steer-1: Stopped early.]"), messageId: "m1" } });
+    expect(buildTurns(state)[0].answer.map((item) => item.text)).toEqual(["BANANA\nStopped early."]);
   });
 });

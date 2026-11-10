@@ -49,6 +49,7 @@ message arrives as a user message of the run (`message_start`).
 
 ## Other agents
 
-Copilot's SDK has `session.send({ mode: "immediate" })`, but it is not wired yet. OpenCode, Kiro
-and Hermes have no way in. The CLI refuses to steer them and prints the command that queues the
-message instead.
+Copilot's SDK has `session.send({ mode: "immediate" })`, but it is not wired yet. OpenCode, Hermes
+and Kiro's TUI have no way in. The CLI refuses to steer them and prints the command that queues the
+message instead. A Kiro pane whose ACP host holds the session is steered through the host with
+Kiro's own `_session/steer` (docs/acp-view-client.md).
