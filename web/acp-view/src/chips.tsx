@@ -609,6 +609,8 @@ function CommitPeek({ sha }: { sha: string }) {
 
 function Thumbnail({ src }: { src?: string }) {
   const [failed, setFailed] = useState(false);
+  // Another picture (the theme changed) may load where this one did not.
+  useEffect(() => setFailed(false), [src]);
   if (!src || failed) return <Icon kind="file" />;
   return <img alt="" src={src} loading="lazy" onError={() => setFailed(true)} />;
 }
@@ -618,10 +620,28 @@ function Thumbnail({ src }: { src?: string }) {
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|bmp|ico|heic|tiff?)$/i;
 const RESULT_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|bmp|heic|tiff?|pdf|html?|md)$/i;
 
+const PAGE_EXTENSIONS = /\.(md|markdown|html?)$/i;
+
+/** The view's scheme (data-theme on <html>, which the app or the system sets), kept current. */
+function useTheme(): string {
+  const read = () => document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  const [theme, setTheme] = useState(read);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setTheme(read()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+  return theme;
+}
+
 /** A picture of a file: in Agents Next the app makes it (QLThumbnailGenerator), so PDFs, pages
- *  and reports have one too; in a browser only images have one. */
-export function thumbnailURL(host: ChipHost, path: string, size = 256, version = ""): string | undefined {
-  if (host.inApp) return `${THUMBNAIL_SCHEME}://thumbnail?path=${encodeURIComponent(path)}&size=${size}${version ? `&v=${encodeURIComponent(version)}` : ""}`;
+ *  and reports have one too, a report or a page drawn in the view's theme; in a browser only
+ *  images have one. */
+export function thumbnailURL(host: ChipHost, path: string, size = 256, version = "", theme = ""): string | undefined {
+  if (host.inApp) {
+    const scheme = theme && PAGE_EXTENSIONS.test(path) ? `&theme=${theme}` : "";
+    return `${THUMBNAIL_SCHEME}://thumbnail?path=${encodeURIComponent(path)}&size=${size}${version ? `&v=${encodeURIComponent(version)}` : ""}${scheme}`;
+  }
   return IMAGE_EXTENSIONS.test(path) ? host.rawURL(`/api/raw?path=${encodeURIComponent(path)}`) : undefined;
 }
 
@@ -650,6 +670,7 @@ export function ResultStrip({ answer, changes, version }: { answer: string; chan
 
 function ResolvedStrip({ names, made, host, version }: { names: string[]; made: string[]; host: ChipHost | null; version: string }) {
   const [paths, setPaths] = useState<string[] | null>(null);
+  const theme = useTheme();
   const key = `${names.join("\n")}|${made.join("\n")}`;
   useEffect(() => {
     if (!host) return;
@@ -678,7 +699,7 @@ function ResolvedStrip({ names, made, host, version }: { names: string[]; made: 
     <div className="strip">
       {shown.map((path) => {
         const rel = path.startsWith(`${host.cwd}/`) ? path.slice(host.cwd.length + 1) : path.split("/").pop()!;
-        const src = thumbnailURL(host, path, 256, version);
+        const src = thumbnailURL(host, path, 256, version, theme);
         return (
           <figure key={path} className="snap result" data-path={path} onClick={(event) => open(path, rel, event)} title={rel}>
             <div className="mini"><Thumbnail src={src} /></div>
@@ -696,6 +717,7 @@ function ResolvedStrip({ names, made, host, version }: { names: string[]; made: 
  *  from the session's history) is saved to a file first. */
 export function SentAttachments({ attachments }: { attachments: SentAttachment[] }) {
   const host = useContext(ChipHostContext);
+  const theme = useTheme();
   const saved = useRef(new Map<SentAttachment, Promise<string>>());
   const open = useCallback((attachment: SentAttachment) => {
     if (!host) return;
@@ -721,7 +743,7 @@ export function SentAttachments({ attachments }: { attachments: SentAttachment[]
       {attachments.map((attachment, index) => {
         const src = attachment.data
           ? `data:${attachment.mimeType || "image/png"};base64,${attachment.data}`
-          : host && attachment.path ? thumbnailURL(host, attachment.path) : undefined;
+          : host && attachment.path ? thumbnailURL(host, attachment.path, 256, "", theme) : undefined;
         const openable = Boolean(host && (attachment.path || attachment.data));
         return (
           <figure key={index} className={`snap${openable ? "" : " still"}`} title={attachment.path ?? attachment.name}
