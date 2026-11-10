@@ -114,6 +114,13 @@ describe("turns", () => {
       .toEqual({ verb: "Read", target: "src/a.ts" });
   });
 
+  it("names a compaction's step the same for every agent, with Claude's token counts", () => {
+    const compaction = { id: "t", title: "Compact conversation", kind: "think" as const, status: "completed" as const, content: [], locations: [] };
+    expect(describeCall(compaction)).toEqual({ verb: "Compacted", target: "the conversation" });
+    expect(describeCall({ ...compaction, rawOutput: { trigger: "manual", preTokens: 39_986, postTokens: 8_631 } }))
+      .toEqual({ verb: "Compacted", target: "the conversation · 40k → 9k tokens" });
+  });
+
   it("counts lines and writes durations and paths as people read them", () => {
     expect(countLines(null, "x\ny\n")).toEqual({ added: 2, removed: 0 });
     expect(duration(134_000)).toBe("2m 14s");

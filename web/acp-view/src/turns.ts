@@ -2,6 +2,7 @@
 // steps (thinking, tools, remarks along the way), what it answered at the end, and what it changed.
 import { diffLines } from "diff";
 import type { Item, SessionState, ToolCall } from "./session-state";
+import { tokenText } from "./usage";
 
 export type Step =
   /** Thinking, with when it started and when the next thing the agent did started (a session
@@ -263,8 +264,24 @@ const VERBS: Record<string, string> = {
   switch_mode: "Switched mode",
 };
 
+/** The title Claude's and Codex's adapters give a compaction's step, as the host does for Kiro's
+ *  and OpenCode's (src/acp-compaction.ts). */
+const COMPACTION_TITLE = "Compact conversation";
+
+/** Whether a step is the agent compacting the conversation (/compact, or on its own). */
+export function isCompaction(call: ToolCall): boolean {
+  return call.kind === "think" && call.title === COMPACTION_TITLE;
+}
+
 /** A tool call as one line: a verb and what it acted on. */
 export function describeCall(call: ToolCall, cwd?: string): { verb: string; target: string } {
+  if (isCompaction(call)) {
+    // Claude says how far it got the context down.
+    const output = (call.rawOutput ?? {}) as { preTokens?: unknown; postTokens?: unknown };
+    const tokens = typeof output.preTokens === "number" && typeof output.postTokens === "number"
+      ? ` · ${tokenText(output.preTokens)} → ${tokenText(output.postTokens)} tokens` : "";
+    return { verb: "Compacted", target: `the conversation${tokens}` };
+  }
   const input = (call.rawInput ?? {}) as Record<string, unknown>;
   const command = Array.isArray(input.command) ? input.command.join(" ") : typeof input.command === "string" ? input.command : undefined;
   const paths = call.locations.map((location) => location.path);

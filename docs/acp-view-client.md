@@ -38,10 +38,30 @@ first, then names that start with it, names that contain it, descriptions that c
 | --- | --- | --- |
 | Claude (claude-agent-acp 0.100) | ~106: the user's and the project's skills and commands, plugin commands, and Claude Code's own (`/compact`, `/context`, `/init`, `/model`, `/effort`, `/review`, `/security-review`, `/usage`, `/mcp`, …) | `/context` answers in the view as a table. Hints on many (`/compact <optional …>`). |
 | Codex (codex-acp 2.5) | `/mcp`, `/skills`, `/status`, `/review`, `/review-branch`, `/review-commit`, `/compact`, `/goal`, `/rename`, `/logout`, plus prompts and skills | Read from the adapter's source; the view shares the pane's thread, not checked live here. |
-| OpenCode 1.18 | ~45: skills, `/init`, `/review` | Some names have spaces ("Agent Browser"). |
+| OpenCode 1.18 | ~45: skills, `/init`, `/review`, and the host's `/compact` | Some names have spaces ("Agent Browser"). |
 | Pi (pi-acp 0.0.34) | ~43: `/skill:<name>` per skill, `/compact`, `/autocompact`, `/export`, `/session`, `/name`, `/steering`, `/follow-up`, `/changelog` | Pi's modes are its thinking levels. |
-| Kiro | 5: its sub-agents (`/general-task-execution`, `/context-gatherer`, …) and skills | Many modes (vibe, spec, plan, …). |
+| Kiro | 5: its sub-agents (`/general-task-execution`, `/context-gatherer`, …) and skills, and the host's `/compact` | Many modes (vibe, spec, plan, …). The v2 engine lists its TUI's commands only in `_kiro.dev/commands/available`, which ACP does not run. |
 | Copilot (0.0.4xx) | none | Modes agent and plan. |
+
+### /compact for every agent that can compact (2026-11-10)
+
+`/compact [instructions]` summarizes the conversation to free up context. The view runs it the
+same way for every agent (as the agent's command, queued while a turn runs) and shows it as one
+step, "Compacted the conversation" (with Claude's token counts, `120k → 9k tokens`), on the
+turn's folded line too; the summary, where the agent gives one, is the step's output.
+
+| Agent | How | Instructions |
+| --- | --- | --- |
+| Claude | Its own `/compact`, advertised; the adapter reports a "Compact conversation" step | yes |
+| Codex | Its own `/compact` (codex-acp starts `thread/compact/start` on the pane's app-server) | no |
+| Pi | Its own `/compact` (pi-acp); "Nothing to compact" on a short session comes back as an error | yes |
+| Kiro, v3 engine | The host (src/acp-compaction.ts) adds `compact` to the commands, answers the prompt itself and asks `_kiro/session/compact {sessionId, value?}`, which answers once the summary is written (`session_info_update` `_meta.kiro.kind = summarization_completed`) | yes (`value`) |
+| Kiro, v2 engine | As v3, but through its TUI's command `_kiro.dev/commands/execute {sessionId, command: {command: "compact", args: {value?}}}` (v2 has no `_kiro/session/compact`: the host tries v3's first and keeps the engine that answered), then `_kiro.dev/compaction/status` started/completed/failed. v2 lists no ACP commands at all, so the host lists `compact` after the session opens | yes |
+| OpenCode | Runs "/compact" from the prompt (session summarize) without listing it: the host lists it, wraps it in the step and moves the summary it writes as an answer into the step | no |
+| Copilot 0.0.406 | Not possible: its ACP prompt goes straight to the model (`/compact` is a TUI command only) and it advertises no commands | – |
+
+Without the host, Kiro takes "/compact" as text for the model, which answers that it compacted.
+Esc during Kiro's compaction answers the prompt as cancelled; Kiro may still finish the summary.
 
 ## Steering and the queue
 

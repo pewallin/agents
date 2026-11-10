@@ -26,6 +26,13 @@ describe("turnSummary", () => {
     };
     expect(turnSummary(turn)).toBe("Worked 2m 14s · read 2 files · 2 edits · 18 tests passed");
   });
+
+  it("says a turn compacted the conversation", () => {
+    const compaction = (status: string) => ({ type: "tool" as const, id: "c", call: { id: "c", title: "Compact conversation", kind: "think", status, content: [], locations: [], rawOutput: { preTokens: 120_000, postTokens: 9_000 } } as never });
+    const turn = (status: string): Turn => ({ id: "t", steps: [compaction(status)], answer: [], changes: [], startedAt: 0, endedAt: 4_000 });
+    expect(turnSummary(turn("completed"))).toBe("Worked 4s · compacted the conversation · 120k → 9k tokens");
+    expect(turnSummary(turn("failed"))).toBe("Worked 4s");
+  });
 });
 
 describe("levels", () => {

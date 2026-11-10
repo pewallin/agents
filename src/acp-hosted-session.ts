@@ -11,6 +11,7 @@ import { createInterface } from "node:readline";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
 import { AcpUsageFill } from "./acp-usage-fill.js";
 import { KiroSteering } from "./kiro-steering.js";
+import { AcpCompaction, type CompactionWay } from "./acp-compaction.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
 
 type Id = string | number;
@@ -45,6 +46,8 @@ export interface HostedSessionTaps {
   sessionUsage?: (sessionId: string) => StateUsage;
   /** The agent is Kiro, which takes steering through an extension of its own (kiro-steering.ts). */
   kiroSteering?: boolean;
+  /** The agent's /compact is the host's (acp-compaction.ts). */
+  compaction?: CompactionWay;
 }
 
 export interface HostedView {
@@ -69,11 +72,13 @@ export class HostedSession {
   private readonly launchSettings: AcpLaunchSettingsApplier | undefined;
   private readonly usage: AcpUsageFill | undefined;
   private readonly steering: KiroSteering | undefined;
+  private readonly compaction: AcpCompaction | undefined;
 
   constructor(private readonly child: ChildProcess, private readonly taps: HostedSessionTaps = {}) {
     this.launchSettings = taps.launchSettings && new AcpLaunchSettingsApplier(taps.launchSettings, (line) => this.toAgent(line), taps.log, (line) => this.fromAgent(line));
     this.usage = taps.sessionUsage && new AcpUsageFill(taps.sessionUsage, (line) => this.fromAgent(line));
     this.steering = taps.kiroSteering ? new KiroSteering((line) => this.writeToAgent(line), (line) => this.fromAgent(line), taps.log) : undefined;
+    this.compaction = taps.compaction && new AcpCompaction(taps.compaction, (line) => this.writeToAgent(line), (line) => this.fromAgent(line), taps.log);
     createInterface({ input: child.stdout! }).on("line", (line) => { if (line.trim()) this.fromAgent(line); });
     this.exited = new Promise((resolve) => child.once("exit", () => {
       this.usage?.close();
@@ -172,6 +177,10 @@ export class HostedSession {
 
   private toAgent(line: string): void {
     if (this.steering?.clientLine(line)) return;
+    if (this.compaction?.clientLine(line)) {
+      this.taps.onClientLine?.(line);
+      return;
+    }
     this.launchSettings?.clientLine(line);
     this.usage?.clientLine(line);
     this.writeToAgent(line);
@@ -194,7 +203,8 @@ export class HostedSession {
   }
 
   private fromAgent(raw: string): void {
-    const line = this.steering ? this.steering.agentLine(raw) : raw;
+    const steered = this.steering ? this.steering.agentLine(raw) : raw;
+    const line = steered !== undefined && this.compaction ? this.compaction.agentLine(steered) : steered;
     if (line === undefined) return;
     if (this.launchSettings?.agentLine(line)) return;
     this.usage?.agentLine(line);

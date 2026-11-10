@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import type { ToolCall } from "./session-state";
 import { parseAgentCommand } from "./coordination";
-import { duration, toolOutput, type Turn } from "./turns";
+import { describeCall, duration, isCompaction, toolOutput, type Turn } from "./turns";
 
 /** An agent's own coordination command: it has a row of its own, it is not one of "N commands". */
 function isCoordinationCommand(call: ToolCall): boolean {
@@ -82,6 +82,9 @@ export function turnSummary(turn: Turn): string {
   for (const call of commands) tests = testResult(toolOutput(call)) ?? tests;
   if (tests) parts.push(tests.failed ? `${tests.failed} ${tests.failed === 1 ? "test" : "tests"} failed` : `${tests.passed} ${tests.passed === 1 ? "test" : "tests"} passed`);
   else if (commands.length) parts.push(`${commands.length} ${commands.length === 1 ? "command" : "commands"}`);
+  // A compaction says it in the line: often it is all the turn did (/compact).
+  const compaction = calls.findLast((call) => isCompaction(call) && call.status === "completed");
+  if (compaction) parts.push(`compacted ${describeCall(compaction).target}`);
   if (!timed && parts.length === 1) parts.push(`${turn.steps.length} ${turn.steps.length === 1 ? "step" : "steps"}`);
   return parts.join(" · ");
 }

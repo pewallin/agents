@@ -19,6 +19,7 @@ import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
 import { AcpUsageFill } from "./acp-usage-fill.js";
 import { KiroSteering } from "./kiro-steering.js";
+import { AcpCompaction, compactionWay } from "./acp-compaction.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { answerTerminalPrompt, readTerminalScreen } from "./terminal-prompt.js";
@@ -639,9 +640,16 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         diagnostics.message(client, "host→view", line);
         if (ws.readyState === ws.OPEN) ws.send(line);
       }, log) : undefined;
+      // Its steps and answers go to the view as the agent's own lines do (`link.agentLine`).
+      const way = compactionWay(options.agent.id);
+      const compaction = way && new AcpCompaction(way, (line) => {
+        diagnostics.message(client, "host→agent", line);
+        child.stdin?.write(`${line}\n`);
+      }, (line) => link.agentLine(line), log);
       const link = bridge(ws, child, log, {
         launchSettings: applier,
         steering,
+        compaction,
         onAgentLine: (line) => {
           diagnostics.message(client, "agent→view", line);
           usage?.agentLine(line);
@@ -754,6 +762,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       const session = new HostedSession(child, {
         launchSettings,
         kiroSteering: options.agent.id === "kiro",
+        compaction: compactionWay(options.agent.id),
         sessionUsage: options.sessionUsage,
         onAgentLine: (line) => {
           diagnostics.message(0, "agent→host", line);
@@ -865,11 +874,13 @@ function bridge(
     launchSettings?: AcpLaunchSettingsApplier;
     /** Translates steering for an agent that has its own way to take it (Kiro). */
     steering?: KiroSteering;
+    /** Provides /compact for an agent that does not offer it (acp-compaction.ts). */
+    compaction?: AcpCompaction;
     /** Sees each message from the client; a reply it returns goes back instead of the message going on. */
     onClientLine?: (line: string) => string | undefined;
     onClose?: (code: number, reason: string) => void;
   } = {},
-): { takeOver: () => void } {
+): { takeOver: () => void; agentLine: (line: string) => void } {
   let finished = false;
   const finish = () => {
     if (finished) return;
@@ -880,14 +891,17 @@ function bridge(
     if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close();
   };
   const lines = createInterface({ input: child.stdout! });
-  lines.on("line", (raw) => {
+  /** A line from the agent, or one the host speaks as the agent (a step of its /compact). */
+  const agentLine = (raw: string) => {
     if (!raw.trim()) return;
-    const line = taps.steering ? taps.steering.agentLine(raw) : raw;
+    const steered = taps.steering ? taps.steering.agentLine(raw) : raw;
+    const line = steered !== undefined && taps.compaction ? taps.compaction.agentLine(steered) : steered;
     if (line === undefined) return;
     if (taps.launchSettings?.agentLine(line)) return;
     taps.onAgentLine?.(line);
     if (ws.readyState === ws.OPEN) ws.send(line);
-  });
+  };
+  lines.on("line", agentLine);
   ws.on("message", (data, isBinary) => {
     if (isBinary || finished) return;
     const text = data.toString();
@@ -897,6 +911,7 @@ function bridge(
       return;
     }
     if (taps.steering?.clientLine(text)) return;
+    if (taps.compaction?.clientLine(text)) return;
     taps.launchSettings?.clientLine(text);
     child.stdin?.write(text.endsWith("\n") ? text : `${text}\n`);
   });
@@ -907,6 +922,7 @@ function bridge(
     finish();
   });
   return {
+    agentLine,
     // The adapter stops at once: until it is gone it would still answer the session's questions.
     takeOver: () => {
       if (finished) return;

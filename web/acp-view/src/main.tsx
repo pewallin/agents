@@ -288,7 +288,7 @@ function ErrorNotice({ title, error, agentName, onRetry }: {
 
 const PRESENT: Record<string, string> = {
   "Read": "Reading", "Edited": "Editing", "Searched": "Searching", "Ran": "Running", "Fetched": "Fetching",
-  "Thought": "Thinking", "Deleted": "Deleting", "Moved": "Moving", "Switched mode": "Switching mode",
+  "Thought": "Thinking", "Compacted": "Compacting", "Deleted": "Deleting", "Moved": "Moving", "Switched mode": "Switching mode",
 };
 
 /** How much of the work shows (⌃O): the level, and opening a command's output beside the pane. */
