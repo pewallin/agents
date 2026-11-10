@@ -93,18 +93,6 @@ export function hostsSession(paneID) {
   return tmuxPaneOption(paneID, "@agents_acp_hosted") === "1";
 }
 
-// A pane the app marked to open in its ACP view shows it once the app knows the pane's agent,
-// a moment after the agent starts: until then the pane has no view to switch to.
-export async function showACPView(currentSocketPath, token, pane) {
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    const response = await requestAppControl(currentSocketPath, token, "control.invoke", { id: "pane.toggle-view", pane }, "cli");
-    if (response.ok !== false) return true;
-    await new Promise(resolve => setTimeout(resolve, 500));
-  }
-  return false;
-}
-
 // The launch is only typed into the pane. The agent may still end as it starts, on a flag it
 // refuses or a login it lacks, and `exec` then closes its pane with the error in it. So for the
 // first seconds the pane stays when its agent ends: the spawn sees that, keeps what the agent

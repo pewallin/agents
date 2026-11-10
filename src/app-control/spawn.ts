@@ -13,7 +13,7 @@ import { canonicalSourcePaneRecord, localPaneRef, paneIDFromRef, resolveLocalSou
 import { createPaneThroughApp, waitForExecutableShell, waitForPaneAddressable } from "./placement.js";
 import { coordinationPaneRecords, coordinatorProgram, ensurePaneUUID, notifyApp, resolveCoordinatorProgram, taskPaths, uniqueTaskName, waitForPaneUUID, workspaceWindowID } from "./program.js";
 import { respawnMarker } from "./promote.js";
-import { acpPromptSupported, acquireSpawnLock, briefInViewLaunch, failStartup, noteSubWorker, paneProcesses, showACPView, spawnRecovery, spawnSummary, startupWaitMs, subWorkerLead, watchAgentStartup } from "./spawn-support.js";
+import { acpPromptSupported, acquireSpawnLock, briefInViewLaunch, failStartup, noteSubWorker, paneProcesses, spawnRecovery, spawnSummary, startupWaitMs, subWorkerLead, watchAgentStartup } from "./spawn-support.js";
 import { ensureSupervisor } from "./supervisor-control.js";
 
 export async function runAgentSpawn(command, currentSocketPath) {
@@ -191,7 +191,7 @@ export async function runAgentSpawn(command, currentSocketPath) {
       ? { id: controlID, pane: placementPane }
       : { id: controlID, pane: sourcePane, axis };
     // An agent with an ACP view: the app marks its pane when Settings › Agents › Open agents in
-    // says ACP View, and the pane shows the view once the agent runs. A Codex shares its session
+    // says ACP View, and the pane shows the view from the start. A Codex shares its session
     // live with the view; another agent starts in the view, its brief the host's first prompt.
     if ((launch.via === "codex-session" || (launch.via === "acp-session" && acpPromptSupported()))
       && controlHasArgument(descriptors, controlID, "acpAgent")) {
@@ -230,9 +230,10 @@ export async function runAgentSpawn(command, currentSocketPath) {
   if (startup.started === false) {
     failStartup(newPane, startup, { planned, task, program, command, launchCommand, cwd });
   }
-  const acpView = tmuxPaneOption(newPane, "@agents_open_in") === "acp-view"
-    ? await showACPView(currentSocketPath, token, newPane)
-    : undefined;
+  // The app shows a pane it marked to open in the ACP view in its view from the start: the
+  // shell the launch is typed into, and the terminal message of an agent that starts in the
+  // view, stay behind its opening frame.
+  const acpView = tmuxPaneOption(newPane, "@agents_open_in") === "acp-view" ? true : undefined;
 
   return {
     id: requestID("cli"),

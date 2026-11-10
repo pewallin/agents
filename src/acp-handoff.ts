@@ -666,6 +666,8 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     log(`${agent.name} starts in the view${tuiSession ? ` on session ${tuiSession}` : ""}`);
     // The app knows the pane's agent from its state before any TUI or hook reports it.
     reportViewActivity(agent.stateAgent, paneId)("idle");
+    // The app shows the view's opening frame meanwhile, with this line on it.
+    status("loading", tuiSession ? "Loading the session…" : `Starting ${agent.name}…`);
     sessionId = await hostSession(continued(tuiSession));
     inView();
     if (sessionId && input.firstPrompt) {
