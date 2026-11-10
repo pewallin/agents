@@ -483,6 +483,10 @@ th, td { overflow-wrap: break-word; }
 /* the turn's results as pictures */
 .strip { display: flex; gap: 8px; flex-wrap: wrap; }
 .snap { width: 128px; margin: 0; display: flex; flex-direction: column; gap: 4px; cursor: zoom-in; }
+/* A turn's result is a link to its file (opened beside the pane), not a zoom. */
+.snap.result { cursor: pointer; }
+.snap.result:hover figcaption { color: var(--fg); }
+.snap.result:hover .mini { box-shadow: 0 0 0 1px var(--faint); }
 .snap .mini { height: 80px; border-radius: 7px; overflow: hidden; box-shadow: 0 0 0 1px var(--edge); background: var(--codebg); display: grid; place-items: center; }
 .snap .mini img { width: 100%; height: 100%; object-fit: cover; }
 .snap .mini svg { width: 22px; height: 22px; color: var(--faint); }

@@ -636,7 +636,7 @@ export function resultNames(text: string): string[] {
 }
 
 /** The turn's results as pictures: files named or linked in the answer, and images the turn
- *  made; one entry per file, at most four, then "+N". A markdown file is a result only when the
+ *  made; one entry per file, at most four, then "+N". Each is a link to its file. A markdown file is a result only when the
  *  turn wrote it: one the agent just mentions is a chip in the text. */
 export function ResultStrip({ answer, changes, version }: { answer: string; changes: FileChange[]; version: string }) {
   const host = useContext(ChipHostContext);
@@ -665,7 +665,13 @@ function ResolvedStrip({ names, made, host, version }: { names: string[]; made: 
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, host]);
-  const open = useCallback((path: string, rel: string) => host?.open({ kind: "image", path, rel }, { alternate: false }), [host]);
+  // A result is a link: in Agents Next the app takes the click first (by data-path) and opens the
+  // file by its rule, beside the pane, as a tab (⌥, middle button) or in another app (⌘); this is
+  // the click outside it.
+  const open = useCallback((path: string, rel: string, event: React.MouseEvent) => {
+    const kind = IMAGE_EXTENSIONS.test(path) ? "image" : "file";
+    host?.open({ kind, path, rel }, { alternate: event.altKey, command: event.metaKey });
+  }, [host]);
   if (!host || !paths || paths.length === 0) return null;
   const shown = paths.slice(0, 4);
   return (
@@ -674,7 +680,7 @@ function ResolvedStrip({ names, made, host, version }: { names: string[]; made: 
         const rel = path.startsWith(`${host.cwd}/`) ? path.slice(host.cwd.length + 1) : path.split("/").pop()!;
         const src = thumbnailURL(host, path, 256, version);
         return (
-          <figure key={path} className="snap" onClick={() => open(path, rel)} title={rel}>
+          <figure key={path} className="snap result" data-path={path} onClick={(event) => open(path, rel, event)} title={rel}>
             <div className="mini"><Thumbnail src={src} /></div>
             <figcaption>{rel.split("/").pop()}</figcaption>
           </figure>
