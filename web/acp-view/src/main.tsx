@@ -31,6 +31,7 @@ import { gateFromHost, initialGate, nextViewPhase, type GatePhase, type ViewPhas
 import { typedTicketTokens, useTicketRules } from "./tickets";
 import { contextPercent, usageText, usageTitle, type SessionUsage } from "./usage";
 import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
+import { hostOutdated, outdatedHostAction, triedKey, viewBuild } from "./host-build";
 import "./view.css";
 
 announceBridge();
@@ -1444,6 +1445,7 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   return (
     <div className="dock" ref={dock}>
       <div className="inner">
+        <OutdatedHost agentName={info.agent.name} typed={draft.trim() !== "" || attachments.length > 0} />
         <WorkerStrip />
         <PlanLine />
         {slashItems.length > 0 && (
@@ -1748,6 +1750,56 @@ function SendButton({ ready, flying, label }: { ready: boolean; flying: boolean;
 
 /** The agent's todo list above the field: the step under way and how many are done, which opens to
  *  every step with its mark. */
+/** A host that runs an older agents CLI than this view (the CLI was updated while the agent ran):
+ *  Codex's host starts again by itself while nothing goes on, the agent untouched; another agent
+ *  offers to start again on its session, under the current host. */
+function OutdatedHost({ agentName, typed }: { agentName: string; typed: boolean }) {
+  // Asking or working: a restart now would cut the turn short.
+  const busy = useSession((s) => s.prompting || attention(s) !== "idle");
+  const [host, setHost] = useState<{ build: string; mode?: string } | null>(null);
+  const view = viewBuild();
+  useEffect(() => {
+    if (!view) return;
+    hostJson<{ agentsCLI?: string; mode?: string }>("/api/diagnostics").then((report) => {
+      if (hostOutdated(view, report.agentsCLI)) setHost({ build: report.agentsCLI!, mode: report.mode });
+    }, () => {});
+  }, [view]);
+  const tried = host ? readTried(host.build) : false;
+  const action = host ? outdatedHostAction({ mode: host.mode, inApp: inMacApp(), idle: !busy && !typed, tried }) : null;
+  useEffect(() => {
+    if (action !== "restart-host" || !host) return;
+    writeTried(host.build);
+    window.location.href = APP_ACTIONS.restartViewHost;
+  }, [action, host]);
+  if (!host || !action || action === "restart-host") return null;
+  const title = `The view host runs agents CLI ${host.build}; this view is ${view}.`;
+  return (
+    <div className="outdated-host" role="status" title={title}>
+      <span className="oh-text">
+        {action === "offer-host-restart" && "This view's host runs an earlier agents CLI."}
+        {action === "offer-agent-restart" && `${agentName}'s view host runs an earlier agents CLI.`}
+        {action === "say" && `${agentName}'s view host runs an earlier agents CLI: start ${agentName} again from Agents Next to update it.`}
+      </span>
+      {action === "offer-host-restart" && (
+        <button type="button" className="link" disabled={busy} title={busy ? `When ${agentName} is idle` : "Restart the view host; the agent keeps running"}
+          onClick={() => { writeTried(host.build); window.location.href = APP_ACTIONS.restartViewHost; }}>Update</button>
+      )}
+      {action === "offer-agent-restart" && (
+        <button type="button" className="link" disabled={busy} title={busy ? `When ${agentName} is idle` : `Restart ${agentName} on this session`}
+          onClick={() => { window.location.href = APP_ACTIONS.restartInACPMode; }}>Restart {agentName} to update</button>
+      )}
+    </div>
+  );
+}
+
+function readTried(build: string): boolean {
+  try { return sessionStorage.getItem(triedKey(build)) === "1"; } catch { return false; }
+}
+
+function writeTried(build: string): void {
+  try { sessionStorage.setItem(triedKey(build), "1"); } catch { /* no storage */ }
+}
+
 function PlanLine() {
   const plan = useSession((s) => s.plan);
   const working = useSession((s) => attention(s) !== "idle");

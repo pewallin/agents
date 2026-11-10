@@ -85,7 +85,7 @@ button, summary, .status, .row, .edits, .when, .chev { -webkit-user-select: none
   mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) + 12px), transparent calc(100% - var(--dock-space, 150px) + 70px)); }
 /* With rows above the field (the workers, the plan) the conversation ends above the dock, so it
    never runs under them. */
-:root:has(.dock .worker-strip, .dock .plan-line) .scroll.under-dock {
+:root:has(.dock .worker-strip, .dock .plan-line, .dock .outdated-host) .scroll.under-dock {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) - 22px), transparent calc(100% - var(--dock-space, 150px) + 4px));
   mask-image: linear-gradient(to bottom, #000 calc(100% - var(--dock-space, 150px) - 22px), transparent calc(100% - var(--dock-space, 150px) + 4px)); }
 @media (prefers-reduced-motion: reduce) { [data-sd-animate] { animation: none !important; } }
@@ -228,6 +228,11 @@ th, td { overflow-wrap: break-word; }
 .choice { all: unset; cursor: pointer; display: flex; gap: 10px; align-items: baseline; padding: 5px 8px; border-radius: 8px; color: var(--fg2); }
 .choice:hover, .choice.sel { background: color-mix(in srgb, var(--hue) 14%, var(--tint2)); color: var(--fg); }
 .choice .k2 { font: calc(var(--fs-mono) - .5px) var(--mono); color: var(--faint); width: 10px; flex: none; }
+/* a view host that runs an earlier agents CLI than the view, docked above the field */
+.outdated-host { display: flex; align-items: baseline; gap: 8px; padding: 2px 12px; font-size: calc(var(--fs) - 1px); color: var(--dim); }
+.outdated-host .oh-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outdated-host button.link { flex: none; font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: pointer; }
+.outdated-host button.link:disabled { color: var(--faint); cursor: default; }
 /* the agent's todo list, docked above the field: the step under way, opening to every step */
 .plan-line { display: flex; flex-direction: column; gap: 4px; padding: 0 6px; font-size: calc(var(--fs) - 1px); }
 .pl-head { all: unset; cursor: pointer; display: flex; align-items: center; gap: 7px; max-width: 100%; box-sizing: border-box; align-self: flex-start;

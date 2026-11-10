@@ -55,8 +55,40 @@ describe("acp-restart", () => {
     expect(plan(claude, { claude: { state: "working", externalSessionId: "s" } })).toMatchObject({ ok: false, reason: expect.stringContaining("working") });
     expect(plan(claude, { claude: { state: "idle" } })).toMatchObject({ ok: false, reason: expect.stringContaining("not reported its session") });
     expect(plan([{ pid: 100, ppid: 1, args: "zsh" }, { pid: 200, ppid: 100, args: "htop" }], {})).toMatchObject({ ok: false, reason: "This pane runs no agent with an ACP view." });
-    expect(plan([{ pid: 100, ppid: 1, args: "/x/agents acp-session --agent claude-acp --tui claude" }, { pid: 200, ppid: 100, args: "claude" }], { claude: { state: "idle", externalSessionId: "s" } }))
+    expect(plan([{ pid: 100, ppid: 1, args: "/x/agents codex-session --command codex" }, { pid: 200, ppid: 100, args: "/x/codex" }], { codex: { state: "idle", externalSessionId: "t" } }))
+      .toMatchObject({ ok: false, reason: expect.stringContaining("restart its view host") });
+    expect(plan([{ pid: 100, ppid: 1, args: "/x/agents acp-session --agent nobody --tui claude" }], {}))
       .toMatchObject({ ok: false, reason: expect.stringContaining("already runs with its ACP view") });
+  });
+
+  // A hand-off agent whose host runs an earlier agents CLI: the pane's acp-session starts again,
+  // on the session it has, whether its TUI or its view has it.
+  it("restarts an agent already under acp-session on its session, by a respawn of the wrapper", () => {
+    const inTerminal = plan([
+      { pid: 100, ppid: 1, args: "/x/agents acp-session --agent claude-acp --tui claude --model opus --resume old" },
+      { pid: 200, ppid: 100, args: "claude --model opus --resume old" },
+    ], { claude: { state: "idle", externalSessionId: "new" } });
+    expect(inTerminal).toEqual({
+      ok: true, agent: "claude", stateAgent: "claude", sessionId: "new", agentPid: 100, viaShell: false, wrapper: true,
+      command: `${AGENTS_BIN} acp-session --agent claude-acp --tui 'claude --model opus --resume new'`,
+    });
+    const inView = plan([
+      { pid: 100, ppid: 1, args: "/x/agents acp-session --agent claude-acp --tui claude --first-tui claude brief --first-prompt-file /tmp/b" },
+      { pid: 300, ppid: 100, args: "/x/agents claude-acp" },
+    ], { claude: { state: "idle", externalSessionId: "s1" } });
+    expect(inView).toMatchObject({ ok: true, agentPid: 100, wrapper: true, sessionId: "s1" });
+    expect(inView.ok && inView.command).toBe(`${AGENTS_BIN} acp-session --agent claude-acp --tui 'claude --resume s1'`);
+  });
+
+  it("types the wrapper's restart into the shell it runs in, starts one that has no session afresh, and waits for a working one", () => {
+    const viaShell = plan([
+      { pid: 100, ppid: 1, args: "-zsh" },
+      { pid: 200, ppid: 100, args: "/x/agents acp-session --agent kiro --tui kiro-cli chat -a" },
+    ], {});
+    expect(viaShell).toMatchObject({ ok: true, agentPid: 200, viaShell: true, wrapper: true, sessionId: undefined });
+    expect(viaShell.ok && viaShell.command).toBe(`${AGENTS_BIN} acp-session --agent kiro --tui 'kiro-cli chat -a'`);
+    expect(plan([{ pid: 100, ppid: 1, args: "/x/agents acp-session --agent claude-acp --tui claude" }], { claude: { state: "working", externalSessionId: "s" } }))
+      .toMatchObject({ ok: false, reason: expect.stringContaining("working") });
   });
 
   // Kiro's shell integration (kiro-cli-term) runs the pane's shell in a pty of its own: the pane's

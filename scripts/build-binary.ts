@@ -89,6 +89,11 @@ for (const target of targets) {
 
   cpSync(join(ROOT, "extensions"), join(dir, "extensions"), { recursive: true });
   cpSync(ACP_VIEW, join(dir, "acp-view"), { recursive: true });
+  // The view says which build it came with, so a view on a host of an earlier build (an agent
+  // that ran on while the CLI was updated) notices it (web/acp-view/src/host-build.ts).
+  const page = join(dir, "acp-view", "index.html");
+  const build = `${version}+${gitCommit.slice(0, 12)}${dirty ? "-dirty" : ""}`;
+  writeFileSync(page, readFileSync(page, "utf-8").replace(/<head[^>]*>/i, (head) => `${head}<meta name="agents-cli-build" content="${build}">`));
   writeFileSync(join(dir, "build.json"), JSON.stringify(info, null, 2) + "\n");
-  console.log(`${target}: ${join(dir, "agents")} (${version}+${gitCommit.slice(0, 12)}${dirty ? "-dirty" : ""})`);
+  console.log(`${target}: ${join(dir, "agents")} (${build})`);
 }

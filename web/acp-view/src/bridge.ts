@@ -37,6 +37,8 @@ export const PAGE_EVENTS = {
 export const APP_ACTIONS = {
   backToTerminal: "agents-next-action://back-to-terminal",
   restartViewHost: "agents-next-action://restart-view-host",
+  /** The pane's agent starts again on its session, under the CLI's current host. */
+  restartInACPMode: "agents-next-action://restart-acp",
   copyDiagnostics: "agents-next-action://copy-acp-diagnostics",
 } as const;
 

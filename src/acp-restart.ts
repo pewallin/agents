@@ -8,6 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { HOSTED_OPTION } from "./acp-handoff.js";
 import { ACP_AGENTS } from "./acp-host-cli.js";
 import { acpViewAgent } from "./agent-registry.js";
 import { getSelfArgv, getStateDir } from "./paths.js";
@@ -39,11 +40,14 @@ export type RestartPlan =
     ok: true;
     agent: string;
     stateAgent: string;
-    sessionId: string;
+    /** None for an agent under acp-session that has not opened one yet: it starts afresh. */
+    sessionId?: string;
     agentPid: number;
     /** The agent runs in the pane's shell: the restart is typed there, so the shell stays. */
     viaShell: boolean;
     command: string;
+    /** agentPid is the pane's acp-session, which ends its TUI or view session itself. */
+    wrapper?: boolean;
   }
   | { ok: false; reason: string; agent?: string };
 
@@ -112,9 +116,13 @@ export function planAcpRestart(input: {
   agentsCommand: string;
 }): RestartPlan {
   const tree = descendants(input.processes, input.panePid);
-  if (tree.some((process) => / (codex-session|acp-session)( |$)/.test(process.args))) {
-    return { ok: false, reason: "The agent already runs with its ACP view, but the view's host is not running. Quit the agent and start it again from Agents Next." };
+  if (tree.some((process) => / codex-session( |$)/.test(process.args))) {
+    return { ok: false, reason: "Codex already runs with its ACP view: restart its view host, or quit Codex and start it again from Agents Next." };
   }
+  // A hand-off agent under acp-session already (its host is gone, or runs an earlier agents
+  // CLI): the wrapper starts again, on the session it has, in the terminal or in the view.
+  const wrapper = tree.find((process) => / acp-session( |$)/.test(process.args));
+  if (wrapper) return planWrapperRestart(input, tree, wrapper);
   // The shallowest agent process: the agent itself, not the processes it runs.
   const agentProcess = tree.find((process) => agentWords(process.args) !== undefined);
   if (!agentProcess) return { ok: false, reason: "This pane runs no agent with an ACP view." };
@@ -150,6 +158,50 @@ export function planAcpRestart(input: {
     && !isPtyWrapper(parent.args)
     && SHELLS.has(basename(parent.args.trim().split(/\s+/)[0] ?? ""));
   return { ok: true, agent: name, stateAgent: agent.stateAgent, sessionId, agentPid: agentProcess.pid, viaShell, command };
+}
+
+/** The words after `<name>` in a process's command line, up to the next of the wrapper's own
+ *  options: `--tui <command>` comes as words, its quotes gone in ps. */
+export function wrapperOption(args: string, name: string): string | undefined {
+  const words = args.trim().split(/\s+/);
+  const index = words.indexOf(name);
+  if (index < 0) return undefined;
+  const own = new Set(["--agent", "--tui", "--pane", "--cwd", "--first-tui", "--first-prompt-file", "--app-server"]);
+  const end = words.findIndex((word, at) => at > index && own.has(word));
+  const value = words.slice(index + 1, end < 0 ? undefined : end).join(" ");
+  return value || undefined;
+}
+
+function planWrapperRestart(
+  input: Parameters<typeof planAcpRestart>[0],
+  tree: PaneProcess[],
+  wrapper: PaneProcess,
+): RestartPlan {
+  const registryId = wrapperOption(wrapper.args, "--agent") ?? "";
+  const entry = ACP_AGENTS[registryId];
+  const tuiCommand = wrapperOption(wrapper.args, "--tui");
+  if (!entry?.resume || !tuiCommand) {
+    return { ok: false, reason: "The agent already runs with its ACP view, but the view's host is not running. Quit the agent and start it again from Agents Next." };
+  }
+  const tuiWords = tuiCommand.split(/\s+/);
+  const name = agentWords(tuiCommand)?.name ?? entry.name;
+  const state = input.stateOf(entry.stateAgent);
+  if (state?.state && BUSY.has(state.state)) {
+    return { ok: false, agent: name, reason: `${entry.name} is working – restart it when it is done.` };
+  }
+  const held = input.heldSession?.(registryId, descendants(input.processes, wrapper.pid).map((process) => process.pid));
+  const kept = held ?? state?.externalSessionId?.trim() ?? resumeIdOf(tuiWords);
+  const sessionId = kept ? input.continuedSession?.(registryId, kept) ?? kept : undefined;
+  const resumed = sessionId ? entry.resume(tuiCommand, sessionId) : tuiCommand;
+  const parent = input.processes.find((process) => process.pid === wrapper.ppid);
+  const viaShell = wrapper.pid !== input.panePid
+    && parent !== undefined
+    && !isPtyWrapper(parent.args)
+    && SHELLS.has(basename(parent.args.trim().split(/\s+/)[0] ?? ""));
+  return {
+    ok: true, agent: name, stateAgent: entry.stateAgent, sessionId, agentPid: wrapper.pid, viaShell, wrapper: true,
+    command: `${input.agentsCommand} acp-session --agent ${registryId} --tui ${shellQuote(resumed)}`,
+  };
 }
 
 /** `--resume-id <id>` or `--resume <id>` in an agent's command. */
@@ -289,7 +341,7 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
     return plan.ok ? 0 : 1;
   }
 
-  log(`${plan.agent} ${plan.agentPid} in ${paneId} on session ${plan.sessionId}: ${plan.command}`);
+  log(`${plan.agent} ${plan.agentPid} in ${paneId} on ${plan.sessionId ? `session ${plan.sessionId}` : "a new session"}: ${plan.command}`);
   try {
     return await restartAgent(plan, paneId, cwd, remainOnExit, processes, log, say);
   } catch (error) {
@@ -315,6 +367,19 @@ async function restartAgent(
   // A pane whose start command is the agent closes when the agent ends: it stays for the respawn.
   if (!plan.viaShell) tmux(["set-option", "-p", "-t", paneId, "remain-on-exit", "on"]);
   try {
+    if (plan.wrapper) {
+      // acp-session ends its TUI or its view's session on SIGTERM; a key would reach the TUI, or
+      // take a view's session back to the terminal.
+      try { process.kill(plan.agentPid, "SIGTERM"); } catch { /* gone */ }
+      log("sent SIGTERM to acp-session");
+      if (!await waitForAll(tree, 10_000)) {
+        log(`still running (${aliveOf(tree).join(" ")}); SIGKILL`);
+        for (const pid of aliveOf(tree)) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
+        await waitForAll(tree, 2_000);
+      }
+      // The host's session is gone with it: lines for the agent go to its terminal again.
+      try { tmux(["set-option", "-p", "-u", "-t", paneId, HOSTED_OPTION]); } catch { /* unset */ }
+    } else {
     // The agent leaves as on Ctrl-C (twice: most TUIs ask once), then by its quit command, then
     // is told to, then made to.
     tmux(["send-keys", "-t", paneId, "C-c"]);
@@ -336,6 +401,7 @@ async function restartAgent(
         for (const pid of aliveOf(tree)) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
         await waitForAll(tree, 2_000);
       }
+    }
     }
     log(aliveOf(tree).length === 0 ? "the agent ended" : `processes left running: ${aliveOf(tree).join(" ")}`);
     if (plan.viaShell) {
