@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { changesSince, commitChanges, commitInfo, inside, looksLikePath, peekFile, readBeads, resolveNames, snapshotTree, splitLine, treeDiff } from "./acp-peek.js";
+import { changesSince, commitChanges, commitInfo, ignoredFiles, inside, looksLikePath, peekFile, readBeads, resolveNames, snapshotTree, splitLine, treeDiff } from "./acp-peek.js";
 
 let root: string;
 const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "T", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "T", GIT_COMMITTER_EMAIL: "t@t" } });
@@ -77,6 +77,38 @@ describe("names", () => {
     } finally {
       process.env.HOME = previous;
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a bare name in a folder git ignores when no other file has it, never in a heavy folder", async () => {
+    writeFileSync(join(root, ".gitignore"), ".agents/*\n!.agents/skills\nnode_modules/\n");
+    mkdirSync(join(root, ".agents/tasks/ui"), { recursive: true });
+    mkdirSync(join(root, "node_modules/x"), { recursive: true });
+    writeFileSync(join(root, ".agents/tasks/ui/report.md"), "done\n");
+    writeFileSync(join(root, ".agents/tasks/ui/README.md"), "# Not this one\n");
+    writeFileSync(join(root, "node_modules/x/index.js"), "");
+    const files = async () => git("ls-files", "--cached", "--others", "--exclude-standard").split("\n").filter(Boolean);
+    const resolved = await resolveNames(["report.md", "README.md", "index.js"], { cwd: root, files });
+    expect(resolved["report.md"]).toMatchObject({ kind: "file", rel: ".agents/tasks/ui/report.md" });
+    // The project's own README comes first: an ignored file of that name does not make it ambiguous.
+    expect(resolved["README.md"]).toMatchObject({ kind: "file", rel: "README.md" });
+    expect(resolved["index.js"]).toBeNull();
+    // A pane standing in the ignored folder finds what is under it.
+    const inTasks = join(root, ".agents/tasks");
+    expect(await ignoredFiles(inTasks)).toEqual(expect.arrayContaining(["ui/report.md", "ui/README.md"]));
+    const fromTasks = await resolveNames(["report.md"], { cwd: inTasks, files: async () => [] });
+    expect(fromTasks["report.md"]).toMatchObject({ kind: "file", path: join(inTasks, "ui/report.md") });
+  });
+
+  it("looks through a folder that is no repository, but never the home folder", async () => {
+    const plain = realpathSync(mkdtempSync(join(tmpdir(), "acp-plain-")));
+    try {
+      mkdirSync(join(plain, "tasks/ui"), { recursive: true });
+      writeFileSync(join(plain, "tasks/ui/report.md"), "done\n");
+      expect(await ignoredFiles(plain)).toEqual(["tasks/ui/report.md"]);
+      expect(await ignoredFiles(homedir())).toEqual([]);
+    } finally {
+      rmSync(plain, { recursive: true, force: true });
     }
   });
 

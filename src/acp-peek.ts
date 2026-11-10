@@ -4,7 +4,7 @@
 // directory, and it never touches the user's index, stashes or branches: a turn's snapshot is
 // written with a temporary index.
 import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { type Dirent, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getProgramsDir } from "./paths.js";
@@ -72,6 +72,9 @@ export function looksLikePath(name: string): boolean {
 interface ResolveContext {
   cwd: string;
   files: () => Promise<string[]>;
+  /** The files git ignores (or, outside a repository, all of them), relative to `cwd`: a bare
+   *  name no other file has is looked up there. ignoredFiles(cwd) unless given. */
+  ignoredFiles?: () => Promise<string[]>;
   /** More directories a relative name is looked up in after the pane's: program folders. */
   bases?: () => Promise<string[]>;
 }
@@ -108,11 +111,12 @@ export function programDirectories(pane = process.env.TMUX_PANE): Promise<string
 
 /** What each name stands for, or null. A relative path is looked up in the pane's directory, then
  *  in the coordinators' program folders; a bare file name also stands for the one project file of
- *  that name, if there is exactly one. An absolute path or one under ~ stands for the file there,
+ *  that name, if there is exactly one, else the one in the folders git ignores (heavy ones aside). An absolute path or one under ~ stands for the file there,
  *  as in the terminal (reading it is another matter: see insideAllowed). */
 export async function resolveNames(names: string[], context: ResolveContext): Promise<Record<string, Resolved | null>> {
   const result: Record<string, Resolved | null> = {};
   let projectFiles: string[] | undefined;
+  let ignored: string[] | undefined;
   let beads: Map<string, Bead> | undefined;
   for (const raw of names.slice(0, 200)) {
     if (typeof raw !== "string" || raw in result) continue;
@@ -139,8 +143,15 @@ export async function resolveNames(names: string[], context: ResolveContext): Pr
       }
     }
     if (!path && !expanded.includes("/") && !isAbsolute(expanded)) {
+      const named = (files: string[]) => files.filter((file) => file === expanded || file.endsWith(`/${expanded}`));
       projectFiles ??= await context.files();
-      const matches = projectFiles.filter((file) => file === expanded || file.endsWith(`/${expanded}`));
+      let matches = named(projectFiles);
+      // A report in a folder git ignores (an agent's notes, ~/.agents) is a file too, when no
+      // other file has its name.
+      if (matches.length === 0) {
+        ignored ??= await (context.ignoredFiles ?? (() => ignoredFiles(context.cwd)))();
+        matches = named(ignored);
+      }
       if (matches.length === 1) path = inside(context.cwd, matches[0]);
     }
     if (!path) continue;
@@ -151,6 +162,51 @@ export async function resolveNames(names: string[], context: ResolveContext): Pr
     result[raw] = { kind, path, rel: rel && !rel.startsWith("..") ? rel : path.replace(homedir(), "~"), ...(line ? { line } : {}) };
   }
   return result;
+}
+
+/** Folders a bare name is never looked for in: what tools make and install. */
+const HEAVY_FOLDERS = new Set([".git", ".build", ".cache", ".gradle", ".next", ".venv", "__pycache__", "build", "DerivedData", "dist", "node_modules", "Pods", "target", "venv"]);
+const IGNORED_FILES_LIMIT = 20_000;
+const ignoredLists = new Map<string, { at: number; files: Promise<string[]> }>();
+
+/** The files under `cwd` that git ignores, relative to it, without heavy folders: everything when
+ *  `cwd` is no repository, or a folder git ignores. Never the home folder or one above it, whose
+ *  Documents and Desktop macOS guards. At most 20,000, kept 10 seconds. */
+export function ignoredFiles(cwd: string): Promise<string[]> {
+  const cached = ignoredLists.get(cwd);
+  if (cached && Date.now() - cached.at < 10_000) return cached.files;
+  const files = git(cwd, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])
+    .then((out) => out.split("\0").filter(Boolean), () => ["./"])
+    .then((entries) => {
+      let home = homedir();
+      try { home = realpathSync(home); } catch { /* as it is */ }
+      let root = cwd;
+      try { root = realpathSync(cwd); } catch { return []; }
+      if (root === home || home.startsWith(root === "/" ? "/" : root + sep)) return [];
+      // A set: git names a folder and one inside it when `.agents/*` ignores what is in .agents.
+      const found = new Set<string>();
+      const walk = (relativeDirectory: string, depth: number) => {
+        if (found.size >= IGNORED_FILES_LIMIT || depth > 8) return;
+        let names: Dirent[];
+        try { names = readdirSync(join(root, relativeDirectory), { withFileTypes: true }); } catch { return; }
+        for (const entry of names) {
+          if (found.size >= IGNORED_FILES_LIMIT) return;
+          const path = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) { if (!HEAVY_FOLDERS.has(entry.name)) walk(path, depth + 1); }
+          else if (entry.isFile()) found.add(path);
+        }
+      };
+      for (const entry of entries) {
+        if (found.size >= IGNORED_FILES_LIMIT) break;
+        if (entry === "./") { walk("", 0); break; }
+        if (!entry.endsWith("/")) { found.add(entry); continue; }
+        const folder = entry.slice(0, -1);
+        if (!folder.split("/").some((part) => HEAVY_FOLDERS.has(part))) walk(folder, folder.split("/").length);
+      }
+      return [...found];
+    });
+  ignoredLists.set(cwd, { at: Date.now(), files });
+  return files;
 }
 
 /** Lines of a text file around a line (or its start). */
