@@ -14,6 +14,7 @@ import type {
   ToolKind,
   UsageUpdate,
 } from "@agentclientprotocol/sdk";
+import { planFromToolInput } from "./plan";
 
 export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
 
@@ -350,7 +351,8 @@ export function applyUpdate(state: SessionState, update: SessionUpdate, eventAt?
       const previous = state.toolCalls[update.toolCallId];
       const toolCalls = { ...state.toolCalls, [update.toolCallId]: mergeToolCall(previous, update, at) };
       const items = previous ? state.items : [...state.items, { type: "tool" as const, id: update.toolCallId, at }];
-      return { ...state, toolCalls, items };
+      const plan = planFromToolInput(update.rawInput) ?? state.plan;
+      return { ...state, toolCalls, items, plan };
     }
     case "plan":
       return { ...state, plan: update.entries };

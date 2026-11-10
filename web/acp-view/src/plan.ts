@@ -2,6 +2,22 @@
 // update_plan) as the view shows it above the field: the step under way and how many are done.
 import type { PlanEntry } from "@agentclientprotocol/sdk";
 
+/** A todo list an agent keeps as a Markdown checklist in a tool call's input instead of sending
+ *  a plan: Copilot's update_todo (`{ todos: "- [x] Read\n- [ ] Fix" }`). */
+export function planFromToolInput(rawInput: unknown): PlanEntry[] | undefined {
+  if (!rawInput || typeof rawInput !== "object") return undefined;
+  const todos = (rawInput as { todos?: unknown }).todos;
+  if (typeof todos !== "string") return undefined;
+  const entries: PlanEntry[] = [];
+  for (const line of todos.split("\n")) {
+    const item = /^\s*(?:[-*+]|\d+\.)\s+\[([ xX~-])\]\s+(.+?)\s*$/.exec(line);
+    if (!item) continue;
+    const mark = item[1].toLowerCase();
+    entries.push({ content: item[2], status: mark === "x" ? "completed" : mark === " " ? "pending" : "in_progress", priority: "medium" });
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
 export interface PlanSummary {
   done: number;
   total: number;

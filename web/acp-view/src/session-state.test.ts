@@ -83,6 +83,14 @@ describe("session state", () => {
     expect(state.usage).toMatchObject({ used: 10, size: 100 });
     expect(state.commands[0].name).toBe("review");
   });
+
+  it("takes Copilot's update_todo checklist as the plan", () => {
+    const state = run([
+      { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Update todo", kind: "think", status: "pending", rawInput: { todos: "- [x] Read\n- [ ] Fix" } } },
+      { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t2", title: "ls", kind: "execute", status: "pending", rawInput: { command: "ls" } } },
+    ]);
+    expect(state.plan.map((entry) => [entry.content, entry.status])).toEqual([["Read", "completed"], ["Fix", "pending"]]);
+  });
 });
 
 describe("the agent's own state", () => {

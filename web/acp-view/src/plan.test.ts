@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PlanEntry } from "@agentclientprotocol/sdk";
-import { planShown, planSummary } from "./plan";
+import { planFromToolInput, planShown, planSummary } from "./plan";
 
 const entry = (content: string, status: PlanEntry["status"]): PlanEntry => ({ content, status, priority: "medium" });
 
@@ -32,5 +32,19 @@ describe("planShown", () => {
     const finished = planSummary([entry("Read", "completed")]);
     expect(planShown(finished, true)).toBe(true);
     expect(planShown(finished, false)).toBe(false);
+  });
+});
+
+describe("planFromToolInput", () => {
+  it("reads a Markdown checklist, as Copilot's update_todo sends it", () => {
+    expect(planFromToolInput({ todos: "# Tasks\n- [x] Read the code\n- [ ] Fix the bug\n* [~] Test\nNotes" })).toEqual([
+      entry("Read the code", "completed"), entry("Fix the bug", "pending"), entry("Test", "in_progress"),
+    ]);
+  });
+
+  it("reads nothing from other input", () => {
+    expect(planFromToolInput({ command: "ls" })).toBeUndefined();
+    expect(planFromToolInput({ todos: "no checklist here" })).toBeUndefined();
+    expect(planFromToolInput(undefined)).toBeUndefined();
   });
 });
