@@ -265,7 +265,7 @@ export function Chip({ target, label, counts = true }: { target: ChipTarget; lab
       }}
       onClick={open}
       onKeyDown={(event) => { if (event.key === "Enter") open(event); }}
-      onMouseEnter={() => element.current && peek?.show(target, element.current, change)}
+      onMouseEnter={() => { prefetchTitle(target, host); if (element.current) peek?.show(target, element.current, change); }}
       onMouseLeave={() => peek?.hide(false)}>
       {split ? <span className="pick" title="Open the file">{name}</span> : name}
       {split && (
@@ -510,8 +510,54 @@ function PanePeek({ id }: { id: string }) {
   );
 }
 
+// A page's or ticket's title is asked for as the pointer reaches its chip (`prefetchTitle`), not
+// when the peek opens a moment later, and kept: a page through the pane's host, a ticket through
+// the app, which reads it with the user's logins (its tracker's page needs them; outside the app,
+// through the host). A ticket with no title is asked again on the next hover: the user may have
+// signed in since.
+type TitleInfo = { title: string | null; site?: string };
+const titles = new Map<string, Promise<TitleInfo>>();
+
+function askTitle(target: ChipTarget, host: ChipHost | null): Promise<TitleInfo> | undefined {
+  if (target.kind !== "url" && target.kind !== "ticket") return undefined;
+  const key = `${target.kind} ${target.url}`;
+  const known = titles.get(key);
+  if (known) return known;
+  const app = target.kind === "ticket" ? appHandler(APP_HANDLERS.ticketTitle) : undefined;
+  const fromHost = () => host
+    ? host.hostJson<TitleInfo>(`/api/link?url=${encodeURIComponent(target.url)}`)
+    : Promise.reject(new Error("no host"));
+  const asked: Promise<TitleInfo> = (app
+    ? Promise.resolve(app.postMessage({ url: target.url }) as Promise<{ title?: string | null }>).then((value) => ({ title: value?.title ?? null }))
+    : fromHost()
+  ).catch(() => ({ title: null }));
+  titles.set(key, asked);
+  if (titles.size > 300) titles.delete(titles.keys().next().value!);
+  if (target.kind === "ticket") void asked.then((value) => { if (!value.title && titles.get(key) === asked) titles.delete(key); });
+  return asked;
+}
+
+/** Starts asking for a link's or ticket's title, so the peek has it when it opens. */
+export function prefetchTitle(target: ChipTarget, host: ChipHost | null): void {
+  void askTitle(target, host);
+}
+
+function useTitle(target: ChipTarget): TitleInfo | undefined {
+  const host = useContext(ChipHostContext);
+  const [value, setValue] = useState<TitleInfo | undefined>(undefined);
+  const key = "url" in target ? `${target.kind} ${target.url}` : "";
+  useEffect(() => {
+    let live = true;
+    setValue(undefined);
+    void askTitle(target, host)?.then((info) => { if (live) setValue(info); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, host]);
+  return value;
+}
+
 function LinkPeek({ url }: { url: string }) {
-  const { value } = useHost<{ title: string | null; site: string }>(`/api/link?url=${encodeURIComponent(url)}`);
+  const value = useTitle({ kind: "url", url });
   return (
     <>
       <div className="peek-title">{value?.title ?? (value ? url : "…")}</div>
@@ -520,26 +566,14 @@ function LinkPeek({ url }: { url: string }) {
   );
 }
 
-/** A ticket's title, as the app reads it with the user's logins (its tracker's page needs them);
- *  outside the app, as the host reads the page. */
 function TicketPeek({ id, url }: { id: string; url: string }) {
-  const host = useContext(ChipHostContext);
-  const [title, setTitle] = useState<string | null | undefined>(undefined);
-  useEffect(() => {
-    let live = true;
-    const app = appHandler(APP_HANDLERS.ticketTitle);
-    const asked: Promise<{ title?: string | null } | undefined> = app
-      ? Promise.resolve(app.postMessage({ url }) as Promise<{ title?: string | null }>)
-      : host ? host.hostJson<{ title: string | null }>(`/api/link?url=${encodeURIComponent(url)}`) : Promise.resolve(undefined);
-    void asked.then((value) => { if (live) setTitle(value?.title ?? null); }, () => { if (live) setTitle(null); });
-    return () => { live = false; };
-  }, [url, host]);
+  const value = useTitle({ kind: "ticket", id, url });
   const site = siteOf(url).split("/")[0];
   return (
     <>
       <div className="peek-head"><span className="mono">{id}</span><span className="peek-dim">{site}</span></div>
-      {title === undefined ? <div className="peek-dim">…</div>
-        : title ? <div className="peek-title">{title}</div>
+      {value === undefined ? <div className="peek-dim">…</div>
+        : value.title ? <div className="peek-title">{value.title}</div>
           : <div className="peek-dim">No title: sign in to {site} in a web pane of the app to see it.</div>}
     </>
   );

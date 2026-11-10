@@ -49,3 +49,16 @@ describe("ticket ids in the agent's text", () => {
     applyTicketLook({ tickets: [] });
   });
 });
+
+describe("titles of links and tickets", () => {
+  it("are asked for once as the pointer reaches the chip, and kept", async () => {
+    const { prefetchTitle } = await import("./chips");
+    let asked = 0;
+    const host = { hostJson: async () => { asked += 1; return { title: "Example", site: "example.com" }; } } as unknown as Parameters<typeof prefetchTitle>[1];
+    prefetchTitle({ kind: "url", url: "https://example.com/a" }, host);
+    prefetchTitle({ kind: "url", url: "https://example.com/a" }, host);
+    prefetchTitle({ kind: "file", path: "/a", rel: "a" }, host);
+    await Promise.resolve();
+    expect(asked).toBe(1);
+  });
+});
