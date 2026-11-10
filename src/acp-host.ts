@@ -17,6 +17,8 @@ import { getBuildInfo, getSelfArgv, getStateDir, getRuntimeTempDir } from "./pat
 import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
+import { AcpUsageFill } from "./acp-usage-fill.js";
+import type { StateUsage } from "./scanner-state-runtime.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { answerTerminalPrompt, readTerminalScreen } from "./terminal-prompt.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
@@ -86,6 +88,9 @@ export interface AcpHostOptions {
   /** Starts the first turn of a session that is not on disk yet (Codex: on the app-server), and
    *  resolves once a view can load it. */
   startFirstTurn?: (sessionId: string, text: string) => Promise<void>;
+  /** For an agent that reports no usage over ACP: a session's context and spend as the pane's
+   *  header shows them, given to the views as the agent's usage_update (acp-usage-fill.ts). */
+  sessionUsage?: (sessionId: string) => StateUsage;
   /** The agent name of the pane's conversations in `agents history` (its state agent: claude,
    *  kiro, …), for the view's /resume. */
   historyAgent?: string;
@@ -622,10 +627,15 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         diagnostics.message(client, "host→view", line);
         if (ws.readyState === ws.OPEN) ws.send(line);
       });
+      const usage = options.sessionUsage && new AcpUsageFill(options.sessionUsage, (line) => {
+        diagnostics.message(client, "host→view", line);
+        if (ws.readyState === ws.OPEN) ws.send(line);
+      });
       const link = bridge(ws, child, log, {
         launchSettings: applier,
         onAgentLine: (line) => {
           diagnostics.message(client, "agent→view", line);
+          usage?.agentLine(line);
           view.sessions.agentLine(line);
           activity.agentLine(client, line);
           activityChanged();
@@ -656,10 +666,12 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
           activity.clientLine(client, line);
           activityChanged();
           options.onClientLine?.(line);
+          usage?.clientLine(line);
           return undefined;
         },
         onClose: (code, reason) => {
           log(`view ${client} closed (${code}${reason ? ` ${reason}` : ""})`);
+          usage?.close();
           views.delete(client);
           activity.clientGone(client);
           activityChanged();
@@ -732,6 +744,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       log(`the host starts a session of its own, agent ${child.pid}${child === warm ? " (started ahead)" : ""}`);
       const session = new HostedSession(child, {
         launchSettings,
+        sessionUsage: options.sessionUsage,
         onAgentLine: (line) => {
           diagnostics.message(0, "agent→host", line);
           activity.agentLine(0, line);

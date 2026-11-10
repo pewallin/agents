@@ -9,6 +9,8 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
+import { AcpUsageFill } from "./acp-usage-fill.js";
+import type { StateUsage } from "./scanner-state-runtime.js";
 
 type Id = string | number;
 
@@ -38,6 +40,8 @@ export interface HostedSessionTaps {
   log?: (message: string) => void;
   /** What the pane's TUI command sets on the session (acp-launch-settings.ts). */
   launchSettings?: AcpLaunchSettings;
+  /** For an agent that reports no usage over ACP: its session's context and spend (acp-usage-fill.ts). */
+  sessionUsage?: (sessionId: string) => StateUsage;
 }
 
 export interface HostedView {
@@ -60,11 +64,14 @@ export class HostedSession {
   private view: { send: (line: string) => void; ids: Map<string, Id> } | undefined;
   private readonly exited: Promise<void>;
   private readonly launchSettings: AcpLaunchSettingsApplier | undefined;
+  private readonly usage: AcpUsageFill | undefined;
 
   constructor(private readonly child: ChildProcess, private readonly taps: HostedSessionTaps = {}) {
     this.launchSettings = taps.launchSettings && new AcpLaunchSettingsApplier(taps.launchSettings, (line) => this.toAgent(line), taps.log, (line) => this.fromAgent(line));
+    this.usage = taps.sessionUsage && new AcpUsageFill(taps.sessionUsage, (line) => this.fromAgent(line));
     createInterface({ input: child.stdout! }).on("line", (line) => { if (line.trim()) this.fromAgent(line); });
     this.exited = new Promise((resolve) => child.once("exit", () => {
+      this.usage?.close();
       for (const waiting of this.pending.values()) waiting.reject(new Error("the agent exited"));
       this.pending.clear();
       resolve();
@@ -160,6 +167,7 @@ export class HostedSession {
 
   private toAgent(line: string): void {
     this.launchSettings?.clientLine(line);
+    this.usage?.clientLine(line);
     this.taps.onClientLine?.(line);
     this.child.stdin?.write(`${line}\n`);
   }
@@ -177,6 +185,7 @@ export class HostedSession {
 
   private fromAgent(line: string): void {
     if (this.launchSettings?.agentLine(line)) return;
+    this.usage?.agentLine(line);
     this.taps.onAgentLine?.(line);
     const message = parse(line);
     if (!message) return;

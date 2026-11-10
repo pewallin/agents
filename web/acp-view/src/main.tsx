@@ -29,6 +29,7 @@ import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpe
 import { announceBridge, APP_ACTIONS, APP_HANDLERS, appHandler, definePageEntry, PAGE_ENTRIES, PAGE_EVENTS, type AppHandler } from "./bridge";
 import { gateFromHost, initialGate, nextViewPhase, type GatePhase, type ViewPhase } from "./opening";
 import { typedTicketTokens, useTicketRules } from "./tickets";
+import { contextPercent, usageText, usageTitle, type SessionUsage } from "./usage";
 import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
 import "./view.css";
 
@@ -1078,17 +1079,23 @@ function useSteerWay(session: AcpSession): "acp" | "inbox" | "none" | undefined 
   return way;
 }
 
-function Ring({ percent }: { percent: number }) {
-  const angle = Math.min(0.999, percent / 100) * 2 * Math.PI;
+/** The session's context, a ring of how full it is and its tokens, and what it has cost so far. */
+function Usage({ usage }: { usage: SessionUsage }) {
+  const percent = contextPercent(usage);
+  const text = usageText(usage);
+  if (!text) return null;
+  const angle = Math.min(0.999, (percent ?? 0) / 100) * 2 * Math.PI;
   const x = 7 + 5.4 * Math.sin(angle);
   const y = 7 - 5.4 * Math.cos(angle);
   return (
-    <span className="ring" title="Context used">
-      <svg viewBox="0 0 14 14" aria-hidden="true">
-        <circle cx="7" cy="7" r="5.4" fill="none" stroke="currentColor" strokeOpacity=".35" strokeWidth="1.6" />
-        {percent > 0 && <path d={`M7 1.6A5.4 5.4 0 ${angle > Math.PI ? 1 : 0} 1 ${x.toFixed(2)} ${y.toFixed(2)}`} fill="none" stroke="currentColor" strokeWidth="1.6" />}
-      </svg>
-      {Math.round(percent)} %
+    <span className="ring" title={usageTitle(usage)}>
+      {percent !== undefined && (
+        <svg viewBox="0 0 14 14" aria-hidden="true">
+          <circle cx="7" cy="7" r="5.4" fill="none" stroke="currentColor" strokeOpacity=".35" strokeWidth="1.6" />
+          {percent > 0 && <path d={`M7 1.6A5.4 5.4 0 ${angle > Math.PI ? 1 : 0} 1 ${x.toFixed(2)} ${y.toFixed(2)}`} fill="none" stroke="currentColor" strokeWidth="1.6" />}
+        </svg>
+      )}
+      {text}
     </span>
   );
 }
@@ -1432,7 +1439,6 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   const { row: options, more: moreOptions } = splitOptions(configOptions);
   const allowAll = useAllowAll(session);
   const showModes = modes && modes.availableModes.length > 1 && !configOptions.some((option) => option.category === "mode");
-  const percent = usage && usage.size > 0 ? (usage.used / usage.size) * 100 : undefined;
   const busy = prompting || working;
 
   return (
@@ -1659,7 +1665,7 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
                   : <svg viewBox="0 0 14 14" aria-hidden="true"><rect x="5" y="1.6" width="4" height="7" rx="2" fill={dictation.state === "recording" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.3" /><path d="M3 6.8a4 4 0 0 0 8 0M7 10.8v1.8" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>}
               </button>
             )}
-            {percent !== undefined && <Ring percent={percent} />}
+            {usage && <Usage usage={usage} />}
             {busy && !draft.trim()
               ? <button className="go stop" type="button" aria-label="Stop" onClick={() => void session.cancel()}>
                   <svg viewBox="0 0 14 14" aria-hidden="true"><rect x="3.8" y="3.8" width="6.4" height="6.4" rx="1.3" fill="currentColor" /></svg>

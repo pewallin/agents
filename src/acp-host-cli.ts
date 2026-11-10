@@ -21,6 +21,7 @@ import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost } from "./acp-ho
 import { runHandoffSession } from "./acp-handoff.js";
 import { getResourceRoot, getSelfArgv, getStateDir, isCompiledBinary } from "./paths.js";
 import { reportState } from "./state.js";
+import { paneSessionUsage, type StateUsage } from "./scanner-state-runtime.js";
 import { kiroContinuedSession, kiroSessionLock, kiroSessionLocks, kiroSetting } from "./kiro-sessions.js";
 import { claudeLaunchSettings, kiroLaunchSettings, opencodeLaunchSettings, type AcpLaunchSettings } from "./acp-launch-settings.js";
 import { commandWords, shellCommand } from "./command-words.js";
@@ -36,6 +37,12 @@ export function reportViewActivity(stateAgent: string, paneId: string) {
       // The view works without the app's dot.
     }
   };
+}
+
+/** For an agent that reports no usage over ACP: a session's context and spend as the pane's header
+ *  shows them, for the host to give its views. */
+export function paneUsageReader(agent: AcpAgentEntry, paneId: string): ((sessionId: string) => StateUsage) | undefined {
+  return agent.reportsUsage ? undefined : (sessionId) => paneSessionUsage(agent.stateAgent, paneId, sessionId);
 }
 
 export const ACP_SESSION_COMMAND = "acp-session";
@@ -91,6 +98,8 @@ export interface AcpAgentEntry {
   /** Hand-off agents whose TUI can run tools without asking (Kiro's -a, OpenCode's --auto): the
    *  view may turn the host's allowing every tool call on and off. */
   offersAllowAll?: boolean;
+  /** The adapter sends usage_update itself (context, and cost where the agent has one). */
+  reportsUsage?: boolean;
 }
 
 
@@ -220,6 +229,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     id: "codex-acp",
     name: "Codex",
     stateAgent: "codex",
+    reportsUsage: true,
     tested: true,
     // codex-acp runs `$CODEX_PATH app-server`: with CODEX_PATH this CLI, that is the app-server
     // proxy to the pane's own app-server, so the view shares the pane's thread with its TUI.
@@ -237,6 +247,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     id: "claude-acp",
     name: "Claude",
     stateAgent: "claude",
+    reportsUsage: true,
     tested: false,
     // Claude Code starts only when the adapter opens a session: a spare holds nothing.
     spareCanHost: true,
@@ -264,6 +275,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     id: "opencode",
     name: "OpenCode",
     stateAgent: "opencode",
+    reportsUsage: true,
     tested: true,
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "opencode"), args: ["acp"], env: { ...process.env } }),
     ...sessionOptions(["--session", "-s"], ["--continue", "-c", "--fork"], (id) => ["--session", id]),
@@ -421,6 +433,7 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
     agentLogFiles: agent.logFiles?.(),
     agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
     historyAgent: agent.stateAgent,
+    sessionUsage: paneUsageReader(agent, paneId),
     paneId,
     agent: { id: agent.id, name: agent.name },
     runtimeTempDir,

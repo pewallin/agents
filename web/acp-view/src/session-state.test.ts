@@ -84,6 +84,14 @@ describe("session state", () => {
     expect(state.commands[0].name).toBe("review");
   });
 
+  it("keeps the session's cost through usage updates that carry none", () => {
+    const state = run([
+      { type: "update", update: { sessionUpdate: "usage_update", used: 10, size: 100, cost: { amount: 0.4, currency: "USD" } } },
+      { type: "update", update: { sessionUpdate: "usage_update", used: 20, size: 100 } },
+    ]);
+    expect(state.usage).toEqual({ used: 20, size: 100, cost: { amount: 0.4, currency: "USD" } });
+  });
+
   it("takes Copilot's update_todo checklist as the plan", () => {
     const state = run([
       { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Update todo", kind: "think", status: "pending", rawInput: { todos: "- [x] Read\n- [ ] Fix" } } },

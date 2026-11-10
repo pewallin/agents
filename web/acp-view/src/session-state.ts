@@ -363,7 +363,8 @@ export function applyUpdate(state: SessionState, update: SessionUpdate, eventAt?
     case "config_option_update":
       return { ...state, configOptions: update.configOptions };
     case "usage_update":
-      return { ...state, usage: { used: update.used, size: update.size, cost: update.cost } };
+      // Claude reports its cost with a turn's result only: the updates between keep it.
+      return { ...state, usage: { used: update.used, size: update.size, cost: update.cost ?? state.usage?.cost } };
     case "session_info_update": {
       const reported = reportedActivity(update);
       // A turn starts that no prompt of ours began: the pane's TUI sent it. Its prompt may come

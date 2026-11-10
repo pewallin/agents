@@ -97,6 +97,22 @@ export function stateTokens(agent: string, paneId?: string, snapshot?: StateSnap
   };
 }
 
+/**
+ * A session's context and spend as the pane's header shows them: what the agent's hooks stored
+ * for the pane, and for Kiro, whose hooks carry neither, its session files. `sessionId` names the
+ * session where the caller knows it (an ACP host); otherwise it is the one the hooks reported.
+ */
+export function paneSessionUsage(agent: string, paneId: string | undefined, sessionId?: string, snapshot?: StateSnapshot): StateUsage {
+  const stored = stateTokens(agent, paneId, snapshot);
+  if (agent.toLowerCase() !== "kiro") return stored;
+  const sessionUsage = readKiroSessionUsage(sessionId ?? stateExternalSessionId(agent, paneId, snapshot));
+  return {
+    ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens, ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : {}) }
+      : sessionUsage.contextTokens !== undefined ? { contextTokens: sessionUsage.contextTokens, contextMax: sessionUsage.contextMax } : {}),
+    ...spendFields(stored.spend !== undefined ? stored : sessionUsage),
+  };
+}
+
 export function mergedContextTokens(agent: string, paneId: string | undefined, content: string, snapshot?: StateSnapshot): StateUsage {
   const stored = stateTokens(agent, paneId, snapshot);
 
@@ -113,15 +129,7 @@ export function mergedContextTokens(agent: string, paneId: string | undefined, c
     };
   }
 
-  // Kiro's hooks carry neither context nor spend; its session files have both.
-  if (agent.toLowerCase() === "kiro") {
-    const sessionUsage = readKiroSessionUsage(stateExternalSessionId(agent, paneId, snapshot));
-    return {
-      ...(stored.contextTokens !== undefined ? { contextTokens: stored.contextTokens, ...(stored.contextMax !== undefined ? { contextMax: stored.contextMax } : {}) }
-        : sessionUsage.contextTokens !== undefined ? { contextTokens: sessionUsage.contextTokens, contextMax: sessionUsage.contextMax } : {}),
-      ...spendFields(stored.spend !== undefined ? stored : sessionUsage),
-    };
-  }
+  if (agent.toLowerCase() === "kiro") return paneSessionUsage(agent, paneId, undefined, snapshot);
 
   if (isHookAuthoritativeAgent(agent)) {
     return stored;

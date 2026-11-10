@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { createStateSnapshot } from "./state.js";
-import { isHookAuthoritativeAgent, mergedContextTokens, resolveModelInfo } from "./scanner-state-runtime.js";
+import { isHookAuthoritativeAgent, mergedContextTokens, paneSessionUsage, resolveModelInfo } from "./scanner-state-runtime.js";
 
 describe("hook-authoritative runtime metadata", () => {
   it("treats supported agents as hook authoritative", () => {
@@ -170,6 +170,9 @@ describe("session spend", () => {
       }));
       const snapshot = createStateSnapshot([{ agent: "kiro", session: "%8", state: "idle", ts: 100, externalSessionId: "kiro-s1" }], []);
       expect(mergedContextTokens("kiro", "%8", "", snapshot)).toEqual({ contextTokens: 155_000, contextMax: 1_000_000, spend: 4.2, spendUnit: "credits" });
+      // An ACP host names the session its view has open, which the hooks may not have reported.
+      const unreported = createStateSnapshot([{ agent: "kiro", session: "%9", state: "idle", ts: 100 }], []);
+      expect(paneSessionUsage("kiro", "%9", "kiro-s1", unreported)).toEqual({ contextTokens: 155_000, contextMax: 1_000_000, spend: 4.2, spendUnit: "credits" });
     } finally {
       if (previous === undefined) delete process.env.AGENTS_KIRO_SESSIONS_DIR;
       else process.env.AGENTS_KIRO_SESSIONS_DIR = previous;

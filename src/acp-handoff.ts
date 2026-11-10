@@ -17,7 +17,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
-import { reportViewActivity, type AcpAgentEntry } from "./acp-host-cli.js";
+import { paneUsageReader, reportViewActivity, type AcpAgentEntry } from "./acp-host-cli.js";
 import type { AcpLaunchSettings } from "./acp-launch-settings.js";
 import { getStateDir } from "./paths.js";
 import { reportState, type ReportedState } from "./state.js";
@@ -633,6 +633,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         agentLogFiles: agent.logFiles?.(),
         agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
         historyAgent: agent.stateAgent,
+        sessionUsage: paneUsageReader(agent, paneId),
         onActivity: reportViewActivity(agent.stateAgent, paneId),
         handoff: { inView: () => mode === "view", handOff, giveBack },
         onAgentLine: (line) => { if (mode === "view") transcript.agentLine(line); },

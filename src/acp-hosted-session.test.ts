@@ -38,9 +38,9 @@ describe("a session the host holds", () => {
     for (const session of sessions.splice(0)) await session.stop();
   });
 
-  function hosted() {
+  function hosted(taps: ConstructorParameters<typeof HostedSession>[1] = {}) {
     const child = spawn(process.execPath, ["-e", FAKE_AGENT], { stdio: ["pipe", "pipe", "pipe"] });
-    const session = new HostedSession(child);
+    const session = new HostedSession(child, taps);
     sessions.push(session);
     return session;
   }
@@ -77,6 +77,21 @@ describe("a session the host holds", () => {
       ["user_message_chunk", "the brief"],
       ["agent_message_chunk", "echo: the brief"],
     ]);
+  });
+
+  it("gives a view the usage the pane's header has, for an agent that reports none", async () => {
+    let spend = 0.2;
+    const session = hosted({ sessionUsage: () => ({ contextTokens: 9_000, contextMax: 1_000_000, spend, spendUnit: "credits" }) });
+    await session.start("/tmp");
+    spend = 0.5;
+    await session.prompt("the brief");
+    const { view, next } = viewOf(session);
+    view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "s1", cwd: "/tmp" } }));
+    await next((message) => message.id === 1);
+    // In the session's history, or sent to the view as the host reads it just after the turn.
+    const usage = (message: Record<string, unknown>) => (message.params as { update?: { sessionUpdate?: string; cost?: { amount?: number } } } | undefined)?.update;
+    const latest = await next((message) => usage(message)?.sessionUpdate === "usage_update" && usage(message)?.cost?.amount === 0.5);
+    expect(usage(latest)).toMatchObject({ used: 9_000, size: 1_000_000, cost: { amount: 0.5, currency: "credits" } });
   });
 
   it("passes a view's prompt through with an id of its own and answers it with the view's id", async () => {
