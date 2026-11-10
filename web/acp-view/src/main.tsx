@@ -292,6 +292,9 @@ const PRESENT: Record<string, string> = {
 /** How much of the work shows (⌃O): the level, and opening a command's output beside the pane. */
 const DetailContext = createContext<{ level: DetailLevel; openOutput: (title: string, text: string) => void }>({ level: "steps", openOutput: () => {} });
 
+/** How long a step or a run takes before its row says so. */
+const NOTABLE_MS = 5000;
+
 const FILE_KINDS = new Set(["read", "edit", "delete", "move"]);
 
 function ToolLine({ call, cwd, failure = false }: { call: ToolCall; cwd: string; failure?: boolean }) {
@@ -335,7 +338,8 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
         }}>{counts}</span>
       : counts;
   } else if (call.startedAt !== undefined && call.endedAt !== undefined && call.kind === "execute") {
-    meta = duration(call.endedAt - call.startedAt).replace(/^0 s$/, "< 1 s");
+    // A time only where it says something: a step that took a while.
+    if (call.endedAt - call.startedAt >= NOTABLE_MS) meta = duration(call.endedAt - call.startedAt);
   }
   // The row shows one line of the command or title; a longer one opens in full.
   const line = oneLine(target.replace(/`([^`]*)`/g, "$1"));
@@ -493,18 +497,14 @@ function ThoughtLine({ step, live }: { step: Extract<Step, { type: "thought" }>;
   const open = canOpen && opened;
   const toggle = () => canOpen && setOpenedStep(step.id, !open);
   const writing = live && step.endedAt === undefined;
-  const took = step.startedAt !== undefined && step.endedAt !== undefined && step.endedAt - step.startedAt >= 1000
-    ? duration(step.endedAt - step.startedAt) : null;
   return (
     <div className={`think${open ? " open" : ""}`}>
       <div className={`ln${canOpen ? " can-open" : ""}`} role={canOpen ? "button" : undefined} tabIndex={canOpen ? 0 : undefined}
         aria-expanded={canOpen ? open : undefined} onClick={toggle}
         onKeyDown={(event) => { if (canOpen && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); toggle(); } }}>
-        <span className="v">{writing ? "Thinking" : "Thought"}</span>
         {/* Open, the first words are the text's own first line: shown once, in the text. */}
         {!(open && body === step.text) && <span className="tp" ref={line}>{oneLine(title, 140)}</span>}
         {canOpen && <Chevron />}
-        {took && <span className="m">{took}</span>}
       </div>
       {open && (
         <div className="think-body">
@@ -547,7 +547,7 @@ function GroupLine({ group, cwd }: { group: StepGroup; cwd: string }) {
   const failed = group.calls.filter((call) => call.status === "failed").length;
   const starts = group.calls.flatMap((call) => (call.startedAt !== undefined ? [call.startedAt] : []));
   const ends = group.calls.flatMap((call) => (call.endedAt !== undefined ? [call.endedAt] : []));
-  const took = starts.length && ends.length && Math.max(...ends) - Math.min(...starts) >= 1000 ? duration(Math.max(...ends) - Math.min(...starts)) : null;
+  const took = starts.length && ends.length && Math.max(...ends) - Math.min(...starts) >= NOTABLE_MS ? duration(Math.max(...ends) - Math.min(...starts)) : null;
   return (
     <div className={`group${open ? " open" : ""}`}>
       <div className="ln can-open" role="button" tabIndex={0} aria-expanded={open} onClick={toggle}
@@ -557,7 +557,7 @@ function GroupLine({ group, cwd }: { group: StepGroup; cwd: string }) {
         <Chevron />
         {took && <span className="m">{took}</span>}
       </div>
-      {open && <div className="group-body">{group.calls.map((call) => <ToolLine key={call.id} call={call} cwd={cwd} />)}</div>}
+      {open && <div className="group-body">{group.steps.map((step) => <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} />)}</div>}
     </div>
   );
 }
@@ -599,7 +599,7 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
       <details className="quiet" open={isOpen} onToggle={(event) => { if (!working && level !== "everything") setOpen((event.target as HTMLDetailsElement).open); }}>
         <summary>{label}{failedCount > 0 && <span className="fail-count"> · {failedCount} failed</span>} <Chevron /></summary>
         <div className={`trail${working ? " live-turn" : ""}`}>
-          {groupSteps(turn.steps, groupable).map((step) => step.type === "group"
+          {groupSteps(turn.steps, groupable, working).map((step) => step.type === "group"
             ? <GroupLine key={step.id} group={step} cwd={cwd} />
             : <StepLine key={`${step.type}-${step.id}`} step={step} cwd={cwd} live={working} />)}
           {working && <LiveText items={turn.answer} />}

@@ -166,24 +166,39 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
   return turns;
 }
 
-/** A run of tool calls in a row, shown as one line ("Ran 12 commands · read 3 files"). */
-export type StepGroup = { type: "group"; id: string; calls: ToolCall[] };
+/** A run of tool calls in a row, shown as one line ("Ran 12 commands · read 3 files"); the
+ *  thinking between them goes into the run too, and shows when it is opened. */
+export type StepGroup = { type: "group"; id: string; calls: ToolCall[]; steps: Step[] };
 
 /** The steps as they show: three or more groupable tool calls in a row become one group (its id
- *  the first call's, so opening it holds while the run grows); anything else between ends a run. */
-export function groupSteps(steps: Step[], groupable: (call: ToolCall) => boolean, least = 3): Array<Step | StepGroup> {
+ *  the first call's, so opening it holds while the run grows), with any thinking between them.
+ *  Anything else (an edit, what the agent says) ends a run; thinking after its last call stays
+ *  outside it once the turn is done. */
+export function groupSteps(steps: Step[], groupable: (call: ToolCall) => boolean, live = false, least = 3): Array<Step | StepGroup> {
   const out: Array<Step | StepGroup> = [];
-  let run: Array<Extract<Step, { type: "tool" }>> = [];
+  let run: Step[] = [];
+  let thinking: Step[] = [];
   const flush = () => {
-    if (run.length >= least) out.push({ type: "group", id: `group-${run[0].id}`, calls: run.map((step) => step.call) });
+    const calls = run.flatMap((step) => (step.type === "tool" ? [step.call] : []));
+    if (calls.length >= least) out.push({ type: "group", id: `group-${run[0].id}`, calls, steps: run });
     else out.push(...run);
+    out.push(...thinking);
     run = [];
+    thinking = [];
   };
   for (const step of steps) {
-    if (step.type === "tool" && groupable(step.call)) { run.push(step); continue; }
+    if (step.type === "tool" && groupable(step.call)) {
+      run.push(...thinking, step);
+      thinking = [];
+      continue;
+    }
+    if (step.type === "thought" && run.length > 0) { thinking.push(step); continue; }
     flush();
     out.push(step);
   }
+  // In a turn under way, thinking after the run's last call is most likely followed by another
+  // call: it waits in the run, so the run does not grow a line and lose it again at every call.
+  if (live) { run.push(...thinking); thinking = []; }
   flush();
   return out;
 }

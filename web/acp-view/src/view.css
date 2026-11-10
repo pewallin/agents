@@ -171,14 +171,14 @@ th, td { overflow-wrap: break-word; }
 .trail .ln { display: flex; gap: 8px; align-items: baseline; min-width: 0; border-radius: 5px; }
 .trail .ln.can-open { cursor: pointer; }
 .trail .ln.can-open:hover .t { color: var(--fg); }
-.trail .ln .v { flex: none; }
+.trail .ln .v { flex: none; color: var(--faint); }
 .trail .ln .t { font: var(--fs-mono) var(--mono); color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .trail .ln .m .counts { border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
 .trail .ln .m .counts:hover { background: var(--tint2); }
 .trail .ln .m { margin-left: auto; color: var(--faint); font-size: calc(var(--fs) - 2px); font-variant-numeric: tabular-nums; flex: none; padding-left: 8px; }
 .trail .think, .trail .remark { color: var(--dim); max-width: 72ch; }
 /* Thinking: one quiet line, "Thought  Checking row counts  4s", that opens on a click. */
-.trail .think { max-width: none; }
+.trail .think { max-width: none; margin: 4px 0; }
 .trail .think .ln .tp { font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* A row that opens shows a chevron on hover, as the Worked line does. */
 .trail .ln > .chev { flex: none; align-self: center; margin-left: -3px; opacity: 0; color: var(--faint); }
@@ -746,3 +746,4 @@ button:disabled, select:disabled { cursor: default; }
 .trail .group .ln.can-open:hover .v { color: var(--fg2); }
 .trail .group-body { display: flex; flex-direction: column; gap: 3px; margin: 3px 0 4px 10px; padding-left: 10px; border-left: 1px solid var(--hair); }
 .trail.current-out.tail-out { margin-top: -6px; border-left: 0; padding-left: 0; }
+.trail .group > .ln .v { color: var(--dim); }

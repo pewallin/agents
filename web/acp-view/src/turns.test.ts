@@ -55,15 +55,22 @@ describe("the activity trail", () => {
     expect(describeCall(state.toolCalls.t1, "/repo")).toEqual({ verb: "Edited", target: "tmp/my notes.md" });
   });
 
-  it("folds three or more looking steps in a row into one line; an edit or a thought ends the run", () => {
+  it("folds three or more looking steps in a row into one line, with the thinking between them; an edit ends the run", () => {
     const tool = (id: string, kind: string) => ({ type: "tool" as const, id, call: { id, title: id, kind, status: "completed", content: [], locations: [] } as never });
     const steps = [tool("a", "execute"), tool("b", "read"), tool("c", "execute"), tool("d", "edit"), tool("e", "execute"), tool("f", "execute"),
       { type: "thought" as const, id: "t", text: "hm" }, tool("g", "search"), tool("h", "execute"), tool("i", "execute"), tool("j", "execute")];
     const shown = groupSteps(steps, (call) => call.kind !== "edit");
-    expect(shown.map((step) => step.type === "group" ? `group:${step.calls.length}` : step.id)).toEqual(["group:3", "d", "e", "f", "t", "group:4"]);
+    expect(shown.map((step) => step.type === "group" ? `group:${step.calls.length}` : step.id)).toEqual(["group:3", "d", "group:6"]);
     const last = shown.at(-1)!;
-    expect(last.type === "group" && groupSummary(last.calls)).toBe("Ran 3 commands · searched 1 time");
-    expect(last.id).toBe("group-g");
+    expect(last.type === "group" && groupSummary(last.calls)).toBe("Ran 5 commands · searched 1 time");
+    expect(last.type === "group" && last.steps.map((step) => step.id)).toEqual(["e", "f", "t", "g", "h", "i", "j"]);
+    expect(last.id).toBe("group-e");
+    // Thinking after a run's last call stays outside it.
+    const tail = groupSteps([tool("a", "execute"), tool("b", "execute"), tool("c", "execute"), { type: "thought" as const, id: "t2", text: "so" }], () => true);
+    expect(tail.map((step) => step.type === "group" ? "group" : step.id)).toEqual(["group", "t2"]);
+    // Under way, it waits in the run for the next call.
+    const live = groupSteps([tool("a", "execute"), tool("b", "execute"), tool("c", "execute"), { type: "thought" as const, id: "t2", text: "so" }], () => true, true);
+    expect(live.map((step) => step.type === "group" ? `group:${step.steps.length}` : step.id)).toEqual(["group:4"]);
   });
 
   it("shows a long command on one line, cut at a character with an ellipsis", () => {
