@@ -330,16 +330,32 @@ export function PeekLayer({ children }: { children: ReactNode }) {
   );
 }
 
-/** What a click and a ⌘-click on a link do, as the peek and the tooltips say it. A link opens
- *  with a plain click, as on a web page; ⌘ opens a file in the editor and a page in the browser. */
+/** What the clicks on a link do, as the peek and the tooltips say it, by Agents Next's rule for
+ *  links: a click opens a file or page beside the pane and a folder in Files, ⌥-click (or the
+ *  middle button) opens it as a tab in the pane, ⌘-click in another app. GitHub pages always go
+ *  to the browser, where their sign-in is. */
 export function clickHint(target: ChipTarget, changed = false): string {
+  const asTab = "⌥-click: as a tab";
   switch (target.kind) {
-    case "file": return changed ? "Click the name: open beside · the counts: this turn's changes · ⌘-click: open in the editor" : "Click: open beside · ⌘-click: open in the editor";
-    case "dir": return "Click: open beside · ⌘-click: open in the editor";
-    case "image": return "Click: Quick Look · ⌘-click: open in the editor";
-    case "url": case "ticket": return "Click: open beside · ⌘-click: open in your browser";
+    case "file": return changed
+      ? `Click the name: open beside · the counts: this turn's changes · ${asTab} · ⌘-click: open in its app`
+      : `Click: open beside · ${asTab} · ⌘-click: open in its app`;
+    case "dir": return "Click: show in Files · ⌘-click: open in Finder";
+    case "image": return `Click: Quick Look · ${asTab} · ⌘-click: open in its app`;
+    case "url": case "ticket": return isGitHub(target.url)
+      ? "Click: open in your browser"
+      : `Click: open beside · ${asTab} · ⌘-click: open in your browser`;
     case "pane": return "Click: show the pane";
     case "bead": case "commit": return "Click: open beside";
+  }
+}
+
+function isGitHub(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "github.com" || host.endsWith(".github.com");
+  } catch {
+    return false;
   }
 }
 
