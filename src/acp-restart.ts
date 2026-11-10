@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { HOSTED_OPTION } from "./acp-handoff.js";
+import { acpHostMetadataPath, readAcpHostMetadata } from "./acp-host.js";
 import { ACP_AGENTS } from "./acp-host-cli.js";
 import { acpViewAgent } from "./agent-registry.js";
 import { getSelfArgv, getStateDir } from "./paths.js";
@@ -114,6 +115,8 @@ export function planAcpRestart(input: {
   continuedSession?: (registryId: string, sessionId: string) => string;
   /** How to run this agents CLI, as shell words. */
   agentsCommand: string;
+  /** The process of the pane's view host while one runs. */
+  hostProcessId?: number;
 }): RestartPlan {
   const tree = descendants(input.processes, input.panePid);
   if (tree.some((process) => / codex-session( |$)/.test(process.args))) {
@@ -180,7 +183,9 @@ function planWrapperRestart(
   const registryId = wrapperOption(wrapper.args, "--agent") ?? "";
   const entry = ACP_AGENTS[registryId];
   const tuiCommand = wrapperOption(wrapper.args, "--tui");
-  if (!entry?.resume || !tuiCommand) {
+  // Only a wrapper whose host runs (to bring it up to date): one still starting its host is
+  // waited for, and one whose host could not start says why in its status.
+  if (!entry?.resume || !tuiCommand || input.hostProcessId !== wrapper.pid) {
     return { ok: false, reason: "The agent already runs with its ACP view, but the view's host is not running. Quit the agent and start it again from Agents Next." };
   }
   const tuiWords = tuiCommand.split(/\s+/);
@@ -335,6 +340,9 @@ export async function runAcpRestart(args: string[], runtimeTempDir?: string): Pr
       return agent?.continuedSession ? agent.continuedSession(sessionId) : sessionId;
     },
     agentsCommand: self.map(shellQuote).join(" "),
+    hostProcessId: ((host) => host && alive(host.processId) ? host.processId : undefined)(
+      runtimeTempDir ? readAcpHostMetadata(acpHostMetadataPath(runtimeTempDir, paneId)) : undefined,
+    ),
   });
   if (check || !plan.ok) {
     say(plan);
