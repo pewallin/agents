@@ -5,7 +5,7 @@
 // directory (src/acp-peek.ts); what is not found stays plain code.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { diffLines } from "diff";
-import { useCoordination, workerNamed } from "./coordination";
+import { useCoordination, workerInPane, workerNamed, workerState, type WorkerState } from "./coordination";
 import type { FileChange } from "./turns";
 import type { SentAttachment } from "./session-state";
 import { APP_HANDLERS, appHandler, THUMBNAIL_SCHEME } from "./bridge";
@@ -209,6 +209,14 @@ export function fileTarget(path: string, rel: string): ChipTarget {
   return { kind: IMAGE_EXTENSIONS.test(path) ? "image" : "file", path, rel };
 }
 
+/** Where a worker stands, as a mark: a check when done, a spinner while working, a dot otherwise
+ *  (orange when it waits for you, red when blocked). */
+export function StateMark({ state }: { state: WorkerState }) {
+  if (state === "done") return <svg className="wk-mark done" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 5.2l2 2 4-4.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+  if (state === "working") return <span className="wk-mark spin" aria-hidden="true" />;
+  return <span className={`wk-mark dot ${state}`} aria-hidden="true" />;
+}
+
 /** `counts`: the lines the turn changed in the file, which a step's row shows at its end instead. */
 export function Chip({ target, label, counts = true }: { target: ChipTarget; label?: ReactNode; counts?: boolean }) {
   const host = useContext(ChipHostContext);
@@ -233,7 +241,12 @@ export function Chip({ target, label, counts = true }: { target: ChipTarget; lab
     host?.open(target, { alternate: event.altKey, command: event.metaKey, change: toChanges ? change : undefined });
   };
   const state = target.kind === "pane" ? target.state : undefined;
-  const mark = target.kind === "pane"
+  // A worker's pane shows where the worker stands (done, working, waits for you, blocked, idle),
+  // as its pill above the field does; another pane shows its agent's state.
+  const worker = useCoordination((coordination) => target.kind === "pane" ? workerInPane(coordination, target.id) : undefined);
+  const mark = worker
+    ? <StateMark state={workerState(worker)} />
+    : target.kind === "pane"
     ? <span className={`live${state && BUSY_STATES.has(state) ? " work" : state && ASKING_STATES.has(state) ? " need" : state === "idle" || !state ? " idle" : ""}`} />
     : <Icon kind={target.kind} />;
   const name = <>

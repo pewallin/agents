@@ -47,6 +47,22 @@ export function needsUser(worker: CoordinationPane): boolean {
   return worker.status === "attention" || worker.status === "question" || worker.status === "approval" || worker.report === "ask-user";
 }
 
+/** Where a worker stands, in one word: from its agent's state and its latest report. */
+export type WorkerState = "needs-you" | "blocked" | "done" | "working" | "idle";
+
+export function workerState(worker: CoordinationPane): WorkerState {
+  if (needsUser(worker)) return "needs-you";
+  if (worker.report === "blocked") return "blocked";
+  if (worker.status === "working" || worker.status === "compacting" || worker.status === "pending") return "working";
+  if (worker.report === "done" || worker.report === "closed" || worker.status === "done") return "done";
+  return "idle";
+}
+
+/** The worker whose pane is `pane` (%N). */
+export function workerInPane(coordination: Coordination, pane: string): CoordinationPane | undefined {
+  return coordination.workers.find((worker) => worker.pane === pane);
+}
+
 export function workerNamed(coordination: Coordination, name: string): CoordinationPane | undefined {
   return coordination.workers.find((worker) => worker.task === name)
     ?? (coordination.coordinator?.task === name ? coordination.coordinator : undefined);

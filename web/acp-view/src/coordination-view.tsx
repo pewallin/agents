@@ -3,8 +3,8 @@
 // commands an agent runs as event rows, a line at the top of a worker's view naming its
 // coordinator and task, and an orange row for each worker that waits on you.
 import { lazy, Suspense, useContext, useEffect, useState, type ReactNode } from "react";
-import { Chip, ChipHostContext, NamedChip, PeekContext } from "./chips";
-import { describeAgentEvent, needsUser, tasksIn, useCoordination, workerNamed, type AgentEvent, type CoordinationPane } from "./coordination";
+import { Chip, ChipHostContext, NamedChip, PeekContext, StateMark } from "./chips";
+import { describeAgentEvent, tasksIn, useCoordination, workerNamed, workerState, type AgentEvent, type CoordinationPane, type WorkerState } from "./coordination";
 
 const Markdown = lazy(() => import("./markdown"));
 
@@ -136,17 +136,6 @@ export function WorkerLine() {
   );
 }
 
-type WorkerState = "needs-you" | "blocked" | "done" | "working" | "idle";
-
-/** One word for where a worker stands, from its agent's state and its latest report. */
-export function workerState(worker: CoordinationPane): WorkerState {
-  if (needsUser(worker)) return "needs-you";
-  if (worker.report === "blocked") return "blocked";
-  if (worker.status === "working" || worker.status === "compacting" || worker.status === "pending") return "working";
-  if (worker.report === "done" || worker.report === "closed" || worker.status === "done") return "done";
-  return "idle";
-}
-
 const STATE_WORDS: Record<WorkerState, string> = { "needs-you": "waits for you", blocked: "blocked", done: "done", working: "working", idle: "idle" };
 
 /** "4m", "1h 12m": how long a worker has been at it. */
@@ -156,12 +145,6 @@ export function elapsed(ms: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
-}
-
-function StateMark({ state }: { state: WorkerState }) {
-  if (state === "done") return <svg className="wk-mark done" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 5.2l2 2 4-4.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
-  if (state === "working") return <span className="wk-mark spin" aria-hidden="true" />;
-  return <span className={`wk-mark dot ${state}`} aria-hidden="true" />;
 }
 
 const OPEN_KEY = "agents-acp-workers-open";

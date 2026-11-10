@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeAgentEvent, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn } from "./coordination";
+import { describeAgentEvent, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, workerInPane, workerState } from "./coordination";
 
 describe("coordination lines", () => {
   it("reads a wake-up line", () => {
@@ -28,23 +28,28 @@ describe("coordination lines", () => {
   });
 });
 
-describe("worker states", () => {
-  it("says where a worker stands", async () => {
-    const { workerState } = await import("./coordination-view");
-    expect(workerState({ pane: "%4", status: "question" })).toBe("needs-you");
-    expect(workerState({ pane: "%4", status: "idle", report: "ask-user" })).toBe("needs-you");
-    expect(workerState({ pane: "%4", status: "idle", report: "blocked" })).toBe("blocked");
-    expect(workerState({ pane: "%4", status: "working", report: "done" })).toBe("working");
-    expect(workerState({ pane: "%4", status: "idle", report: "done" })).toBe("done");
-    expect(workerState({ pane: "%4", status: "idle" })).toBe("idle");
-  });
-});
-
 describe("elapsed", () => {
   it("says how long a worker has been at it", async () => {
     const { elapsed } = await import("./coordination-view");
     expect(elapsed(20_000)).toBe("< 1m");
     expect(elapsed(4 * 60_000)).toBe("4m");
     expect(elapsed(72 * 60_000)).toBe("1h 12m");
+  });
+});
+
+describe("worker state", () => {
+  it("says where a worker stands from its agent's state and its report", () => {
+    expect(workerState({ pane: "%1", status: "question" })).toBe("needs-you");
+    expect(workerState({ pane: "%1", status: "idle", report: "ask-user" })).toBe("needs-you");
+    expect(workerState({ pane: "%1", status: "idle", report: "blocked" })).toBe("blocked");
+    expect(workerState({ pane: "%1", status: "working", report: "done" })).toBe("working");
+    expect(workerState({ pane: "%1", status: "idle", report: "done" })).toBe("done");
+    expect(workerState({ pane: "%1", status: "idle", report: "progress" })).toBe("idle");
+  });
+
+  it("finds a worker by its pane, for the chips that name the pane", () => {
+    const coordination = { role: "coordinator" as const, workers: [{ pane: "%4", task: "ui" }, { pane: "%7", task: "api" }] };
+    expect(workerInPane(coordination, "%7")?.task).toBe("api");
+    expect(workerInPane(coordination, "%9")).toBeUndefined();
   });
 });
