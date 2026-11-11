@@ -8,7 +8,7 @@ import { test } from "vitest";
 import { writeTaskMeta } from "./briefs.js";
 import { taskPaths } from "./program.js";
 import {
-  appendSessionLine, markResolved, markUnresolved, readSessionLines, recordTaskSession, reopenStep, repairProgram,
+  appendSessionLine, markResolved, markUnresolved, programThreads, readSessionLines, recordTaskSession, reopenStep, repairProgram,
   resolvesOnClose, sessionsFile, threadState, transcriptRecords, userTexts,
 } from "./threads.js";
 
@@ -178,4 +178,47 @@ test("the repair pass finds each thread's sessions by its brief, its coordinator
   assert.equal(again.sessions, 0);
   assert.equal(again.resolved, 0);
   assert.equal(JSON.parse(fs.readFileSync(export_.meta, "utf8")).resolved, undefined);
+});
+
+// Peter's Conversations on 2026-11-11: rows titled "ROLE: worker", a "_rollout" row from 2027
+// years ago, and a Kiro worker's session left out of its thread.
+test("a thread is titled by its title, else its brief's subject, never a worker prompt, else its task in words", () => {
+  const program = newProgram();
+  newTask(program, "titled", { title: "Fix Safari export button" });
+  const role = newTask(program, "medium-tier-b-backend");
+  fs.writeFileSync(role.brief, `# Task: medium-tier-b-backend\n\n## Brief\n\nROLE: worker. You were started by a coordinator for task "medium-tier-b-backend". Read your brief at ${role.brief}\n\nMove the medium tier's backend to the new queue.\n`);
+  const onlyRole = newTask(program, "only-role");
+  fs.writeFileSync(onlyRole.brief, `# Task: only-role\n\n## Brief\n\n[agents] ROLE: worker. Read your brief.\n`);
+  newTask(program, "role-title", { title: "ROLE: worker" });
+  const listed = programThreads(program, [], new Map(), () => null).threads;
+  const title = (task: string) => listed.find(thread => thread.task === task)?.title;
+  assert.equal(title("titled"), "Fix Safari export button");
+  assert.equal(title("medium-tier-b-backend"), "Move the medium tier's backend to the new queue.");
+  assert.equal(title("only-role"), "Only role");
+  assert.equal(title("role-title"), "Do role-title.");
+});
+
+test("only task directories are threads, and a thread without times takes its folder's", () => {
+  const program = newProgram();
+  fs.mkdirSync(path.join(program, "tasks", "_rollout", "chunks"), { recursive: true });
+  const bare = taskPaths(program, "no-times");
+  fs.mkdirSync(bare.dir, { recursive: true });
+  fs.writeFileSync(bare.brief, "# Task: no-times\n\n## Brief\n\nCheck the times.\n");
+  const listed = programThreads(program, [], new Map(), () => null).threads;
+  assert.deepEqual(listed.map(thread => thread.task), ["no-times"]);
+  assert.ok(Date.parse(listed[0].updatedAt) > Date.parse("2026-01-01"), listed[0].updatedAt);
+});
+
+test("the repair pass finds a worker whose prompt names its brief through another path to the program", () => {
+  const program = newProgram();
+  const transcripts = fs.mkdtempSync(path.join(os.tmpdir(), "threads-kiro-"));
+  newTask(program, "medium-tier-b-backend", { cwd: "/code" });
+  // Kiro 3's messages.jsonl, the prompt naming the program by a symlinked home.
+  const other = `/Users/peter/.agents/programs/${path.basename(program)}/tasks/medium-tier-b-backend/brief.md`;
+  const file = path.join(transcripts, "messages.jsonl");
+  fs.writeFileSync(file, `${JSON.stringify({ id: "1", payload: { type: "user", content: workerPrompt("medium-tier-b-backend", other) } })}\n`);
+  const history = (agent: string) => agent === "kiro" ? [{ sessionId: "sess_5f0c1b8e-7a3f-4c2e-9b1d-0e6f2a4c8d10", updatedAt: Date.parse("2026-11-10T12:00:00Z") / 1000 }] : [];
+  const result = repairProgram(program, { history, transcriptOf: () => file });
+  assert.equal(result.sessions, 1);
+  assert.deepEqual(readSessionLines(sessionsFile(program, "medium-tier-b-backend")).map(line => line.session), ["sess_5f0c1b8e-7a3f-4c2e-9b1d-0e6f2a4c8d10"]);
 });

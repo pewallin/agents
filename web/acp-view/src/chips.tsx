@@ -199,7 +199,7 @@ export function NamedChip({ name, label, fallback, counts = true }: { name: stri
   // A worker's task name stands for its pane (in a coordinator's or a worker's view).
   const worker = useCoordination((state) => workerNamed(state, name));
   const target = useResolved(worker ? null : name);
-  if (worker) return <Chip target={{ kind: "pane", id: worker.pane, state: worker.status }} label={label ?? name} />;
+  if (worker) return <Chip target={{ kind: "pane", id: worker.pane, state: worker.status }} label={label ?? worker.threadTitle ?? name} />;
   if (!target) return <>{fallback}</>;
   return <Chip target={target} label={label} counts={counts} />;
 }

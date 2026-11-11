@@ -541,6 +541,9 @@ th, td { overflow-wrap: break-word; }
 .peek-head { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; color: var(--fg2); }
 .peek-head svg { width: 12px; height: 12px; }
 .peek-title { display: inline-flex; align-items: center; gap: 6px; color: var(--fg); }
+.worker-line .threads-link { color: var(--dim); text-decoration: none; }
+.worker-line .threads-link:hover { color: var(--fg2); text-decoration: underline; }
+.chip.thread { text-decoration: none; color: inherit; }
 .peek .mono { font: calc(var(--fs-mono) - .5px) var(--mono); }
 .peek-dim { color: var(--dim); font-size: calc(var(--fs) - 2px); white-space: nowrap; }
 .peek-dim.more { padding: 2px 6px 0; }

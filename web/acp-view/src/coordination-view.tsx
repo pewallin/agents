@@ -12,13 +12,22 @@ function Spark() {
   return <svg className="spark" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9M2.8 2.8l6.4 6.4M9.2 2.8l-6.4 6.4" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" /></svg>;
 }
 
-/** A worker as a chip: its task's name, its pane's status dot; a click shows its pane. */
+/** In Agents Next, a link to a thread of this pane's coordination: the app shows it among the
+ *  coordinator's threads in Conversations (`agents-thread:` with no task: the pane's own). */
+export function threadHref(task?: string): string {
+  return `agents-thread:${task ? encodeURIComponent(task) : ""}`;
+}
+
+/** A worker as a chip: its thread's title, its pane's status mark; a click shows its pane. A
+ *  worker whose pane is gone links to its thread instead. */
 export function WorkerChip({ task, pane }: { task: string; pane?: string }) {
   const coordination = useCoordination();
   const worker = workerNamed(coordination, task);
-  const id = worker?.pane ?? pane;
-  if (!id) return <code>{task}</code>;
-  return <Chip target={{ kind: "pane", id, state: worker?.status }} label={task} />;
+  // A pane a worker no longer has (closed, or its number reused) shows no pane: the thread.
+  const id = worker?.pane ?? (coordination.workers.length === 0 && coordination.role !== "coordinator" ? pane : undefined);
+  const label = worker?.threadTitle ?? task;
+  if (!id) return <a className="chip thread" href={threadHref(task)} title="Show the thread"><span className="nm">{label}</span></a>;
+  return <Chip target={{ kind: "pane", id, state: worker?.status }} label={label} />;
 }
 
 /** "Worker ios-tests is done; Worker ui is blocked" with the workers as chips. */
@@ -130,6 +139,7 @@ export function WorkerLine() {
       <span className="what">
         Worker of <Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={coordinator.title ?? coordinator.pane} />
         {threadTitle ? <> · {threadTitle}</> : task && <> · task <code>{task}</code></>}
+        {task && <> · <a className="threads-link" href={threadHref()} title="Show the coordinator's threads">threads</a></>}
         {report && <span className="dim"> · {report}{reportLine ? `: ${reportLine}` : ""}</span>}
       </span>
     </div>

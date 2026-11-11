@@ -15,7 +15,7 @@ import { taskRows } from "./briefs.js";
 import { programDirectories } from "./coordinator.js";
 import { agentNameFromLaunchCommand } from "./launch.js";
 import { coordinationPaneRecords, coordinatorLeads, programMeta, readJSON, runGit, taskPaths, writeFileAtomic } from "./program.js";
-import { briefSummary, lastWorkerReport, workerStatus } from "./report.js";
+import { briefSummary, isRoleLine, lastWorkerReport, workerStatus } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { agentStatuses } from "./supervisor-control.js";
 import { agentResumeInvocation } from "../resume.js";
@@ -187,6 +187,36 @@ function harnessOf(meta, sessions) {
   }
 }
 
+// "medium-tier-b-backend" as words: "Medium tier b backend".
+export function humanizedTask(task) {
+  const words = String(task).replace(/[-_.]+/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : String(task);
+}
+
+// A thread's title: the one its coordinator gave it, else what its brief says it is about, else
+// its task name in words. Never an agent's first prompt ("ROLE: worker…").
+export function threadTitleOf(program, row) {
+  const given = typeof row.meta.title === "string" ? row.meta.title.trim() : "";
+  if (given && !isRoleLine(given)) return given;
+  return briefSummary(program, row.task) || humanizedTask(row.task);
+}
+
+// When a task's directory was last written, for a task with no time of its own.
+function folderTime(dir) {
+  try {
+    const time = fs.statSync(dir).mtimeMs;
+    return time > 0 ? new Date(time).toISOString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The tasks of a program: its directories under tasks/ that hold a brief or task.json. Anything
+// else there (a folder a worker left, "_rollout") is no thread.
+export function threadRows(program) {
+  return taskRows(program).filter(row => fs.existsSync(row.files.meta) || fs.existsSync(row.files.brief));
+}
+
 // One thread as `agents threads` lists it. `record` is its live pane, if it has one.
 export function threadEntry(program, row, record, status, transcriptOf) {
   const { meta, report, files } = row;
@@ -194,7 +224,7 @@ export function threadEntry(program, row, record, status, transcriptOf) {
     .map(session => ({ ...session, transcript: transcriptOf(session.agent, session.session, session.cwd) }));
   const reportState = record ? (record.reportState || report?.state) : report?.state;
   const state = threadState({ live: Boolean(record), agent: status?.status, reportState, resolved: meta.resolved });
-  const title = meta.title || briefSummary(program, row.task) || row.task;
+  const title = threadTitleOf(program, row);
   return {
     task: row.task,
     program,
@@ -203,11 +233,14 @@ export function threadEntry(program, row, record, status, transcriptOf) {
     state,
     resolvedAt: meta.resolved || undefined,
     createdAt: meta.createdAt,
-    updatedAt: report?.updatedAt || meta.createdAt,
+    updatedAt: report?.updatedAt || meta.createdAt || folderTime(files.dir),
     line: report?.line || undefined,
     reportState: report?.state || "started",
     outputs: report?.outputs?.length ? report.outputs : undefined,
     under: meta.parentTask || undefined,
+    // The @agents_uuid of the coordinator that started it: an earlier one, when it differs from
+    // the coordinator's pane now.
+    parent: meta.parentUUID || undefined,
     harness: harnessOf(meta, sessions),
     pane: record ? record.paneID : null,
     paneUUID: record?.uuid || undefined,
@@ -245,7 +278,7 @@ export function folderPrograms(folder) {
   return programDirectories().sort().filter(program => {
     const meta = programMeta(program);
     if (meta?.folder) return meta.folder === folder;
-    return taskRows(program).some(row => inside(row.meta.cwd, folder));
+    return threadRows(program).some(row => inside(row.meta.cwd, folder));
   });
 }
 
@@ -268,7 +301,7 @@ export function coordinatorEntry(program, records, statuses, transcriptOf, openT
 
 export function programThreads(program, records, statuses, transcriptOf) {
   const live = records.filter(record => record.program === program && isWorkerRecord(record));
-  const threads = taskRows(program).map(row => {
+  const threads = threadRows(program).map(row => {
     const record = live.find(candidate => candidate.task === row.task);
     return threadEntry(program, row, record, record ? statuses.get(record.paneID) : undefined, transcriptOf);
   });
@@ -409,6 +442,12 @@ export function transcriptRecords(text) {
   return records;
 }
 
+// The end of a brief's path that names it whichever way the program's folder was written (a
+// symlinked home, ~/.agents through another path): <program name>/tasks/<task>/brief.md.
+export function briefSuffix(program, task) {
+  return `${path.basename(program)}/tasks/${task}/brief.md`;
+}
+
 export function isWorkerPromptFor(text, brief) {
   return text.includes("ROLE: worker") && text.includes(brief);
 }
@@ -472,7 +511,7 @@ function repairProgramUnlocked(program, options) {
   const history = options.history || loadHistoryForAgent;
   const transcriptOf = options.transcriptOf || sessionTranscriptPath;
   const agents = options.agents || REPAIR_AGENTS;
-  const rows = taskRows(program);
+  const rows = threadRows(program);
   const found = new Map(rows.map(row => [row.task, []]));
   const coordinators = [];
 
@@ -505,13 +544,13 @@ function repairProgramUnlocked(program, options) {
         const file = transcriptOf(agent, item.sessionId);
         const text = file ? readTranscript(file) : undefined;
         if (!text) continue;
-        const candidates = folderRows.filter(row => text.includes(row.files.brief));
+        const candidates = folderRows.filter(row => text.includes(briefSuffix(program, row.task)));
         const coordinated = text.includes(`Program directory: ${program}`);
         if (candidates.length === 0 && !coordinated) continue;
         const prompts = transcriptRecords(text).flatMap(userTexts);
         const at = isoFromHistory(item.updatedAt);
         for (const row of candidates) {
-          if (prompts.some(prompt => isWorkerPromptFor(prompt, row.files.brief))) {
+          if (prompts.some(prompt => isWorkerPromptFor(prompt, briefSuffix(program, row.task)))) {
             found.get(row.task).push({ at, via: "repair", agent, session: item.sessionId, cwd });
           }
         }

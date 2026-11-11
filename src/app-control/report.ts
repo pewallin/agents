@@ -178,10 +178,16 @@ export function statusRow(task, program, report, live) {
 }
 
 // The first line of a task's brief: enough for a coordinator to see which worker fits a follow-up.
+// A line that is a worker's prompt rather than what the task is about ("ROLE: worker. You were
+// started by a coordinator…"): a brief that holds one says nothing by it.
+export function isRoleLine(line) {
+  return /^(\[agents\]\s*)?ROLE:/i.test(String(line || "").trim());
+}
+
 export function briefSummary(program, task) {
   const text = readFileOr(taskPaths(program, task).brief, "");
   const body = text.split(/^## Brief\s*$/m)[1] || "";
-  const first = body.split("\n").map(line => line.trim()).find(line => line && !line.startsWith("## "));
+  const first = body.split("\n").map(line => line.trim().replace(/^[-*#>\s]+/, "")).find(line => line && !line.startsWith("## ") && !isRoleLine(line));
   return first ? oneLine(first, 140) : undefined;
 }
 
