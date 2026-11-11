@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
-import { choicesOf, currentName, settingLabel, settingTitle, splitOptions } from "./session-options";
+import { choicesOf, currentName, MODEL_STATE_OPTION, settingLabel, settingTitle, splitOptions, withModels } from "./session-options";
 
 const select = (id: string, name: string, category: string | undefined, currentValue: string, values: string[], description?: string) => ({
   id, name, type: "select", currentValue, ...(category ? { category } : {}), ...(description ? { description } : {}),
@@ -39,5 +39,24 @@ describe("the session's settings in the composer", () => {
     expect(choicesOf(grouped).map((choice) => choice.value)).toEqual(["auto", "claude-opus-5.5"]);
     expect(currentName(grouped)).toBe("Claude Opus 5.5");
     expect(currentName(kiro[3])).toBe("Autopilot");
+  });
+});
+
+describe("an agent that offers its models in the session's models field", () => {
+  // Kiro's v2 engine: modes for its agents, and models, but no config options.
+  const models = { currentModelId: "auto", availableModels: [{ modelId: "auto", name: "auto" }, { modelId: "claude-haiku-4.5", name: "claude-haiku-4.5" }] };
+
+  it("gets a model picker in the row", () => {
+    const { row } = splitOptions(withModels([], models));
+    expect(row.map((option) => option.id)).toEqual([MODEL_STATE_OPTION]);
+    expect(settingLabel(row[0], "kiro")).toBe("Model");
+    expect(choicesOf(row[0]).map((choice) => choice.value)).toEqual(["auto", "claude-haiku-4.5"]);
+    expect(currentName(row[0])).toBe("auto");
+  });
+
+  it("keeps the agent's own model option where it has one, and makes nothing of a single model", () => {
+    expect(withModels(kiro, models)).toBe(kiro);
+    expect(withModels([], { currentModelId: "auto", availableModels: [{ modelId: "auto" }] })).toEqual([]);
+    expect(withModels([], undefined)).toEqual([]);
   });
 });

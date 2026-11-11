@@ -11,6 +11,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client";
 import type { SessionAction } from "./session-state";
+import { MODEL_STATE_OPTION } from "./session-options";
 
 export interface AcpSession {
   /** Loads the session, or with no session given starts one in the pane's directory. */
@@ -108,6 +109,11 @@ export function connectSession(options: {
     // The host's own notice (not ACP): a custom method needs its own params parser.
     .onNotification("_agents/taken_over", (params: unknown) => params, () => { options.onTakenOver?.(); })
     .onNotification("_agents/allow_all", (params: unknown) => params, ({ params }) => { allowAllListener?.(allowAllOf(params)); })
+    // The host set the model as the session opened (session/set_model: the pane's command names it).
+    .onNotification("_agents/current_model", (params: unknown) => params, ({ params }) => {
+      const notice = params as { sessionId?: unknown; modelId?: unknown } | null;
+      if (typeof notice?.modelId === "string" && (notice.sessionId === sessionId || !sessionId)) dispatch({ type: "modelSet", modelId: notice.modelId });
+    })
     .onRequest("session/request_permission", ({ params }) => {
       const id = `permission-${nextPermission++}`;
       dispatch({ type: "permissionRequested", request: { id, toolCall: params.toolCall, options: params.options } });
@@ -133,7 +139,7 @@ export function connectSession(options: {
         dispatch({ type: "loading" });
         const started = await agent.request("session/new", { cwd, mcpServers: [] });
         sessionId = started.sessionId;
-        dispatch({ type: "loaded", modes: started.modes, configOptions: started.configOptions });
+        dispatch({ type: "loaded", modes: started.modes, configOptions: started.configOptions, models: (started as { models?: unknown }).models });
         return { ...started, sessionId };
       }
       if (!initialized.agentCapabilities?.loadSession) throw new CannotLoadSession(initialized.agentInfo ?? undefined);
@@ -142,7 +148,7 @@ export function connectSession(options: {
         if ((error as { code?: unknown } | null)?.code === OPEN_ELSEWHERE_CODE) throw new OpenElsewhere();
         throw error;
       });
-      dispatch({ type: "loaded", modes: response.modes, configOptions: response.configOptions });
+      dispatch({ type: "loaded", modes: response.modes, configOptions: response.configOptions, models: (response as { models?: unknown }).models });
       return { ...response, sessionId };
     },
     async prompt(blocks) {
@@ -195,6 +201,12 @@ export function connectSession(options: {
       resolve?.({ outcome: optionId ? { outcome: "selected", optionId } : { outcome: "cancelled" } });
     },
     async setConfigOption(configId, value) {
+      // The picker made from the session's `models` field (session-options withModels).
+      if (configId === MODEL_STATE_OPTION) {
+        await agent.request("session/set_model", { sessionId, modelId: String(value) } as never);
+        dispatch({ type: "modelSet", modelId: String(value) });
+        return;
+      }
       const response = await agent.request("session/set_config_option", { sessionId, configId, value } as never) as
         { configOptions?: unknown };
       if (Array.isArray(response?.configOptions)) {

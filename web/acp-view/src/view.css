@@ -276,8 +276,33 @@ th, td { overflow-wrap: break-word; }
 .box { background: var(--field); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border-radius: 14px; box-shadow: 0 0 0 1px var(--edge), var(--shadow); padding: 9px 10px 7px 13px; display: flex; flex-direction: column; gap: 6px; }
 .box .input { all: unset; display: block; width: 100%; min-height: 20px; line-height: 1.45; cursor: text; max-height: 40vh; overflow-y: hidden; resize: none; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
 .box .input::placeholder { color: var(--faint); }
-.box .row { display: flex; align-items: center; gap: 4px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
-.box .row .sp { flex: 1; }
+.box { container: field / inline-size; }
+/* The field's controls stay on one row at any width; only what is typed makes the field taller.
+   Labels go first, then the words beside icons and the usage figures (the ring stays), and in the
+   narrowest field Approvals and Detail move under ⋯; pickers give up width as they must, their
+   choice trailing off. */
+.box .row { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; min-width: 0; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
+.box .row > * { flex: none; }
+.box .row > .opt:not(.level) { flex: 0 1 auto; min-width: 44px; }
+.box .row .sp { flex: 1 1 0; min-width: 2px; }
+.opt .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.more.fold-only, .pop.more-pop .it.folded { display: none; }
+@container field (max-width: 600px) {
+  .box .row .opt .lb { display: none; }
+}
+@container field (max-width: 520px) {
+  .box .row .opt.level .v { display: none; }
+  .box .row .opt.level { padding: 2px 5px; }
+}
+@container field (max-width: 440px) {
+  .box .row .ring:has(svg) .rt { display: none; }
+  .box .row .ring { margin-right: 2px; }
+}
+@container field (max-width: 360px) {
+  .box .row .fold { display: none; }
+  .more.fold-only { display: inline-flex; }
+  .pop.more-pop .it.folded { display: flex; }
+}
 .opt { position: relative; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
 .opt:hover, .opt:focus-within { background: var(--tint); color: var(--fg); }
 .opt svg { width: 9px; height: 9px; }
@@ -416,9 +441,6 @@ th, td { overflow-wrap: break-word; }
 @media (max-width: 520px) {
   .col { padding: 20px 16px var(--dock-space, 150px); }
   .dock { padding: 0 10px 10px; }
-  /* On a phone the field's options wrap; the send button stays at the end of the row. */
-  .box .row { flex-wrap: wrap; row-gap: 2px; }
-  .box .row .sp { flex: 1 0 0; }
 }
 
 /* What went wrong, with the agent's own words and the diagnostics to send on. */
@@ -585,6 +607,9 @@ th, td { overflow-wrap: break-word; }
 .pop.more-pop .it:hover, .pop.more-pop .it:focus-within { background: var(--tint2); color: var(--fg); }
 .pop.more-pop .mv { display: inline-flex; align-items: center; gap: 3px; color: var(--dim); }
 .pop.more-pop .mv svg { width: 9px; height: 9px; }
+.pop.more-pop button.it { all: unset; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 5px 9px; border-radius: 7px; color: var(--fg2); cursor: pointer; white-space: nowrap; }
+.pop.more-pop button.it:hover, .pop.more-pop button.it:focus-visible { background: var(--tint2); color: var(--fg); }
+.pop.more-pop .mv.on { color: var(--orange); }
 .pop.more-pop select { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; font-size: calc(var(--fs) - 1px); }
 
 /* permission questions */

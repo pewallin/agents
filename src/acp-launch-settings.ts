@@ -4,7 +4,8 @@
 // the host does what the option does, on the adapter's protocol channel:
 //   options   the session settings the command picks (mode or agent, model, effort), set on each
 //             session as it opens through the session's own config options
-//             (session/set_config_option; session/set_mode for an agent with modes alone), so the
+//             (session/set_config_option; session/set_mode for an agent with modes alone,
+//             session/set_model for one with a `models` field: Kiro's v2 engine), so the
 //             view's pickers show them and can change them
 //   allowAll  the command runs tools without asking (`kiro-cli chat -a`, `opencode --auto`): the
 //             host answers each permission request with the agent's allow option
@@ -74,6 +75,7 @@ function selectValue(option: ConfigOption, wanted: string): string | undefined {
 export type SettingRequest =
   | { method: "session/set_config_option"; configId: string; value: string }
   | { method: "session/set_mode"; modeId: string }
+  | { method: "session/set_model"; modelId: string }
   | { missing: string };
 
 /** What to send for `setting` on a session that opened with `result`: its config option, or
@@ -95,6 +97,15 @@ export function settingRequest(setting: LaunchSetting, wanted: string, result: R
     if (typeof mode?.id !== "string") return { missing: `mode ${wanted} is not one the agent offers` };
     return mode.id === modes.currentModeId ? undefined : { method: "session/set_mode", modeId: mode.id };
   }
+  // Kiro's v2 engine offers its models in the session's `models` field, not as a config option.
+  const models = result?.models as { currentModelId?: unknown; availableModels?: Array<{ modelId?: unknown; name?: unknown }> } | undefined;
+  if (setting === "model" && Array.isArray(models?.availableModels)) {
+    const lower = wanted.toLowerCase();
+    const model = models.availableModels.find((candidate) => candidate.modelId === wanted)
+      ?? models.availableModels.find((candidate) => String(candidate.modelId).toLowerCase() === lower || String(candidate.name).toLowerCase() === lower);
+    if (typeof model?.modelId !== "string") return { missing: `model ${wanted} is not one the agent offers` };
+    return model.modelId === models.currentModelId ? undefined : { method: "session/set_model", modelId: model.modelId };
+  }
   return { missing: `the agent offers no ${setting} setting` };
 }
 
@@ -105,7 +116,7 @@ export function settingRequest(setting: LaunchSetting, wanted: string, result: R
 export class AcpLaunchSettingsApplier {
   private readonly opening = new Map<string, string | undefined>();
   /** The host's own requests, by id: the session each is for, and what it sets. */
-  private readonly own = new Map<string, { sessionId: string; mode?: string; configId?: string }>();
+  private readonly own = new Map<string, { sessionId: string; mode?: string; model?: string; configId?: string }>();
   private nextId = 1;
 
   constructor(
@@ -170,6 +181,9 @@ export class AcpLaunchSettingsApplier {
       if (request.method === "session/set_mode") {
         this.own.set(id, { sessionId, mode: request.modeId });
         this.toAgent(JSON.stringify({ jsonrpc: "2.0", id, method: request.method, params: { sessionId, modeId: request.modeId } }));
+      } else if (request.method === "session/set_model") {
+        this.own.set(id, { sessionId, model: request.modelId });
+        this.toAgent(JSON.stringify({ jsonrpc: "2.0", id, method: request.method, params: { sessionId, modelId: request.modelId } }));
       } else {
         this.own.set(id, { sessionId, configId: request.configId });
         this.toAgent(JSON.stringify({ jsonrpc: "2.0", id, method: request.method, params: { sessionId, configId: request.configId, value: request.value } }));
@@ -178,14 +192,16 @@ export class AcpLaunchSettingsApplier {
     }
   }
 
-  private answered(own: { sessionId: string; mode?: string; configId?: string }, message: Message): void {
+  private answered(own: { sessionId: string; mode?: string; model?: string; configId?: string }, message: Message): void {
     if (message.error) {
-      this.log(`session ${own.sessionId} kept its ${own.configId ?? "mode"}: ${JSON.stringify(message.error)}`);
+      this.log(`session ${own.sessionId} kept its ${own.configId ?? (own.model ? "model" : "mode")}: ${JSON.stringify(message.error)}`);
       return;
     }
     const update = (body: Record<string, unknown>) =>
       this.toView(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId: own.sessionId, update: body } }));
     if (own.mode) update({ sessionUpdate: "current_mode_update", currentModeId: own.mode });
+    // ACP has no update for a model set through session/set_model: the host's own notice.
+    if (own.model) this.toView(JSON.stringify({ jsonrpc: "2.0", method: "_agents/current_model", params: { sessionId: own.sessionId, modelId: own.model } }));
     const configOptions = message.result?.configOptions;
     if (Array.isArray(configOptions)) {
       update({ sessionUpdate: "config_option_update", configOptions });

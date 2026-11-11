@@ -15,6 +15,7 @@ import type {
   UsageUpdate,
 } from "@agentclientprotocol/sdk";
 import { planFromToolInput } from "./plan";
+import { modelStateOf, type ModelState } from "./session-options";
 
 export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
 
@@ -79,6 +80,9 @@ export interface SessionState {
   usage?: Pick<UsageUpdate, "used" | "size" | "cost">;
   modes?: SessionModeState;
   configOptions: SessionConfigOption[];
+  /** The models the agent offers in the session's `models` field (Kiro's v2 engine), when it has
+   *  no model config option. */
+  models?: ModelState;
   commands: AvailableCommand[];
   /** Whether the agent is in a turn: ours (a prompt in flight) or another client's (Codex reports it). */
   activity: Activity;
@@ -121,7 +125,10 @@ export const emptySession = (): SessionState => ({
 export type SessionAction =
   | { type: "update"; update: SessionUpdate; at?: number }
   | { type: "loading" }
-  | { type: "loaded"; modes?: SessionModeState | null; configOptions?: SessionConfigOption[] | null }
+  | { type: "loaded"; modes?: SessionModeState | null; configOptions?: SessionConfigOption[] | null; models?: unknown }
+  /** session/set_model went through (the view's, or the pane's host's `_agents/current_model`):
+   *  an agent with a `models` field does not report it. */
+  | { type: "modelSet"; modelId: string }
   | { type: "promptSent"; blocks: ContentBlock[]; at?: number }
   | { type: "promptEnded" }
   | { type: "permissionRequested"; request: PermissionRequest }
@@ -389,6 +396,13 @@ function delivered(state: SessionState): SessionState {
   return { ...state, items: state.items.map((item) => (item.type === "user" && item.local && !item.answered ? { ...item, answered: true } : item)) };
 }
 
+/** The load starts from an empty session, so a model already here was set while it loaded (the
+ *  host's launch settings) and is newer than the load's. */
+function loadedModels(loaded: ModelState | undefined, current: ModelState | undefined): ModelState | undefined {
+  if (!loaded) return current;
+  return { ...loaded, currentModelId: current?.currentModelId ?? loaded.currentModelId };
+}
+
 export function reduce(state: SessionState, action: SessionAction): SessionState {
   switch (action.type) {
     case "update":
@@ -401,7 +415,12 @@ export function reduce(state: SessionState, action: SessionAction): SessionState
         replaying: false,
         modes: action.modes ?? state.modes,
         configOptions: action.configOptions ?? state.configOptions,
+        models: loadedModels(modelStateOf(action.models), state.models),
       };
+    // The host sets the model as the session opens (its launch settings), which may come before
+    // the view has the session's list: the choice then waits for it (loaded).
+    case "modelSet":
+      return { ...state, models: { availableModels: [], ...state.models, currentModelId: action.modelId } };
     case "promptSent": {
       const id = `local-${state.nextLocalId}`;
       const { text, attachments } = sentMessage(action.blocks);

@@ -243,3 +243,22 @@ describe("a turn the terminal started", () => {
     ]);
   });
 });
+
+describe("the session's models field", () => {
+  it("is kept from the load and follows the model the view or host set", () => {
+    const models = { currentModelId: "auto", availableModels: [{ modelId: "auto", name: "auto" }, { modelId: "claude-haiku-4.5", name: "claude-haiku-4.5" }] };
+    let state = reduce(emptySession(), { type: "loaded", models });
+    expect(state.models?.currentModelId).toBe("auto");
+    state = reduce(state, { type: "modelSet", modelId: "claude-haiku-4.5" });
+    expect(state.models?.currentModelId).toBe("claude-haiku-4.5");
+    expect(reduce(emptySession(), { type: "loaded", models: { nothing: true } }).models).toBeUndefined();
+  });
+
+  it("keeps a model the host set before the view had the session's list", () => {
+    const models = { currentModelId: "auto", availableModels: [{ modelId: "auto" }, { modelId: "claude-haiku-4.5" }] };
+    let state = reduce(emptySession(), { type: "loading" });
+    state = reduce(state, { type: "modelSet", modelId: "claude-haiku-4.5" });
+    state = reduce(state, { type: "loaded", models });
+    expect(state.models).toEqual({ currentModelId: "claude-haiku-4.5", availableModels: [{ modelId: "auto" }, { modelId: "claude-haiku-4.5" }] });
+  });
+});

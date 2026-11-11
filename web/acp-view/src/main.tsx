@@ -12,7 +12,7 @@ import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock, PlanEntry, SessionConfigOption } from "@agentclientprotocol/sdk";
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type AllowAll } from "./acp-connection";
-import { choicesOf, currentName, settingLabel, settingTitle, splitOptions } from "./session-options";
+import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOptions, withModels } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
@@ -1096,7 +1096,7 @@ function Usage({ usage }: { usage: SessionUsage }) {
           {percent > 0 && <path d={`M7 1.6A5.4 5.4 0 ${angle > Math.PI ? 1 : 0} 1 ${x.toFixed(2)} ${y.toFixed(2)}`} fill="none" stroke="currentColor" strokeWidth="1.6" />}
         </svg>
       )}
-      {text}
+      <span className="rt">{text}</span>
     </span>
   );
 }
@@ -1165,7 +1165,11 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   const prompting = useSession((s) => s.prompting);
   const working = useSession((s) => attention(s) === "working");
   const asking = useSession((s) => s.permissions.length > 0);
-  const configOptions = useSession((s) => s.configOptions);
+  const agentOptions = useSession((s) => s.configOptions);
+  const models = useSession((s) => s.models);
+  // An agent that offers its models in the session's `models` field (Kiro's v2 engine) gets the
+  // same model picker as one with a model config option.
+  const configOptions = useMemo(() => withModels(agentOptions, models), [agentOptions, models]);
   const modes = useSession((s) => s.modes);
   const usage = useSession((s) => s.usage);
   const turnStart = useSession((s) => {
@@ -1624,16 +1628,17 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
               <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
             </button>
             {showModes && (
-              <label className="opt">
-                {modes!.availableModes.find((mode) => mode.id === modes!.currentModeId)?.name ?? modes!.currentModeId} <Down />
-                <select value={modes!.currentModeId} onChange={(event) => void session.setMode(event.target.value)} aria-label="Mode">
+              <label className="opt" title={modesLabel(info.agent.id)}>
+                <span className="lb">{modesLabel(info.agent.id)}</span>
+                <span className="v">{modes!.availableModes.find((mode) => mode.id === modes!.currentModeId)?.name ?? modes!.currentModeId}</span> <Down />
+                <select value={modes!.currentModeId} onChange={(event) => void session.setMode(event.target.value)} aria-label={modesLabel(info.agent.id)}>
                   {modes!.availableModes.map((mode) => <option key={mode.id} value={mode.id}>{mode.name}</option>)}
                 </select>
               </label>
             )}
             {options.map((option) => (
-              <label className="opt" key={option.id} title={settingTitle(option, info.agent.id)}>
-                <span className="lb">{settingLabel(option, info.agent.id)}</span> {currentName(option)} <Down />
+              <label className="opt" key={option.id} title={`${settingTitle(option, info.agent.id)}: ${currentName(option)}`}>
+                <span className="lb">{settingLabel(option, info.agent.id)}</span> <span className="v">{currentName(option)}</span> <Down />
                 <select value={String(option.currentValue)} aria-label={settingLabel(option, info.agent.id)}
                   onChange={(event) => void session.setConfigOption(option.id, event.target.value)}>
                   {choicesOf(option).map((choice) => <option key={choice.value} value={choice.value}>{choice.name}</option>)}
@@ -1641,19 +1646,28 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
               </label>
             ))}
             {allowAll.offered && (
-              <button className={`opt level allow${allowAll.on ? " on" : ""}`} type="button" aria-pressed={allowAll.on}
-                title={allowAll.on
-                  ? "Tool calls run without asking, as the agent's command says. Click to be asked again."
-                  : "The agent asks before each tool call. Click to allow them all, as -a does in the terminal."}
+              <button className={`opt level allow fold${allowAll.on ? " on" : ""}`} type="button" aria-pressed={allowAll.on}
+                aria-label={`Approvals: ${allowAll.on ? "Allow all" : "Ask"}`} title={allowAllTitle(allowAll.on)}
                 onClick={() => void allowAll.set(!allowAll.on)}>
-                <span className="lb">Approvals</span> {allowAll.on ? "Allow all" : "Ask"}
+                <ApprovalsIcon on={allowAll.on} />
+                <span className="lb">Approvals</span> <span className="v">{allowAll.on ? "Allow all" : "Ask"}</span>
               </button>
             )}
-            {moreOptions.length > 0 && <MoreOptions options={moreOptions} session={session} agentId={info.agent.id} />}
-            <button className="opt level" type="button" title="How much of the work shows (⌃O)" onClick={onCycleLevel}>
-              <svg viewBox="0 0 12 12" aria-hidden="true"><path d={level === "results" ? "M2 6h8" : level === "steps" ? "M2 4h8M2 8h5" : "M2 3h8M2 6h8M2 9h8"} fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
-              {DETAIL_TITLES[level]}
+            <button className="opt level fold" type="button" aria-label={`Detail: ${DETAIL_TITLES[level]}`} title={`How much of the work shows: ${DETAIL_TITLES[level]} (⌃O)`} onClick={onCycleLevel}>
+              <LevelIcon level={level} />
+              <span className="v">{DETAIL_TITLES[level]}</span>
             </button>
+            <MoreOptions options={moreOptions} session={session} agentId={info.agent.id}>
+              {/* What the row folds in when the field is too narrow for it (view.css). */}
+              {allowAll.offered && (
+                <button className="it folded" type="button" aria-pressed={allowAll.on} title={allowAllTitle(allowAll.on)} onClick={() => void allowAll.set(!allowAll.on)}>
+                  <span>Approvals</span><span className={`mv${allowAll.on ? " on" : ""}`}>{allowAll.on ? "Allow all" : "Ask"}</span>
+                </button>
+              )}
+              <button className="it folded" type="button" title="How much of the work shows (⌃O)" onClick={onCycleLevel}>
+                <span>Detail</span><span className="mv"><LevelIcon level={level} /> {DETAIL_TITLES[level]}</span>
+              </button>
+            </MoreOptions>
             <span className="sp" />
             {dictation.available && (
               <button className={`icon mic${dictation.state === "recording" ? " rec" : ""}${dictation.error ? " err" : ""}`} type="button"
@@ -1680,7 +1694,9 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
 }
 
 /** The agent's other settings, under ⋯: each with what it sets and its choice. */
-function MoreOptions({ options, session, agentId }: { options: SessionConfigOption[]; session: AcpSession; agentId: string }) {
+function MoreOptions({ options, session, agentId, children }: {
+  options: SessionConfigOption[]; session: AcpSession; agentId: string; children?: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1692,7 +1708,8 @@ function MoreOptions({ options, session, agentId }: { options: SessionConfigOpti
     return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", escape); };
   }, [open]);
   return (
-    <div className="more" ref={box}>
+    // With no settings of its own it shows only when the row folds into it.
+    <div className={`more${options.length === 0 ? " fold-only" : ""}`} ref={box}>
       <button className={`opt level${open ? " open" : ""}`} type="button" aria-label="More settings" aria-expanded={open}
         title={options.map((option) => `${settingLabel(option, agentId)}: ${currentName(option)}`).join("\n")}
         onClick={() => setOpen((value) => !value)}>
@@ -1710,9 +1727,32 @@ function MoreOptions({ options, session, agentId }: { options: SessionConfigOpti
               </select>
             </label>
           ))}
+          {children}
         </div>
       )}
     </div>
+  );
+}
+
+function allowAllTitle(on: boolean): string {
+  return on
+    ? "Approvals: Allow all. Tool calls run without asking, as the agent's command says. Click to be asked again."
+    : "Approvals: Ask. The agent asks before each tool call. Click to allow them all, as -a does in the terminal.";
+}
+
+/** A shield, with a check while every tool call is allowed. */
+function ApprovalsIcon({ on }: { on: boolean }) {
+  return (
+    <svg viewBox="0 0 12 12" aria-hidden="true">
+      <path d="M6 1.2 2.2 2.6v3c0 2.4 1.6 4.2 3.8 5.2 2.2-1 3.8-2.8 3.8-5.2v-3z" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinejoin="round" />
+      {on && <path d="M4.2 6.1 5.5 7.4 7.9 4.8" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" />}
+    </svg>
+  );
+}
+
+function LevelIcon({ level }: { level: DetailLevel }) {
+  return (
+    <svg viewBox="0 0 12 12" aria-hidden="true"><path d={level === "results" ? "M2 6h8" : level === "steps" ? "M2 4h8M2 8h5" : "M2 3h8M2 6h8M2 9h8"} fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
   );
 }
 

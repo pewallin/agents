@@ -10,6 +10,47 @@ const AGENTS_AS_MODES = new Set(["kiro", "opencode"]);
 
 export interface Choice { value: string; name: string }
 
+/** The models an agent offers in the session's `models` field, as Kiro's v2 engine does instead
+ *  of a model config option (ACP's older SessionModelState). */
+export interface ModelState {
+  currentModelId: string;
+  availableModels: Array<{ modelId: string; name?: string | null; description?: string | null }>;
+}
+
+/** The id the view gives the model picker made from a session's `models` field: setting it is
+ *  `session/set_model`, not `session/set_config_option`. */
+export const MODEL_STATE_OPTION = "agents/model";
+
+/** The session's settings with its `models` field as one more model option, where the agent
+ *  offers its models that way and has no model config option. */
+export function withModels(options: SessionConfigOption[], models: ModelState | undefined): SessionConfigOption[] {
+  if (!models || models.availableModels.length < 2 || options.some((option) => option.category === "model")) return options;
+  const model = {
+    type: "select",
+    id: MODEL_STATE_OPTION,
+    name: "Model",
+    category: "model",
+    currentValue: models.currentModelId,
+    options: models.availableModels.map((entry) => ({ value: entry.modelId, name: entry.name || entry.modelId, description: entry.description ?? undefined })),
+  } as SessionConfigOption;
+  return [...options, model];
+}
+
+/** A model state from what an agent sent, if it is one. */
+export function modelStateOf(value: unknown): ModelState | undefined {
+  const state = value as { currentModelId?: unknown; availableModels?: unknown } | null | undefined;
+  if (typeof state?.currentModelId !== "string" || !Array.isArray(state.availableModels)) return undefined;
+  const availableModels = (state.availableModels as Array<{ modelId?: unknown; name?: unknown; description?: unknown }>)
+    .filter((entry) => typeof entry?.modelId === "string")
+    .map((entry) => ({ modelId: entry.modelId as string, name: typeof entry.name === "string" ? entry.name : undefined, description: typeof entry.description === "string" ? entry.description : undefined }));
+  return { currentModelId: state.currentModelId, availableModels };
+}
+
+/** What a session's modes set: Kiro's and OpenCode's modes are their agents. */
+export function modesLabel(agentId: string): string {
+  return AGENTS_AS_MODES.has(agentId) ? "Agent" : "Mode";
+}
+
 type SelectEntry = { value?: string; name: string; options?: Choice[] };
 
 /** A select option's choices, flat. */
@@ -25,7 +66,7 @@ export function currentName(option: SessionConfigOption): string {
 
 /** What the option sets, in a word or two. */
 export function settingLabel(option: SessionConfigOption, agentId: string): string {
-  if (option.category === "mode") return AGENTS_AS_MODES.has(agentId) ? "Agent" : "Mode";
+  if (option.category === "mode") return modesLabel(agentId);
   if (option.category === "model") return "Model";
   if (option.category === "thought_level") return "Effort";
   return option.name;

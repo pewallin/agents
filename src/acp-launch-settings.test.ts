@@ -114,6 +114,26 @@ describe("a setting on a session that opened", () => {
     expect(settingRequest("mode", "bypassPermissions", modes)).toEqual({ method: "session/set_mode", modeId: "bypassPermissions" });
     expect(settingRequest("mode", "default", modes)).toBeUndefined();
   });
+
+  it("is the session's model where the agent offers its models in a models field (Kiro's v2 engine)", () => {
+    const models = { models: { currentModelId: "auto", availableModels: [{ modelId: "auto", name: "auto" }, { modelId: "claude-haiku-4.5", name: "claude-haiku-4.5" }] } };
+    expect(settingRequest("model", "Claude-Haiku-4.5", models)).toEqual({ method: "session/set_model", modelId: "claude-haiku-4.5" });
+    expect(settingRequest("model", "auto", models)).toBeUndefined();
+    expect(settingRequest("model", "gpt-9", models)).toEqual({ missing: "model gpt-9 is not one the agent offers" });
+  });
+
+  it("sets the model on the session and tells the view, which the agent does not", () => {
+    const toAgent: string[] = [];
+    const toView: string[] = [];
+    const settings = new AcpLaunchSettingsApplier({ options: { model: "claude-haiku-4.5" } }, (line) => toAgent.push(line), () => {}, (line) => toView.push(line));
+    settings.clientLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: "/r", mcpServers: [] } }));
+    const opened = { sessionId: "s1", models: { currentModelId: "auto", availableModels: [{ modelId: "auto" }, { modelId: "claude-haiku-4.5" }] } };
+    expect(settings.agentLine(JSON.stringify({ jsonrpc: "2.0", id: 1, result: opened }))).toBe(false);
+    const request = JSON.parse(toAgent[0]);
+    expect(request).toMatchObject({ method: "session/set_model", params: { sessionId: "s1", modelId: "claude-haiku-4.5" } });
+    expect(settings.agentLine(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {} }))).toBe(true);
+    expect(JSON.parse(toView[0])).toEqual({ jsonrpc: "2.0", method: "_agents/current_model", params: { sessionId: "s1", modelId: "claude-haiku-4.5" } });
+  });
 });
 
 describe("the settings on an adapter's channel", () => {
