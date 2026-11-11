@@ -12,52 +12,107 @@
      --app-text, --app-accent       the app's text and accent colours
      --app-font-size                the "Agents and terminals" font size, in px
    Opened in a browser, the page has a background of its own and follows the system. */
+/* BEGIN design tokens: written by scripts/design-tokens.py in pewallin/agents-next from
+   docs/design-system/tokens.json. Change the tokens there and run the script; do not edit
+   this block by hand. Light is the default; the app sets data-theme and data-wallpaper. */
 :root {
   /* Text a point larger than the terminal's, code the terminal's size: they read alike. */
   --fs-mono: var(--app-font-size, 12px);
   --fs: calc(var(--fs-mono) + 1px);
   --bg: #fcfcfd;
-  --fg: var(--app-text, #1d1d1f); --fg2: #48484e; --dim: #6e6e73; --faint: #a3a3a8;
-  --hair: rgba(0, 0, 0, .09); --edge: rgba(0, 0, 0, .10);
-  --tint: rgba(0, 0, 0, .05); --tint2: rgba(0, 0, 0, .09);
+  --fg: var(--app-text, #1d1d1f);
+  --fg2: #48484e;
+  --dim: #6e6e73;
+  --faint: #a3a3a8;
+  --hair: rgba(0, 0, 0, .09);
+  --edge: rgba(0, 0, 0, .10);
+  --tint: rgba(0, 0, 0, .05);
+  --tint2: rgba(0, 0, 0, .09);
   --acc: var(--app-accent, #0a6cff);
+  --ink-on: #ffffff;
+  --codebg: rgba(0, 0, 0, .035);
+  --field: rgba(255, 255, 255, .86);
+  --pop: rgba(244, 244, 246, .92);
+  --badge: #f7f7f7;
+  --badge-ring: #ffffff;
+  --orange: #e3840b;
+  --ok: #23964f;
+  --green: #1a7f37;
+  --red: #cf222e;
+  --add: rgba(26, 127, 55, .10);
+  --add-x: rgba(26, 127, 55, .24);
+  --del: rgba(207, 34, 46, .09);
+  --del-x: rgba(207, 34, 46, .20);
+  --pane-polar-night: #2e3440;
+  --pane-storm-slate: #3b4252;
+  --pane-deep-fjord: #434c5e;
+  --pane-frost-blue: #5e81ac;
+  --pane-ice-cyan: #88c0d0;
+  --pane-glacier-teal: #8fbcbb;
+  --pane-aurora-green: #a3be8c;
+  --pane-aurora-yellow: #ebcb8b;
+  --pane-aurora-red: #bf616a;
+  --pane-aurora-purple: #b48ead;
+  --shadow: 0 8px 24px -10px rgba(0, 0, 0, .25);
   /* The pane's own colour, when it has one, tints the bubbles; else the accent does. */
   --hue: var(--app-tint, var(--acc));
   --you: color-mix(in srgb, var(--hue) 10%, transparent);
-  --codebg: rgba(0, 0, 0, .035); --field: rgba(255, 255, 255, .86); --pop: rgba(244, 244, 246, .92);
-  --ink-on: #ffffff;
-  --add: rgba(26, 127, 55, .10); --del: rgba(207, 34, 46, .09);
-  --add-x: rgba(26, 127, 55, .24); --del-x: rgba(207, 34, 46, .20);
-  --green: #1a7f37; --red: #cf222e; --orange: #e3840b; --ok: #23964f;
-  --shadow: 0 8px 24px -10px rgba(0, 0, 0, .25);
   --blur: blur(22px) saturate(1.4);
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 8px; --space-5: 12px; --space-6: 16px; --space-7: 24px;
+  --radius-xs: 4px; --radius-sm: 6px; --radius-md: 8px; --radius-lg: 14px; --radius-full: 999px;
+  --size-header: 24px; --size-row: 28px; --size-tab: 34px; --size-bar: 44px; --size-icon: 14px;
+  --duration-fast: 120ms; --duration-base: 180ms; --duration-slow: 350ms; --duration-spin: 900ms;
+  --opacity-disabled: 0.45; --opacity-pending: 0.75; --opacity-rest: 0.65;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
   --bg: #1c1c1f;
-  --fg: var(--app-text, #ececee); --fg2: #c2c2c8; --dim: #9b9ba1; --faint: #6a6a70;
-  --hair: rgba(255, 255, 255, .08); --edge: rgba(255, 255, 255, .07);
-  --tint: rgba(255, 255, 255, .07); --tint2: rgba(255, 255, 255, .12);
+  --fg: var(--app-text, #ececee);
+  --fg2: #c2c2c8;
+  --dim: #9b9ba1;
+  --faint: #6a6a70;
+  --hair: rgba(255, 255, 255, .08);
+  --edge: rgba(255, 255, 255, .07);
+  --tint: rgba(255, 255, 255, .07);
+  --tint2: rgba(255, 255, 255, .12);
   --acc: var(--app-accent, #4c9bff);
-  --you: color-mix(in srgb, var(--hue) 16%, transparent);
-  --codebg: rgba(0, 0, 0, .22); --field: rgba(44, 44, 48, .88); --pop: rgba(40, 40, 44, .92);
   --ink-on: #2a2a2d;
-  --add: rgba(86, 211, 100, .12); --del: rgba(255, 123, 114, .12);
-  --add-x: rgba(86, 211, 100, .30); --del-x: rgba(255, 123, 114, .30);
-  --green: #56d364; --red: #ff7b72; --orange: #ff9f0a; --ok: #41c26f;
+  --codebg: rgba(0, 0, 0, .22);
+  --field: rgba(44, 44, 48, .88);
+  --pop: rgba(40, 40, 44, .92);
+  --badge: #383838;
+  --badge-ring: #212121;
+  --orange: #ff9f0a;
+  --ok: #41c26f;
+  --green: #56d364;
+  --red: #ff7b72;
+  --add: rgba(86, 211, 100, .12);
+  --add-x: rgba(86, 211, 100, .30);
+  --del: rgba(255, 123, 114, .12);
+  --del-x: rgba(255, 123, 114, .30);
   --shadow: 0 8px 24px -10px rgba(0, 0, 0, .5);
+  --you: color-mix(in srgb, var(--hue) 16%, transparent);
   color-scheme: dark;
 }
 /* Over the wallpaper: lighter text, clearer surfaces that blur what is behind them. */
 :root[data-theme="dark"][data-wallpaper="true"] {
-  --fg: var(--app-text, #f2f2f5); --fg2: #d0d0d8; --dim: #b3b3bd; --faint: #7f7f8c;
-  --hair: rgba(255, 255, 255, .10); --edge: rgba(255, 255, 255, .12);
-  --tint: rgba(255, 255, 255, .09); --tint2: rgba(255, 255, 255, .16);
-  --you: color-mix(in srgb, var(--hue) 20%, transparent);
-  --codebg: rgba(255, 255, 255, .06); --field: rgba(30, 30, 38, .62); --pop: rgba(36, 36, 44, .82);
+  --fg: var(--app-text, #f2f2f5);
+  --fg2: #d0d0d8;
+  --dim: #b3b3bd;
+  --faint: #7f7f8c;
+  --hair: rgba(255, 255, 255, .10);
+  --edge: rgba(255, 255, 255, .12);
+  --tint: rgba(255, 255, 255, .09);
+  --tint2: rgba(255, 255, 255, .16);
   --ink-on: #22222a;
+  --codebg: rgba(255, 255, 255, .06);
+  --field: rgba(30, 30, 38, .62);
+  --pop: rgba(36, 36, 44, .82);
+  --you: color-mix(in srgb, var(--hue) 20%, transparent);
 }
+/* END design tokens */
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {
