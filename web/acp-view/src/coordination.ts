@@ -19,13 +19,15 @@ export interface CoordinationPane {
   reportLine?: string;
   /** The agent it runs (codex, claude, …). */
   agent?: string;
-  /** When its task was created (ms since 1970). */
-  started?: number;
+  /** The thread's title in the user's words (agent spawn --title); its task names it otherwise. */
+  threadTitle?: string;
 }
 
 export interface Coordination {
   role?: "coordinator" | "worker";
   task?: string;
+  /** The pane's own thread title, for a worker. */
+  threadTitle?: string;
   /** The pane's own latest report, for a worker. */
   report?: string;
   reportLine?: string;

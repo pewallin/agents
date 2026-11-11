@@ -5,7 +5,7 @@
 // directory (src/acp-peek.ts); what is not found stays plain code.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { diffLines } from "diff";
-import { useCoordination, workerInPane, workerNamed, workerState, type WorkerState } from "./coordination";
+import { useCoordination, workerInPane, workerNamed, workerState, type CoordinationPane, type WorkerState } from "./coordination";
 import type { FileChange } from "./turns";
 import type { SentAttachment } from "./session-state";
 import { APP_HANDLERS, appHandler, THUMBNAIL_SCHEME } from "./bridge";
@@ -241,8 +241,8 @@ export function Chip({ target, label, counts = true }: { target: ChipTarget; lab
     host?.open(target, { alternate: event.altKey, command: event.metaKey, change: toChanges ? change : undefined });
   };
   const state = target.kind === "pane" ? target.state : undefined;
-  // A worker's pane shows where the worker stands (done, working, waits for you, blocked, idle),
-  // as its pill above the field does; another pane shows its agent's state.
+  // A worker's pane shows where the worker stands (done, working, waits for you, blocked, idle);
+  // another pane shows its agent's state.
   const worker = useCoordination((coordination) => target.kind === "pane" ? workerInPane(coordination, target.id) : undefined);
   const mark = worker
     ? <StateMark state={workerState(worker)} />
@@ -419,7 +419,7 @@ function PeekBody({ target, change }: { target: ChipTarget; change?: FileChange 
     case "file": return <FilePeek path={target.path} line={target.line} />;
     case "dir": return <div className="peek-head"><Icon kind="dir" /> {target.rel}</div>;
     case "image": return <ImagePeek path={target.path} />;
-    case "pane": return <PanePeek id={target.id} />;
+    case "pane": return <PaneOrWorkerPeek id={target.id} />;
     case "url": return <LinkPeek url={target.url} />;
     case "ticket": return <TicketPeek id={target.id} url={target.url} />;
     case "bead": return <BeadPeek id={target.id} />;
@@ -496,6 +496,30 @@ function ChangePeek({ change }: { change: FileChange }) {
 function ImagePeek({ path }: { path: string }) {
   const host = useContext(ChipHostContext);
   return <img className="peek-image" alt="" src={host ? thumbnailURL(host, path, 640) : undefined} />;
+}
+
+const WORKER_STATE_WORDS: Record<WorkerState, string> = { "needs-you": "waits for you", blocked: "blocked", done: "done", working: "working", idle: "idle" };
+
+/** A worker's pane: its thread, where it stands and its latest report (the app lists the thread
+ *  with its sessions; the pane itself is a click away). Any other pane: its last lines. */
+function PaneOrWorkerPeek({ id }: { id: string }) {
+  const worker = useCoordination((coordination) => workerInPane(coordination, id));
+  if (!worker) return <PanePeek id={id} />;
+  return <WorkerPeek worker={worker} />;
+}
+
+export function WorkerPeek({ worker }: { worker: CoordinationPane }) {
+  const state = workerState(worker);
+  const title = worker.threadTitle ?? worker.task ?? worker.pane;
+  return (
+    <>
+      <div className="peek-head"><span className="peek-title"><StateMark state={state} />{title}</span></div>
+      <div className="peek-dim">
+        {[worker.threadTitle && worker.task ? worker.task : undefined, worker.agent, WORKER_STATE_WORDS[state]].filter(Boolean).join(" · ")}
+      </div>
+      {worker.reportLine && <div className="peek-text">{worker.reportLine}</div>}
+    </>
+  );
 }
 
 function PanePeek({ id }: { id: string }) {

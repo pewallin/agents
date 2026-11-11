@@ -21,7 +21,7 @@ import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
 import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
-import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine, WorkerStrip } from "./coordination-view";
+import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine } from "./coordination-view";
 import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
@@ -1446,7 +1446,6 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
     <div className="dock" ref={dock}>
       <div className="inner">
         <OutdatedHost agentName={info.agent.name} typed={draft.trim() !== "" || attachments.length > 0} />
-        <WorkerStrip />
         <PlanLine />
         {slashItems.length > 0 && (
           <div className="pop slash" role="listbox" aria-label="Commands">

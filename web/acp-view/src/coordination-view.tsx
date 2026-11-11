@@ -1,10 +1,10 @@
 // Coordinators and workers as the view shows them: a wake-up as an event row with chips for the
 // workers and the message, a worker's brief as the coordinator's (folded), the coordination
-// commands an agent runs as event rows, a line at the top of a worker's view naming its
-// coordinator and task, and an orange row for each worker that waits on you.
+// commands an agent runs as event rows, and a line at the top of a worker's view naming its
+// coordinator and thread. A coordinator's workers are its threads, listed in the app.
 import { lazy, Suspense, useContext, useEffect, useState, type ReactNode } from "react";
-import { Chip, ChipHostContext, NamedChip, PeekContext, StateMark } from "./chips";
-import { describeAgentEvent, tasksIn, useCoordination, workerNamed, workerState, type AgentEvent, type CoordinationPane, type WorkerState } from "./coordination";
+import { Chip, ChipHostContext, NamedChip } from "./chips";
+import { describeAgentEvent, tasksIn, useCoordination, workerNamed, type AgentEvent } from "./coordination";
 
 const Markdown = lazy(() => import("./markdown"));
 
@@ -122,105 +122,16 @@ export function AgentEventLine({ event, failed }: { event: AgentEvent; failed: b
 
 /** At the top of a worker's view: whose worker it is, its task and its latest report. */
 export function WorkerLine() {
-  const { role, task, coordinator, report, reportLine } = useCoordination();
+  const { role, task, threadTitle, coordinator, report, reportLine } = useCoordination();
   if (role !== "worker" || !coordinator) return null;
   return (
     <div className="worker-line">
       <Spark />
       <span className="what">
         Worker of <Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={coordinator.title ?? coordinator.pane} />
-        {task && <> · task <code>{task}</code></>}
+        {threadTitle ? <> · {threadTitle}</> : task && <> · task <code>{task}</code></>}
         {report && <span className="dim"> · {report}{reportLine ? `: ${reportLine}` : ""}</span>}
       </span>
-    </div>
-  );
-}
-
-const STATE_WORDS: Record<WorkerState, string> = { "needs-you": "waits for you", blocked: "blocked", done: "done", working: "working", idle: "idle" };
-
-/** "4m", "1h 12m": how long a worker has been at it. */
-export function elapsed(ms: number): string {
-  const minutes = Math.max(0, Math.floor(ms / 60_000));
-  if (minutes < 1) return "< 1m";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
-}
-
-const OPEN_KEY = "agents-acp-workers-open";
-
-function storedOpen(): boolean {
-  try { return localStorage.getItem(OPEN_KEY) === "1"; } catch { return false; }
-}
-
-/** A coordinator's workers, docked above the field: a row of small pills (task and state) that
- *  ⌥W or the "Workers" label expands into a list with each worker's agent, state, latest report
- *  and time. A click on a pill or a row shows the worker's pane; hovering shows its last lines. A
- *  worker that waits on you turns its pill orange; the strip does not open by itself. Open or
- *  closed is remembered per pane (the page's storage belongs to the pane's host). */
-export function WorkerStrip() {
-  const { role, workers } = useCoordination();
-  const host = useContext(ChipHostContext);
-  const peek = useContext(PeekContext);
-  const [open, setOpen] = useState(storedOpen);
-  const [now, setNow] = useState(() => Date.now());
-  const shown = workers.length > 0 && role !== "worker";
-  useEffect(() => {
-    if (!shown) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.altKey && !event.metaKey && !event.ctrlKey && event.code === "KeyW") {
-        event.preventDefault();
-        setOpen((value) => { try { localStorage.setItem(OPEN_KEY, value ? "0" : "1"); } catch { /* no storage */ } return !value; });
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [shown]);
-  useEffect(() => {
-    if (!shown || !open) return;
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, [shown, open]);
-  if (!shown) return null;
-  const toggle = () => setOpen((value) => { try { localStorage.setItem(OPEN_KEY, value ? "0" : "1"); } catch { /* no storage */ } return !value; });
-  const show = (worker: CoordinationPane) => host?.open({ kind: "pane", id: worker.pane, state: worker.status }, { alternate: false });
-  const hover = (worker: CoordinationPane, element: HTMLElement) => peek?.show({ kind: "pane", id: worker.pane, state: worker.status }, element);
-  return (
-    <div className={`worker-strip${open ? " open" : ""}`} aria-label="Workers">
-      <div className="wk-row">
-        <button type="button" className="wk-label" onClick={toggle} title="Show the workers (⌥W)" aria-expanded={open}>
-          Workers <svg viewBox="0 0 10 10" aria-hidden="true"><path d={open ? "M2.5 6.5L5 4l2.5 2.5" : "M2.5 4L5 6.5 7.5 4"} fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
-        </button>
-        {!open && workers.map((worker) => {
-          const state = workerState(worker);
-          return (
-            <span key={worker.pane} className={`wk-pill ${state}`} role="button" tabIndex={0} title={worker.reportLine ?? undefined}
-              onClick={() => show(worker)} onKeyDown={(event) => { if (event.key === "Enter") show(worker); }}
-              onMouseEnter={(event) => hover(worker, event.currentTarget)} onMouseLeave={() => peek?.hide(false)}>
-              <StateMark state={state} />{worker.task ?? worker.pane}
-            </span>
-          );
-        })}
-      </div>
-      {open && (
-        <div className="wk-list">
-          {workers.map((worker) => {
-            const state = workerState(worker);
-            return (
-              <div key={worker.pane} className={`wk-item ${state}`} role="button" tabIndex={0}
-                onClick={() => show(worker)} onKeyDown={(event) => { if (event.key === "Enter") show(worker); }}
-                onMouseEnter={(event) => hover(worker, event.currentTarget)} onMouseLeave={() => peek?.hide(false)}>
-                <StateMark state={state} />
-                <span className="wk-name">{worker.task ?? worker.pane}</span>
-                {worker.agent && <span className="wk-agent">{worker.agent}</span>}
-                <span className="wk-state">{STATE_WORDS[state]}</span>
-                <span className="wk-line">{worker.reportLine ?? ""}</span>
-                {worker.started !== undefined && <span className="wk-time">{elapsed(now - worker.started)}</span>}
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

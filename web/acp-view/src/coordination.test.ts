@@ -28,15 +28,6 @@ describe("coordination lines", () => {
   });
 });
 
-describe("elapsed", () => {
-  it("says how long a worker has been at it", async () => {
-    const { elapsed } = await import("./coordination-view");
-    expect(elapsed(20_000)).toBe("< 1m");
-    expect(elapsed(4 * 60_000)).toBe("4m");
-    expect(elapsed(72 * 60_000)).toBe("1h 12m");
-  });
-});
-
 describe("worker state", () => {
   it("says where a worker stands from its agent's state and its report", () => {
     expect(workerState({ pane: "%1", status: "question" })).toBe("needs-you");
