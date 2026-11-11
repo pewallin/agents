@@ -35,6 +35,9 @@ export interface AgentPane {
 
 export interface AgentRuntimeState {
   session: string;
+  /** The agent in the pane, and its harness's id of the session it runs (where known). */
+  agent?: string;
+  externalSessionId?: string;
   status: AgentStatus;
   cpuPercent: number;
   memoryMB: number;

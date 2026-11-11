@@ -5,13 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { readAgentStateForPane } from "./agent-state.js";
 import { readToken, requestAppControl, requestID } from "./app-socket.js";
-import { LANGUAGE_OPTION, coordinatorLanguage, ensureSharedCLI, workerPrompt, writeBrief, writeTaskMeta } from "./briefs.js";
+import { LANGUAGE_OPTION, coordinatorLanguage, ensureSharedCLI, threadTitle, workerPrompt, writeBrief, writeTaskMeta } from "./briefs.js";
 import { inheritCoordinatorBackground } from "./coordinator.js";
 import { agentLaunch, agentNameFromLaunchCommand, agentProfile, assertOK, buildNewAgentArgv, controlHasArgument, normalizeAgentName, renderLaunchCommand } from "./launch.js";
 import { fail, setFailureContext, usage } from "./output.js";
 import { canonicalSourcePaneRecord, localPaneRef, paneIDFromRef, resolveLocalSourcePane, setPaneOption, tmuxPaneOption } from "./panes.js";
 import { createPaneThroughApp, waitForExecutableShell, waitForPaneAddressable } from "./placement.js";
-import { coordinationPaneRecords, coordinatorProgram, ensurePaneUUID, notifyApp, resolveCoordinatorProgram, taskPaths, uniqueTaskName, waitForPaneUUID, workspaceWindowID } from "./program.js";
+import { coordinationPaneRecords, coordinatorProgram, ensurePaneUUID, notifyApp, readJSON, resolveCoordinatorProgram, taskPaths, uniqueTaskName, waitForPaneUUID, workspaceWindowID } from "./program.js";
 import { respawnMarker } from "./promote.js";
 import { acpPromptSupported, acquireSpawnLock, briefInViewLaunch, failStartup, noteSubWorker, paneProcesses, spawnRecovery, spawnSummary, startupWaitMs, subWorkerLead, watchAgentStartup } from "./spawn-support.js";
 import { ensureSupervisor } from "./supervisor-control.js";
@@ -93,13 +93,18 @@ export async function runAgentSpawn(command, currentSocketPath) {
   // Another harness than the source pane's does not take its model.
   const model = explicitModel || (!profile && stateAgent === launchAgent ? state?.modelId || state?.model : undefined);
   const taskFiles = task ? taskPaths(program, task) : undefined;
+  // The thread's title in the user's words; a respawn keeps the one it has unless given another.
+  const title = task ? threadTitle(params.title) : undefined;
   const language = task ? coordinatorLanguage(params, parentRecord) : undefined;
   const prompt = task
     ? workerPrompt(task, taskFiles, parentRecord, Boolean(respawn), language, respawn?.previousSession)
     : command.prompt;
   let launchPlan;
   try {
-    launchPlan = buildNewAgentArgv(launchCommand, prompt, { model, explicitModel });
+    // A reopened thread resumes its latest session as it was (agent reopen): no new prompt.
+    launchPlan = respawn?.resume
+      ? { argv: respawn.resume.argv, agent: respawn.resume.agent }
+      : buildNewAgentArgv(launchCommand, prompt, { model, explicitModel });
   } catch (error) {
     fail(1, "launchParseFailed", error.message);
   }
@@ -114,6 +119,7 @@ export async function runAgentSpawn(command, currentSocketPath) {
     axis: !intoPane && placement === "split" ? axis : undefined,
     parentPane: parentRecord ? localPaneRef(parentRecord.paneID) : undefined,
     task,
+    title,
     program,
     language,
     brief: taskFiles?.brief,
@@ -158,7 +164,7 @@ export async function runAgentSpawn(command, currentSocketPath) {
     if (!respawn) coordinatorProgram(parentRecord, params.program, records);
     if (!parentRecord.role) setPaneOption(localPaneRef(parentRecord.paneID), "@agents_role", "coordinator");
     if (!respawn) writeBrief(program, task, command.prompt, parentRecord, language);
-    writeTaskMeta(program, task, { launchCommand, cwd, parentUUID, ...(sub ? { parentTask: sub.parentTask } : {}), ...(explicitModel ? { model: explicitModel } : {}) });
+    writeTaskMeta(program, task, { launchCommand, cwd, parentUUID, ...(sub ? { parentTask: sub.parentTask } : {}), ...(explicitModel ? { model: explicitModel } : {}), ...(title ? { title } : {}) });
   }
   const markWorker = newPane => {
     if (!task) return;
@@ -166,6 +172,9 @@ export async function runAgentSpawn(command, currentSocketPath) {
     setPaneOption(newPane, "@agents_parent", parentUUID);
     setPaneOption(newPane, "@agents_role", "worker");
     setPaneOption(newPane, "@agents_task", task);
+    // The thread's title, for the app's rows; a respawn or reopen keeps the one the thread has.
+    const shownTitle = title || readJSON(taskPaths(program, task).meta, {}).title;
+    if (shownTitle) setPaneOption(newPane, "@agents_title", shownTitle);
     setPaneOption(newPane, "@agents_program", program);
     setPaneOption(newPane, "@agents_report_state", "started");
     setPaneOption(newPane, "@agents_report_at", String(Math.floor(Date.now() / 1000)));
@@ -193,7 +202,7 @@ export async function runAgentSpawn(command, currentSocketPath) {
     // An agent with an ACP view: the app marks its pane when Settings › Agents › Open agents in
     // says ACP View, and the pane shows the view from the start. A Codex shares its session
     // live with the view; another agent starts in the view, its brief the host's first prompt.
-    if ((launch.via === "codex-session" || (launch.via === "acp-session" && acpPromptSupported()))
+    if (!respawn?.resume && (launch.via === "codex-session" || (launch.via === "acp-session" && acpPromptSupported()))
       && controlHasArgument(descriptors, controlID, "acpAgent")) {
       invokeParams.acpAgent = true;
     }
@@ -209,7 +218,7 @@ export async function runAgentSpawn(command, currentSocketPath) {
   // Once the app shows the pane: before, it has no workspace to keep the color in.
   const background = task ? await inheritCoordinatorBackground(parentRecord.paneID, newPane) : undefined;
   await waitForExecutableShell(currentSocketPath, token, newPane, argv[0], cwd);
-  if (launch.via === "acp-session" && tmuxPaneOption(newPane, "@agents_open_in") === "acp-view") {
+  if (!respawn?.resume && launch.via === "acp-session" && tmuxPaneOption(newPane, "@agents_open_in") === "acp-view") {
     renderedLaunchCommand = renderLaunchCommand(briefInViewLaunch(launchPlan, prompt, newPane), cwd);
     planned.launch.command = renderedLaunchCommand;
   }

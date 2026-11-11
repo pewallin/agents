@@ -693,6 +693,44 @@ program
     }
   });
 
+// A coordinator's threads in a folder: what Agents Next lists in Conversations
+// (src/app-control/threads.ts). --repair fills in the session lists of older threads again.
+program
+  .command("threads")
+  .description("List the coordinator threads of a folder's programs")
+  .option("--cwd <path>", "Folder whose programs to list (defaults to the current directory)")
+  .option("--repair", "Search transcripts again for the sessions of each thread")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const threads = await import("./app-control/threads.js");
+    const cwd = opts.cwd || process.cwd();
+    if (opts.repair) {
+      const { coordinationPaneRecords } = await import("./app-control/program.js");
+      const records = coordinationPaneRecords({ strict: true });
+      const programs = threads.folderPrograms(threads.threadFolder(cwd));
+      const results = programs.map((program: string) => threads.repairProgram(program, { records, initial: Boolean(records) && !threads.isRepaired(program) }));
+      console.log(JSON.stringify({ repaired: results }, null, opts.json ? 2 : undefined));
+      return;
+    }
+    const listing = threads.listThreads(cwd);
+    if (opts.json || !process.stdout.isTTY) {
+      console.log(JSON.stringify(listing, null, 2));
+      return;
+    }
+    if (listing.programs.length === 0) {
+      console.log(`No coordinator threads in ${listing.folder}.`);
+      return;
+    }
+    for (const entry of listing.programs) {
+      const lead = entry.coordinator?.pane ? ` · coordinator in ${entry.coordinator.pane}` : "";
+      console.log(`${entry.program}${lead}`);
+      for (const thread of entry.threads) {
+        const where = thread.pane ? thread.pane : thread.reopen?.step || "";
+        console.log(`  ${thread.state.padEnd(9)} ${thread.title}  (${thread.task}${where ? `, ${where}` : ""})${thread.line ? ` · ${thread.line}` : ""}`);
+      }
+    }
+  });
+
 program
   .command("history")
   .description("Show persisted session history for supported agents")

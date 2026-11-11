@@ -18,6 +18,7 @@ import { closeOpenQuestions } from "./questions.js";
 import { closedReportState, lastWorkerReport, setWorkerReportState } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { followOffers } from "./steer.js";
+import { markResolved, markUnresolved, recordCoordinatorSession, recordTaskSession, resolvesOnClose, threadsEpoch } from "./threads.js";
 import { agentStatuses, cliVersion, readFileOr, runningSupervisor, supervisorBeatFile } from "./supervisor-control.js";
 import { processWatches, readWatches } from "./watch.js";
 
@@ -90,6 +91,7 @@ export async function runSupervisor(command) {
     return;
   }
   fs.writeFileSync(pidFile, `${process.pid}\n`);
+  threadsEpoch(program);
   const beat = () => writeFileAtomic(supervisorBeatFile(program), `${JSON.stringify({ pid: process.pid, version: cliVersion(), beatAt: Date.now() })}\n`);
   beat();
   supervisorLog(`supervising ${program}`);
@@ -149,8 +151,16 @@ export async function runSupervisor(command) {
       ...programWorkers.map(record => record.paneID),
       ...targets.filter(target => target.record).map(target => target.record.paneID),
     ])];
-    const statuses = agentStatuses(watched);
+    // The program's coordinators are asked about too, for the sessions that lead it.
+    const coordinators = records.filter(record => record.program === program && record.role === "coordinator" && !record.dead && !watched.includes(record.paneID));
+    const statuses = agentStatuses([...watched, ...coordinators.map(record => record.paneID)]);
     const now = Date.now();
+    for (const record of coordinators) {
+      const status = statuses.get(record.paneID);
+      if (status?.sessionId && status.agent) {
+        recordCoordinatorSession(program, { via: "changed", agent: status.agent, session: status.sessionId, uuid: record.uuid });
+      }
+    }
 
     for (const paneID of watched) {
       const { text, hash } = paneContent(paneID);
@@ -168,6 +178,12 @@ export async function runSupervisor(command) {
       const tracked = workers.get(key) || { status: undefined, workingSince: 0 };
       tracked.task = record.task;
       tracked.uuid = record.uuid;
+      // Every session the worker runs, as its hooks name it: its first, a /clear, a resumed copy.
+      const session = statuses.get(record.paneID);
+      if (session?.sessionId && session.agent && session.sessionId !== tracked.session) {
+        recordTaskSession(program, record.task, { agent: session.agent, session: session.sessionId, uuid: record.uuid });
+        tracked.session = session.sessionId;
+      }
       // A coordinator that took over is the parent from now on.
       tracked.parent = record.parent;
       const report = readJSON(taskPaths(program, record.task).reportJSON, undefined);
@@ -185,6 +201,7 @@ export async function runSupervisor(command) {
         // running on (a turn that went on after its report, an agent restarted with its pane).
         if (settled && SETTLED_REPORTS.has(record.reportState) && tracked.inputAt > reportedAt) {
           setWorkerReportState(program, record, "progress", "Working again.");
+          markUnresolved(program, record.task);
           record.reportState = "progress";
           supervisorLog(`${record.task} works again`);
         }
@@ -279,6 +296,9 @@ export async function runSupervisor(command) {
         writeTaskReport(files, report);
         writeStatusFile(program);
       }
+      // The user closed the tab of a done thread: they looked at the work, nothing is left. An
+      // unfinished one stays open, stopped. (Panes gone with their tmux server never get here.)
+      if (resolvesOnClose(report) && !unfinished) markResolved(program, tracked.task);
     }
     if (notifiedChanged) writeFileAtomic(notifiedFile, `${JSON.stringify(notified, null, 2)}\n`);
     const state = JSON.stringify({ server, workers: Object.fromEntries(workers) });

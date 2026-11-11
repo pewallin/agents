@@ -16,6 +16,7 @@ import { closeOpenQuestions, questionView, questionsOf, recordQuestion } from ".
 import { isWorkerRecord } from "./spawn-support.js";
 import { deliveredAt } from "./supervisor.js";
 import { agentStatuses, ensureSupervisor, readFileOr, reportStateFromParams, writeOwnReport } from "./supervisor-control.js";
+import { markResolved, resolvesOnClose } from "./threads.js";
 
 export async function runAgentReport(command) {
   const params = command.params;
@@ -115,11 +116,13 @@ export function statusRows(records, program, filter) {
   const seen = new Set();
   for (const record of live.filter(filter.live)) {
     seen.add(record.task);
-    const under = readJSON(taskPaths(program, record.task).meta, {}).parentTask;
+    const meta = readJSON(taskPaths(program, record.task).meta, {});
+    const under = meta.parentTask;
     const report = readJSON(taskPaths(program, record.task).reportJSON, undefined);
     const questions = questionsOf(program, record.uuid);
     const subs = live.filter(candidate => record.uuid && candidate.parent === record.uuid);
     rows.push(statusRow(record.task, program, report, {
+      title: meta.title,
       under,
       subWorkers: subs.length
         ? { total: subs.length, working: subs.filter(candidate => (statuses.get(candidate.paneID)?.status || "unknown") === "working").length }
@@ -135,7 +138,7 @@ export function statusRows(records, program, filter) {
   }
   for (const row of taskRows(program)) {
     if (seen.has(row.task) || !filter.closed(row)) continue;
-    rows.push(statusRow(row.task, program, row.report, { pane: null, agent: "closed", under: row.meta.parentTask }));
+    rows.push(statusRow(row.task, program, row.report, { pane: null, agent: "closed", under: row.meta.parentTask, title: row.meta.title, resolved: row.meta.resolved }));
   }
   return rows;
 }
@@ -146,7 +149,11 @@ export function statusRow(task, program, report, live) {
     task,
     // working, needs you, idle or closed: what the user sees on the worker's row.
     status: workerStatus(live.agent, live.reportState || report?.state),
+    // The thread's title in the user's words, where the coordinator gave one; `about` otherwise.
+    title: live.title,
     about: briefSummary(program, task),
+    // When a closed task was resolved: nothing is left for anyone.
+    resolved: live.resolved,
     // The worker that started this sub-worker, and a worker's own sub-workers.
     under: live.under,
     subWorkers: live.subWorkers,
@@ -264,9 +271,12 @@ export async function runAgentClose(command) {
   const subWorkers = records.filter(record => record.parent && !targets.includes(record)
     && targets.some(target => target.uuid && target.uuid === record.parent));
   targets = [...targets, ...subWorkers];
+  const resolved = [];
   for (const record of targets) {
     const files = taskPaths(program, record.task);
     const report = readJSON(files.reportJSON, { task: record.task, line: "Closed without a report.", outputs: [], history: [] });
+    // A done thread closed is resolved; an unfinished one stays open, stopped, to reopen later.
+    if (resolvesOnClose(report)) resolved.push(record.task);
     if (report.state !== "done") {
       report.state = closedReportState(report);
       report.updatedAt = new Date().toISOString();
@@ -275,10 +285,12 @@ export async function runAgentClose(command) {
     }
     closeOpenQuestions(program, record.uuid, "its pane was closed");
     runTMuxRequired(["kill-pane", "-t", record.paneID], "tmux kill-pane");
+    if (resolved.includes(record.task)) markResolved(program, record.task);
   }
   if (targets.length > 0) {
     writeStatusFile(program);
     notifyApp(own.sessionName);
   }
-  return { id: requestID("cli"), ok: true, result: { closed: targets.map(record => record.task), ...(subWorkers.length ? { withSubWorkers: subWorkers.map(record => record.task) } : {}) } };
+  const stopped = targets.map(record => record.task).filter(task => !resolved.includes(task));
+  return { id: requestID("cli"), ok: true, result: { closed: targets.map(record => record.task), resolved: resolved.length ? resolved : undefined, stopped: stopped.length ? stopped : undefined, ...(subWorkers.length ? { withSubWorkers: subWorkers.map(record => record.task) } : {}) } };
 }

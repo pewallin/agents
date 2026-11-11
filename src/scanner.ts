@@ -385,6 +385,12 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
     if (observedExternalSessionId) {
       rebindStateSnapshotToExternalSession(stateSnapshot, agentName, tmuxPaneId, observedExternalSessionId);
     }
+    // The session the agent runs now, as its hooks or its command line name it: the coordination
+    // supervisor records each one a worker runs (tasks/<task>/sessions.jsonl).
+    const externalSessionId = resolveAgentExternalSessionId({
+      stateSessionId: stateExternalSessionId(agentName, tmuxPaneId, stateSnapshot),
+      processSessionId: observedExternalSessionId,
+    });
 
     const resolvedTitle = resolvedPaneTitle(title, winname);
     const intent = stateIntent(agentName, tmuxPaneId, stateSnapshot)
@@ -404,6 +410,8 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
 
     results.push({
       session: tmuxPaneId,
+      agent: agentName,
+      ...(externalSessionId ? { externalSessionId } : {}),
       status,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,

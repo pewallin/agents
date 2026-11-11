@@ -6,12 +6,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { agentSessionFile } from "./agent-state.js";
 import { requestID } from "./app-socket.js";
-import { LANGUAGE_OPTION, asHint, coordinatorCLIName, coordinatorLanguage, ensureSharedCLI, languageSentence, writeBrief, writeStatusFile, writeTaskMeta, writeTaskReport } from "./briefs.js";
+import { LANGUAGE_OPTION, asHint, coordinatorCLIName, coordinatorLanguage, ensureSharedCLI, languageSentence, threadTitle, writeBrief, writeStatusFile, writeTaskMeta, writeTaskReport } from "./briefs.js";
 import { coordinatorToTakeOver, giveCoordinatorBackground, goneCoordinators, inheritCoordinatorBackground, programNotes, protocolFile, protocolText, skillFile, starterContext, starterOverview, takeOver, userInstructions, userInstructionsPath, waitForSpawnedRecord } from "./coordinator.js";
 import { shellQuote } from "./launch.js";
 import { enqueueMessage } from "./messages.js";
 import { fail, usage } from "./output.js";
-import { localPaneRef, paneIDFromRef, runTMuxRequired, setPaneOption, tmuxPaneOption } from "./panes.js";
+import { localPaneRef, paneIDFromRef, runTMux, runTMuxRequired, setPaneOption, tmuxPaneOption } from "./panes.js";
 import { paneRunsAgent } from "./processes.js";
 import { coordinationPaneRecords, coordinatorProgram, ensurePaneUUID, folderCoordinator, notifyApp, ownCoordinationRecord, readJSON, recordedCoordinatorProgram, taskPaths, uniqueTaskName, writeFileAtomic } from "./program.js";
 import { closeOpenQuestions } from "./questions.js";
@@ -19,7 +19,8 @@ import { closedReportState } from "./report.js";
 import { runAgentSpawn } from "./spawn.js";
 import { noteSubWorker, subWorkerLead } from "./spawn-support.js";
 import { deliverQueuedNow } from "./steer.js";
-import { ensureSupervisor } from "./supervisor-control.js";
+import { agentStatuses, ensureSupervisor } from "./supervisor-control.js";
+import { readSessionLines, recordCoordinatorSession, sessionsFile, threadsEpoch, transcriptLookup } from "./threads.js";
 
 export async function runAgentPromote(command) {
   const params = command.params;
@@ -38,7 +39,14 @@ export async function runAgentPromote(command) {
   const records = coordinationPaneRecords();
   const program = coordinatorProgram(record, params.program || old?.program, records);
   const notes = programNotes(program);
+  threadsEpoch(program);
   setPaneOption(pane, "@agents_role", "coordinator");
+  // The session that leads the program from now on (coordinators.jsonl); one that starts as
+  // coordinator has none yet, and the supervisor records it once it has.
+  const own = agentStatuses([record.paneID]).get(record.paneID);
+  if (own?.sessionId && own.agent) {
+    recordCoordinatorSession(program, { via: "promote", agent: own.agent, session: own.sessionId, uuid, cwd: tmuxPaneOption(record.paneID, "@agents_command_cwd") || undefined });
+  }
   const language = coordinatorLanguage(params, record);
   const contextFile = path.join(program, "CONTEXT.md");
   if (!fs.existsSync(contextFile)) writeFileAtomic(contextFile, starterContext(record));
@@ -176,12 +184,16 @@ export async function runAgentAdopt(command) {
     parentUUID: uuid,
     ...(sub ? { parentTask: sub.parentTask } : {}),
     adopted: true,
+    ...(params.title !== undefined ? { title: threadTitle(params.title) } : {}),
   });
   const pane = localPaneRef(target.paneID);
   ensureSharedCLI();
   setPaneOption(pane, "@agents_parent", uuid);
   setPaneOption(pane, "@agents_role", "worker");
   setPaneOption(pane, "@agents_task", task);
+  const shownTitle = readJSON(files.meta, {}).title;
+  if (shownTitle) setPaneOption(pane, "@agents_title", shownTitle);
+  else runTMux(["set-option", "-p", "-u", "-t", target.paneID, "@agents_title"]);
   setPaneOption(pane, "@agents_program", program);
   setPaneOption(pane, "@agents_report_state", "started");
   setPaneOption(pane, "@agents_report_at", String(Math.floor(Date.now() / 1000)));
@@ -235,7 +247,12 @@ export async function runAgentRespawn(command, currentSocketPath) {
   // The earlier worker's transcript: from its pane while it is there, else as its last report
   // recorded it.
   const since = Date.parse(meta.createdAt || "") || 0;
-  const previousSession = (running && agentSessionFile(running.paneID, since)) || readJSON(files.reportJSON, {}).session;
+  const transcriptOf = transcriptLookup();
+  const listed = readSessionLines(sessionsFile(program, command.task)).reverse()
+    .map(session => ({ agent: session.agent, sessionId: session.session, file: transcriptOf(session.agent, session.session, session.cwd) }))
+    .find(session => session.file);
+  const previousSession = [running && agentSessionFile(running.paneID, since), readJSON(files.reportJSON, {}).session, listed]
+    .find(session => session?.file && fs.existsSync(session.file));
   return runAgentSpawn({
     prompt: "",
     params: { ...params, pane: params.pane || localPaneRef(parent.paneID), parent: localPaneRef(parent.paneID) },

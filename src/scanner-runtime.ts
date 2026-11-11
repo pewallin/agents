@@ -262,6 +262,8 @@ export function inferModelFromContent(agent: string, content: string): string | 
 export function runtimeStateFromAgent(agent: AgentPane): AgentRuntimeState {
   return {
     session: agent.tmuxPaneId,
+    agent: agent.agent,
+    ...(agent.externalSessionId ? { externalSessionId: agent.externalSessionId } : {}),
     status: agent.status,
     cpuPercent: agent.cpuPercent,
     memoryMB: agent.memoryMB,

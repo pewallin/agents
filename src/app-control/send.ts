@@ -18,6 +18,7 @@ import { answerQuestion, claimWaitingAsk, openQuestionsFor, questionView, readQu
 import { hostsSession, promptHosted } from "./spawn-support.js";
 import { confirmSteer, findSteered, followOffer, settleOffer, steerCodex, steerThroughInbox } from "./steer.js";
 import { agentStatuses, ensureSupervisor, readFileOr } from "./supervisor-control.js";
+import { markUnresolved } from "./threads.js";
 
 // Longer than this, a message waits in a file and the line typed into the prompt points at it.
 export const INLINE_MESSAGE_LIMIT = 600;
@@ -58,6 +59,8 @@ export async function runAgentSend(command) {
   }
   const program = own.program || target.program;
   if (!program) fail(2, "noProgram", "Neither this pane nor the target belongs to a program.");
+  // A message to a resolved thread is work on it again.
+  if (target.task && target.program && !params["dry-run"]) markUnresolved(target.program, target.task);
   const mode = params.mode || "queue";
   const wake = !params["no-wake"];
   const targetUUID = ensurePaneUUID(target);
@@ -304,7 +307,7 @@ export function taskTarget(records, program, name) {
     .map(task => ({ task, distance: editDistance(wanted, task.toLowerCase()) }))
     .sort((a, b) => a.distance - b.distance)[0];
   const suggestion = closest && closest.distance <= Math.max(2, Math.floor(closest.task.length / 3)) ? closest.task : undefined;
-  const known = names.length ? ` Live workers: ${names.join(", ")}.` : " There are no live workers; agent status --all lists the tasks, and agent respawn <task> starts one again.";
+  const known = names.length ? ` Live workers: ${names.join(", ")}.` : " There are no live workers; agent status --all lists the tasks, and agent reopen <task> brings one back.";
   fail(2, "taskUnavailable", `No live worker has task '${name}'; nothing was sent.${suggestion ? ` Did you mean '${suggestion}'?` : ""}${known}`, suggestion ? { suggestion } : undefined);
 }
 

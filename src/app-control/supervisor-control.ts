@@ -12,6 +12,7 @@ import { fail, usage } from "./output.js";
 import { TMUX_TIMEOUT_MS, localPaneRef, setPaneOption } from "./panes.js";
 
 import { notifyApp, readJSON, taskPaths } from "./program.js";
+import { markUnresolved, recordTaskSession } from "./threads.js";
 import { processIdentity } from "./watch.js";
 
 export function processAlive(pid) {
@@ -115,7 +116,14 @@ export function agentStatuses(paneIDs) {
           const context = Number(entry.contextTokens) > 0 && Number(entry.contextMax) > 0
             ? Math.min(100, Math.round((Number(entry.contextTokens) / Number(entry.contextMax)) * 100))
             : undefined;
-          statuses.set(entry.session, { status: entry.stateSource ? entry.status : undefined, responsePreview: entry.responsePreview, contextUsed: context });
+          statuses.set(entry.session, {
+            status: entry.stateSource ? entry.status : undefined,
+            responsePreview: entry.responsePreview,
+            contextUsed: context,
+            // The agent and the session it runs now: a thread records every session (threads.ts).
+            agent: typeof entry.agent === "string" ? entry.agent : undefined,
+            sessionId: typeof entry.externalSessionId === "string" ? entry.externalSessionId : undefined,
+          });
         }
       }
       answered = true;
@@ -133,6 +141,8 @@ export function agentStatuses(paneIDs) {
       status: answered ? known?.status : known?.status || state?.state,
       responsePreview: known?.responsePreview || state?.responsePreview,
       contextUsed: known?.contextUsed,
+      agent: known?.agent,
+      sessionId: known?.sessionId,
     });
   }
   return statuses;
@@ -156,6 +166,10 @@ export function writeOwnReport(record, state, line, { outputs = [], details } = 
   const files = taskPaths(record.program, record.task);
   const previous = readJSON(files.reportJSON, {});
   const updatedAt = new Date().toISOString();
+  // Where the worker's own transcript is, for a worker that takes the task over from it.
+  const session = agentSessionFile(record.paneID, Date.now() - 6 * 60 * 60 * 1000);
+  // A worker that lives shorter than a supervisor tick is still in its thread's session list.
+  if (session) recordTaskSession(record.program, record.task, { agent: session.agent, session: session.sessionId, uuid: record.uuid });
   const report = {
     task: record.task,
     state,
@@ -164,12 +178,13 @@ export function writeOwnReport(record, state, line, { outputs = [], details } = 
     outputs: [...new Set([...(previous.outputs || []), ...outputs])],
     details: details === undefined ? previous.details : details,
     pane: record.paneID,
-    // Where the worker's own transcript is, for a worker that takes the task over from it.
-    session: agentSessionFile(record.paneID, Date.now() - 6 * 60 * 60 * 1000) || previous.session,
+    session: session || previous.session,
     history: [...(previous.history || []), { at: updatedAt, state, line }].slice(-50),
   };
   const rendered = writeTaskReport(files, report);
   writeStatusFile(record.program);
+  // A worker that reports is at work on its thread again.
+  markUnresolved(record.program, record.task);
   const pane = localPaneRef(record.paneID);
   setPaneOption(pane, "@agents_report", line);
   setPaneOption(pane, "@agents_report_state", state);

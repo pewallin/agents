@@ -244,6 +244,18 @@ export function parseCommand(argv) {
     return { kind: "agent-close", tasks: positional, params };
   }
 
+  if (command === "agent" && subcommand === "resolve") {
+    const { positional, params } = parseOptions(rest);
+    if (positional.length === 0) fail(64, "usage", "agent resolve requires task names.");
+    return { kind: "agent-resolve", tasks: positional, params };
+  }
+
+  if (command === "agent" && subcommand === "reopen") {
+    const { positional, params } = parseOptions(rest, new Set(["dry-run"]));
+    if (positional.length !== 1) fail(64, "usage", "agent reopen requires exactly one task name.");
+    return { kind: "agent-reopen", task: positional[0], params };
+  }
+
   if (command === "agent" && subcommand === "send") {
     const { positional, params } = parseOptions(rest, new Set(["no-wake"]));
     if (params.mode !== undefined && !["queue", "steer"].includes(params.mode)) {

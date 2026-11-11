@@ -12,6 +12,7 @@ import { runAgentAdopt, runAgentPromote, runAgentProtocol, runAgentRespawn } fro
 import { runAgentClose, runAgentReport, runAgentStatus, runAgentWait } from "./report.js";
 import { runAgentDelivery, runAgentSend } from "./send.js";
 import { runAgentSpawn } from "./spawn.js";
+import { runAgentReopen, runAgentResolve } from "./thread-commands.js";
 import { runSupervisor } from "./supervisor.js";
 import { runAgentRemind, runAgentWatch } from "./watch.js";
 
@@ -41,6 +42,12 @@ export async function runAppControl(argv) {
   }
   if (command.kind === "agent-close") {
     outputResponse(await runAgentClose(command));
+  }
+  if (command.kind === "agent-resolve") {
+    outputResponse(await runAgentResolve(command));
+  }
+  if (command.kind === "agent-reopen") {
+    outputResponse(await runAgentReopen(command, currentSocketPath));
   }
   if (command.kind === "agent-send") {
     outputResponse(await runAgentSend(command));

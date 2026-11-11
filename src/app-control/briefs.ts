@@ -16,6 +16,7 @@ import { oneLine } from "./processes.js";
 import { readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { subWorkerLead } from "./spawn-support.js";
 import { readFileOr } from "./supervisor-control.js";
+import { threadsEpoch } from "./threads.js";
 import { getSharedAppControlPath } from "../paths.js";
 
 // Settings the shared command keeps as they were where it was written, so an agent whose
@@ -198,7 +199,9 @@ export function writeBrief(program, task, text, parentRecord, language) {
     "",
     "The user may also write to you in your pane. Answer them there, and report again only when the",
     "task as a whole is done or blocked, not after each answer. Turns the user drives in your pane",
-    "do not wake your coordinator; it hears of them with its next message.",
+    "do not wake your coordinator; it hears of them with its next message. When they ask for work",
+    "that is not part of your task, it is a thread of its own: tell them so and pass it on to your",
+    `coordinator (\`${cli} agent send "<their ask>" --to parent\`) instead of doing it.`,
     "",
     "For a longer write-up (findings, evidence, what you verified and what you did not), write it to",
     "a file and add `--details-file <file>`; it goes into your report. A report.md you write yourself is",
@@ -243,15 +246,29 @@ export function writeBrief(program, task, text, parentRecord, language) {
   writeFileAtomic(files.brief, `${lines.join("\n")}\n`);
 }
 
+// task.json on each spawn of a task. Fields it does not set stay as they were (the thread's title
+// among them); a thread that starts again is no longer resolved.
 export function writeTaskMeta(program, task, meta) {
+  threadsEpoch(program);
   const files = taskPaths(program, task);
   const existing = readJSON(files.meta, {});
-  writeFileAtomic(files.meta, `${JSON.stringify({
+  const next = {
+    ...existing,
     task,
     createdAt: existing.createdAt || new Date().toISOString(),
     ...meta,
     spawns: (existing.spawns || 0) + 1,
-  }, null, 2)}\n`);
+  };
+  delete next.resolved;
+  writeFileAtomic(files.meta, `${JSON.stringify(next, null, 2)}\n`);
+}
+
+// A thread's title, in the user's words: one line, short.
+export function threadTitle(text) {
+  if (text === undefined) return undefined;
+  const title = oneLine(text, 80);
+  if (!title || text === true) fail(64, "usage", "--title needs a title, e.g. --title \"Fix Safari export button\".");
+  return title;
 }
 
 export function renderReport(report) {

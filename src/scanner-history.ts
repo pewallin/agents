@@ -1205,7 +1205,7 @@ export function loadHistoryForAgent(agent: string, cwdRaw: string, limit: number
 /**
  * The transcript an agent's harness keeps of a session, by its id: Claude Code's
  * projects/<dir>/<id>.jsonl, Codex's rollout-…-<id>.jsonl, Pi's sessions/<dir>/<time>_<id>.jsonl,
- * Kiro's (kiro-sessions.ts). For `agents session-file`: a coordinator points the agent after
+ * Kiro's (kiro-sessions.ts), Copilot's session-state/<id>/events.jsonl. For `agents session-file`: a coordinator points the agent after
  * another at the transcript of the one before it.
  */
 export function sessionTranscriptPath(agent: string, sessionId: string): string | undefined {
@@ -1236,6 +1236,10 @@ export function sessionTranscriptPath(agent: string, sessionId: string): string 
     case "kiro-cli":
     case "kiro-cli-chat":
       return kiroSessionTranscript(sessionId);
+    case "copilot": {
+      const file = join(homedir(), ".copilot", "session-state", sessionId, "events.jsonl");
+      return existsSync(file) ? file : undefined;
+    }
     default:
       return undefined;
   }
