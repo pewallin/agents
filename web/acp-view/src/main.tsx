@@ -642,10 +642,11 @@ function Receipt({ turn, cwd, onReview, onSend }: { turn: Turn; cwd: string; onR
             {changes.slice(0, 4).map((change) => <Chip key={change.path} target={fileTarget(change.path, shortPath(change.path, cwd))} />)}
             {changes.length > 4 && <span className="more">+{changes.length - 4}</span>}
           </span>
-          <span className="sp" />
-          <button className="pbtn" type="button" onClick={onReview}>Review</button>
-          <button className="pbtn" type="button" onClick={() => onSend("Commit the changes you made in this turn, with a message that says what they do.")}>Commit</button>
-          <button className="pbtn" type="button" onClick={() => onSend("Undo the changes you made in this turn.")}>Undo</button>
+          <span className="receipt-acts">
+            <button className="pbtn" type="button" onClick={onReview}>Review</button>
+            <button className="pbtn" type="button" onClick={() => onSend("Commit the changes you made in this turn, with a message that says what they do.")}>Commit</button>
+            <button className="pbtn" type="button" onClick={() => onSend("Undo the changes you made in this turn.")}>Undo</button>
+          </span>
         </>
       )}
     </div>
@@ -1637,7 +1638,7 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
               </label>
             )}
             {options.map((option) => (
-              <label className="opt" key={option.id} title={`${settingTitle(option, info.agent.id)}: ${currentName(option)}`}>
+              <label className={`opt${option.category === "model" ? " model" : ""}`} key={option.id} title={`${settingTitle(option, info.agent.id)}: ${currentName(option)}`}>
                 <span className="lb">{settingLabel(option, info.agent.id)}</span> <span className="v">{currentName(option)}</span> <Down />
                 <select value={String(option.currentValue)} aria-label={settingLabel(option, info.agent.id)}
                   onChange={(event) => void session.setConfigOption(option.id, event.target.value)}>

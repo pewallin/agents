@@ -270,6 +270,9 @@ th, td { overflow-wrap: break-word; }
 /* working: the current step shimmers */
 .current { display: flex; }
 .shim { display: inline-flex; gap: 8px; align-items: baseline; font-size: calc(var(--fs) - 0.5px); min-width: 0; }
+.shim .txt { min-width: 0; }
+/* A step that opens hugs its text, but never beyond the column: a long command trails off. */
+.current { max-width: 100%; min-width: 0; }
 .shim .txt { background: linear-gradient(90deg, var(--dim) 0%, var(--dim) 40%, var(--fg) 50%, var(--dim) 60%, var(--dim) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.2s linear infinite; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shim .m { color: var(--faint); font-variant-numeric: tabular-nums; font-size: calc(var(--fs) - 1.5px); flex: none; }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
@@ -318,18 +321,21 @@ th, td { overflow-wrap: break-word; }
 /* The field floats over the end of the conversation, which scrolls on under it. */
 .dock { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 18px 14px; pointer-events: none; z-index: 3; }
 .dock .inner { max-width: calc(var(--fs) * 66); margin: 0 auto; display: flex; flex-direction: column; gap: 6px; position: relative; pointer-events: auto; }
-.status { display: flex; align-items: center; gap: 10px; padding: 0 8px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
+/* In a narrow view the keys go under the time rather than breaking inside either. */
+.status { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 0 8px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
+.status > span:not(.sp) { white-space: nowrap; }
 .status .sp { flex: 1; }
 .status kbd { font: calc(var(--fs-mono) - 1px) var(--mono); color: var(--faint); }
-.qd { align-self: flex-end; max-width: 80%; font-size: calc(var(--fs) - 1px); color: var(--dim); border: 1px dashed var(--faint); border-radius: var(--radius-lg); padding: 5px 12px; }
-.qd:not(.editing) { display: flex; align-items: baseline; gap: 8px; }
-.qd .qt { white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+.qd { align-self: flex-end; max-width: max(80%, min(100%, 22em)); font-size: calc(var(--fs) - 1px); color: var(--dim); border: 1px dashed var(--faint); border-radius: var(--radius-lg); padding: 5px 12px; }
+/* The text keeps a readable width: in a narrow view "sent when the turn is done" goes under it. */
+.qd:not(.editing) { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.qd .qt { flex: 1 1 12em; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
 .qd.offered .qt { cursor: default; }
 .qd small { color: var(--faint); font-size: calc(var(--fs) - 2.5px); white-space: nowrap; }
 .qd .qx { flex: none; align-self: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--faint); display: grid; place-items: center; cursor: pointer; }
 .qd .qx:hover { background: var(--tint2); color: var(--fg); }
 .qd .qx svg { width: 9px; height: 9px; }
-.qd.editing { width: 80%; font: inherit; font-size: calc(var(--fs) - 1px); color: var(--fg); background: transparent; border-style: solid; resize: none; outline: none; }
+.qd.editing { width: max(80%, min(100%, 22em)); font: inherit; font-size: calc(var(--fs) - 1px); color: var(--fg); background: transparent; border-style: solid; resize: none; outline: none; }
 .box { background: var(--field); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border-radius: var(--radius-lg); box-shadow: 0 0 0 1px var(--edge), var(--shadow); padding: 9px 10px 7px 13px; display: flex; flex-direction: column; gap: 6px; }
 .box .input { all: unset; display: block; width: 100%; min-height: 20px; line-height: 1.45; cursor: text; max-height: 40vh; overflow-y: hidden; resize: none; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
 .box .input::placeholder { color: var(--faint); }
@@ -341,6 +347,8 @@ th, td { overflow-wrap: break-word; }
 .box .row { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; min-width: 0; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
 .box .row > * { flex: none; }
 .box .row > .opt:not(.level) { flex: 0 1 auto; min-width: 44px; }
+/* The model's long name gives up its width before a short choice (Default, High) loses a letter. */
+.box .row > .opt.model { flex-shrink: 100000; }
 .box .row .sp { flex: 1 1 0; min-width: 2px; }
 .opt .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .more.fold-only, .pop.more-pop .it.folded { display: none; }
@@ -364,7 +372,7 @@ th, td { overflow-wrap: break-word; }
 .opt:hover, .opt:focus-within { background: var(--tint); color: var(--fg); }
 .opt svg { width: 9px; height: 9px; }
 .opt select { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; font-size: calc(var(--fs) - 1px); }
-.ring { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-size: calc(var(--fs) - 2.5px); font-variant-numeric: tabular-nums; margin-right: 6px; }
+.ring { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--faint); font-size: calc(var(--fs) - 2.5px); font-variant-numeric: tabular-nums; margin-right: 6px; }
 .ring svg { width: 13px; height: 13px; }
 /* Send, Ink: the text colour with a faint sheen once there is something to send, grey before.
    The arrow lifts on hover and flies off when it sends; while the agent works it is Stop. */
@@ -644,7 +652,8 @@ th, td { overflow-wrap: break-word; }
 .receipt .delta { font-variant-numeric: tabular-nums; }
 .receipt .files { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .receipt .more { color: var(--dim); }
-.receipt .sp { flex: 1; }
+/* Review, Commit and Undo go together, at the end of the line or whole on the next. */
+.receipt .receipt-acts { display: inline-flex; gap: 10px; margin-left: auto; flex: none; }
 .pbtn { all: unset; cursor: pointer; display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: var(--radius-sm); background: var(--tint); color: var(--fg); font-size: calc(var(--fs) - 1.5px); }
 .pbtn:hover { background: var(--tint2); }
 @media (prefers-reduced-motion: reduce) { .receipt.draw .done path { animation: none; } }
