@@ -80,7 +80,11 @@ export function extractClaudeRenameTitleFromTranscript(lines: string[]): string 
   for (const line of lines) {
     if (!line) continue;
     try {
-      const entry = JSON.parse(line) as { type?: string; subtype?: string; content?: string };
+      const entry = JSON.parse(line) as { type?: string; subtype?: string; content?: string; customTitle?: string };
+      if (entry.type === "custom-title") {
+        renamedTitle = entry.customTitle?.trim() || undefined;
+        continue;
+      }
       if (entry.type !== "system" || entry.subtype !== "local_command" || !entry.content?.includes("<command-name>/rename</command-name>")) continue;
       const match = entry.content.match(/<command-args>(.*?)<\/command-args>/s);
       const candidate = match?.[1]?.trim();
@@ -559,9 +563,31 @@ function expandHomePath(pathLike?: string): string | undefined {
   return pathLike.startsWith("~/") ? join(homedir(), pathLike.slice(2)) : pathLike;
 }
 
+// A prompt that starts with markup is read for its message. Text outside its elements is the
+// message (an element before it is context attached to it, `<system-reminder>…</system-reminder>
+// fix the login`); a prompt of elements only is the first element with text, read the same way
+// inside: a child element with text is the message and loose text beside it the framing of a
+// message another agent or a host wrapped (`<relay …>framing<note>the brief</note></relay>`).
+export function unwrappedPromptText(raw: string): string {
+  const text = raw.trim();
+  if (!/^<[A-Za-z]/.test(text)) return text;
+  const elements = [...text.matchAll(/<([A-Za-z][\w:.-]*)\b[^>]*>([\s\S]*?)<\/\1>/g)];
+  if (elements.length === 0) return text;
+  const loose = elements.reduce((rest, element) => rest.replace(element[0], "\n"), text).trim();
+  if (loose) return loose;
+  const element = elements.find((match) => match[2].replace(/<[^>]+>/g, "").trim());
+  return element ? unwrappedElementText(element[2]) : "";
+}
+
+function unwrappedElementText(inner: string): string {
+  const child = [...inner.matchAll(/<([A-Za-z][\w:.-]*)\b[^>]*>([\s\S]*?)<\/\1>/g)]
+    .find((match) => match[2].replace(/<[^>]+>/g, "").trim());
+  return child ? unwrappedElementText(child[2]) : inner.trim();
+}
+
 function summarizeText(raw?: string): string | undefined {
   if (!raw) return undefined;
-  const lines = raw
+  const lines = unwrappedPromptText(raw)
     .replace(/<[^>]+>/g, " ")
     .split("\n")
     .map((line) => line.trim())
@@ -569,7 +595,14 @@ function summarizeText(raw?: string): string | undefined {
     .filter((line) => !/^<[^>]+>$/.test(line));
   const first = lines.find((line) => line !== "[object Object]");
   if (!first) return undefined;
-  return first.replace(/\s+/g, " ").slice(0, 160);
+  // A brief's label says nothing of what it is about ("Goal:", "Mål:", as a thread's title).
+  const unlabelled = first.replace(/^(goal|task|objective|aim|mål|uppgift)\s*(\([^)]*\))?\s*:\s*/i, "");
+  const line = unlabelled && unlabelled !== first ? capitalized(unlabelled) : first;
+  return line.replace(/\s+/g, " ").slice(0, 160);
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function isLikelyUUID(raw?: string): boolean {
@@ -603,6 +636,45 @@ export function historyTitleMatchesPaneTitle(historyTitle: string, paneTitle: st
   if (!history || !pane) return false;
   if (history === pane) return true;
   return history.length >= 12 && pane.includes(history);
+}
+
+// The first prompt a conversation titled by it opened with, for retitledSharedOpenings.
+const firstPrompts = new WeakMap<AgentSessionHistoryItem, string>();
+
+function promptSentences(line: string): string[] {
+  return line.split(/(?<=[.!?;])\s+/).map((sentence) => sentence.trim()).filter(Boolean);
+}
+
+const sentenceKey = (sentence: string) => sentence.replace(/\s+/g, " ").toLowerCase();
+
+/**
+ * Conversations whoever started them opened alike ("Reply in Swedish; all artifacts in
+ * English. Repo …, checkout …"): a sentence of a first prompt that another conversation of the
+ * list opened with too says nothing of either, so a title made from the prompt starts at its
+ * first sentence of its own.
+ */
+export function retitledSharedOpenings(items: AgentSessionHistoryItem[]): AgentSessionHistoryItem[] {
+  const prompts = new Map(items.flatMap((item) => {
+    const prompt = firstPrompts.get(item);
+    if (!prompt) return [];
+    const lines = unwrappedPromptText(prompt).replace(/<[^>]+>/g, " ").split("\n").map((line) => line.trim()).filter(Boolean);
+    return [[item, lines.map(promptSentences)] as const];
+  }));
+  const seenIn = new Map<string, number>();
+  for (const lines of prompts.values()) {
+    for (const key of new Set(lines.flat().map(sentenceKey))) seenIn.set(key, (seenIn.get(key) || 0) + 1);
+  }
+  return items.map((item) => {
+    const lines = prompts.get(item);
+    if (!lines) return item;
+    for (const sentences of lines) {
+      const own = sentences.findIndex((sentence) => (seenIn.get(sentenceKey(sentence)) || 0) < 2);
+      if (own < 0) continue;
+      const title = own === 0 ? summarizeText(sentences.join(" ")) : summarizeText(capitalized(sentences.slice(own).join(" ")));
+      return title && title !== item.title ? { ...item, title } : item;
+    }
+    return item;
+  });
 }
 
 function withShortTitle(item: AgentSessionHistoryItem): AgentSessionHistoryItem {
@@ -666,6 +738,9 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
     const sessionId = basename(filePath, ".jsonl");
     const renamedTitle = extractClaudeRenameTitleFromTranscript(lines);
     let firstUserTitle: string | undefined;
+    let firstUserPrompt: string | undefined;
+    // The title Claude gives a conversation itself (its latest).
+    let aiTitle: string | undefined;
     let model: string | undefined;
     let latestActivityAt: number | undefined;
     // Something said to Claude or by it: a session only opened, or with only /login, is left out.
@@ -675,7 +750,9 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
       if (!line) continue;
       try {
         const entry = JSON.parse(line) as any;
-        if (entry?.type === "assistant") {
+        if (entry?.type === "ai-title" && typeof entry.aiTitle === "string" && entry.aiTitle.trim()) {
+          aiTitle = entry.aiTitle.trim();
+        } else if (entry?.type === "assistant") {
           hasConversation = true;
           latestActivityAt = latestTimestamp(latestActivityAt, parseSessionTimestamp(entry.timestamp));
         } else if (entry?.type === "user" && isClaudeConversationUserEntry(entry)) {
@@ -698,6 +775,7 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
             && !candidate.startsWith("/")
             && !candidate.includes("<command-name>/")) {
             firstUserTitle = candidate;
+            firstUserPrompt = String(messageContent);
           }
         }
         if (!model && typeof entry?.message?.model === "string") model = entry.message.model;
@@ -707,12 +785,13 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
     const isCurrent = !!currentSessionId && sessionId === currentSessionId;
     if (!hasConversation && !isCurrent) return null;
     const mtimeMs = statSync(filePath).mtimeMs;
-    const resolvedTitle = renamedTitle || indexEntry?.summary || firstUserTitle || summarizeText(indexEntry?.firstPrompt) || sessionId;
+    const summary = indexEntry?.summary || aiTitle;
+    const resolvedTitle = renamedTitle || summary || firstUserTitle || summarizeText(indexEntry?.firstPrompt) || sessionId;
     const titleSource = renamedTitle ? "rename"
-      : indexEntry?.summary ? "summary"
+      : summary ? "summary"
       : (firstUserTitle || summarizeText(indexEntry?.firstPrompt)) ? "first_prompt"
       : "fallback";
-    return {
+    const item: AgentSessionHistoryItem = {
       sessionId,
       title: resolvedTitle,
       titleSource,
@@ -721,6 +800,8 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
       ...(isCurrent ? { current: true } : {}),
       ...resumeInfoFields("claude", { sessionId }),
     };
+    if (titleSource === "first_prompt" && firstUserPrompt) firstPrompts.set(item, firstUserPrompt);
+    return item;
   } catch {
     return null;
   }
@@ -1199,7 +1280,7 @@ export function loadHistoryForAgent(agent: string, cwdRaw: string, limit: number
     default:
       return [];
   }
-  return items.map(withShortTitle);
+  return retitledSharedOpenings(items).map(withShortTitle);
 }
 
 /**

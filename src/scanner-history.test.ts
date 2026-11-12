@@ -11,9 +11,18 @@ const savedHome = process.env.HOME;
 const savedCodexHome = process.env.CODEX_HOME;
 process.env.HOME = home;
 process.env.CODEX_HOME = join(home, ".codex");
-const { loadHistoryForAgent } = await import("./scanner-history.js");
+const { loadHistoryForAgent, unwrappedPromptText } = await import("./scanner-history.js");
 
 const cwd = "/repo/app";
+// A first prompt another agent wrapped: an envelope, its framing sentence, then the brief.
+const relay = [
+  '<relay from="coordinator" session="s1" reason="spawn">',
+  "  The note below was written by the coordinator session, not by your user.",
+  "  <note>",
+  "      Follow-up to the tab work in the Mac app. Peter tried the build and wrote:",
+  "  </note>",
+  "</relay>",
+].join("\n");
 const write = (path: string, text: string) => {
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, text);
@@ -33,6 +42,19 @@ beforeAll(() => {
     { type: "user", timestamp: "2026-11-09T11:00:01Z", message: { role: "user", content: "<command-name>/login</command-name>" } },
   ));
   write(join(claude, "empty.jsonl"), "");
+
+  const titled = join(home, ".claude", "projects", "-repo-titles");
+  const claudeSaid = (id: string, content: string, ...more: unknown[]) => write(join(titled, `${id}.jsonl`), lines(
+    { type: "user", timestamp: "2026-11-09T10:00:00Z", message: { role: "user", content } },
+    { type: "assistant", timestamp: "2026-11-09T10:01:00Z", message: { role: "assistant", content: [{ type: "text", text: "On it" }] } },
+    ...more,
+  ));
+  claudeSaid("wrapped", relay);
+  claudeSaid("labelled", "Goal: move the secrets into a keychain\nThe scripts read them from there.");
+  claudeSaid("ai-named", relay, { type: "ai-title", aiTitle: "Keep tab widths steady", sessionId: "ai-named" });
+  claudeSaid("alike-1", "Reply in Swedish; all artifacts in English. Fix the export button on Safari.");
+  claudeSaid("alike-2", "Reply in Swedish; all artifacts in English. Make the tabs keep their width.");
+  claudeSaid("renamed", relay, { type: "ai-title", aiTitle: "Keep tab widths steady" }, { type: "custom-title", customTitle: "Tabs that stay put" });
 
   const pi = join(home, ".pi", "agent", "sessions", "--repo-app--");
   write(join(pi, "2026-11-09_pi-said.jsonl"), lines(
@@ -95,5 +117,34 @@ describe("agents history leaves out sessions with nothing said in them", () => {
   it("Codex: a thread only opened, or a subagent's, is left out", () => {
     expect(ids("codex")).toEqual(["cx-said"]);
     expect(ids("codex", "cx-opened").sort()).toEqual(["cx-opened", "cx-said"]);
+  });
+});
+
+describe("agents history titles a conversation by what it is about", () => {
+  const titles = () => Object.fromEntries(loadHistoryForAgent("claude", "/repo/titles", 10).map((item) => [item.sessionId, [item.title, item.titleSource]]));
+
+  it("reads a wrapped first prompt for its message, not the wrapper's framing", () => {
+    expect(titles().wrapped).toEqual(["Follow-up to the tab work in the Mac app. Peter tried the build and wrote:", "first_prompt"]);
+  });
+
+  it("drops a brief's label", () => {
+    expect(titles().labelled).toEqual(["Move the secrets into a keychain", "first_prompt"]);
+  });
+
+  it("starts past what conversations of the folder opened with alike", () => {
+    expect(titles()["alike-1"]).toEqual(["Fix the export button on Safari.", "first_prompt"]);
+    expect(titles()["alike-2"]).toEqual(["Make the tabs keep their width.", "first_prompt"]);
+  });
+
+  it("prefers the title Claude gives a conversation, and a name given to it over that", () => {
+    expect(titles()["ai-named"]).toEqual(["Keep tab widths steady", "summary"]);
+    expect(titles().renamed).toEqual(["Tabs that stay put", "rename"]);
+  });
+
+  it("unwraps markup by its structure", () => {
+    expect(unwrappedPromptText('<wake><project id="p"><thread><message from="human">can you add a test?</message></thread></project></wake>')).toBe("can you add a test?");
+    expect(unwrappedPromptText("<system-reminder>context</system-reminder>\nfix the login")).toBe("fix the login");
+    expect(unwrappedPromptText("<command-message>review</command-message>\n<command-name>/review</command-name>")).toBe("review");
+    expect(unwrappedPromptText("fix the <div> in the header")).toBe("fix the <div> in the header");
   });
 });
