@@ -1,11 +1,13 @@
 // @ts-nocheck
 // New panes through the app: splits, tabs and waiting for their shell.
 
+import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { readPaneLook, readTtyMode, shellState } from "../shell-prompt.js";
 import { readToken, requestAppControl, requestID } from "./app-socket.js";
 import { assertOK, controlHasArgument, shellQuote } from "./launch.js";
 import { fail, usage } from "./output.js";
-import { canonicalSourcePaneRecord, localPaneRef, resolveLocalSourcePane, runTMux } from "./panes.js";
+import { canonicalSourcePaneRecord, localPaneRef, paneIDFromRef, resolveLocalSourcePane, runTMux, tmuxArgs, TMUX_TIMEOUT_MS } from "./panes.js";
 
 export function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -85,13 +87,30 @@ export function octalEscape(value) {
     .join("");
 }
 
+// How long a spawn waits for a question the new shell asks as it starts to be answered.
+export const SHELL_QUESTION_WAIT_MS = 10 * 60 * 1000;
+
+// Where the new pane's shell is (shell-prompt.ts): at its prompt, asking a question, or busy.
+// tmux's output is kept as it is: the cursor's row counts the screen's leading blank lines.
+export function paneShellState(paneID, stillMs) {
+  const tmux = args => {
+    const result = spawnSync("tmux", tmuxArgs(args), { encoding: "utf8", timeout: TMUX_TIMEOUT_MS });
+    return result.status === 0 ? result.stdout.replace(/\n$/, "") : undefined;
+  };
+  const look = readPaneLook(paneID, tmux);
+  if (!look) return { state: "busy", screen: "" };
+  return { state: shellState(look, readTtyMode(look.tty), stillMs), screen: look.screen };
+}
+
 // The probe prints a marker that its own echo does not contain, so the marker shows up only once a
-// shell has run it. Text typed before the shell reads its terminal waits there, so nothing is
-// interrupted: a Ctrl-C here could cut a slow shell startup file short. Some startup prompts eat
-// typed input, so the probe is typed again now and then.
+// shell has run it. It is typed only once the shell waits at its prompt: text typed while a startup
+// file asks something (an updater's [Y/n]) would answer the question. While the shell asks, the wait
+// stands still (the user answers it in the pane's terminal, which Agents Next shows), up to
+// SHELL_QUESTION_WAIT_MS. Some prompts take typed input for themselves, so the probe is typed again
+// at the next prompt after a while.
 // The marker also says whether that shell finds the agent's executable: `exec` of a missing one
 // ends the shell and closes the pane, leaving nothing to read the error from.
-export async function waitForExecutableShell(currentSocketPath, token, paneRef, executable, cwd) {
+export async function waitForExecutableShell(currentSocketPath, token, paneRef, executable, cwd, shellAt = paneShellState) {
   const marker = `agents-app-shell-ready-${requestID("probe")}`;
   const found = `${marker}-found`;
   const missing = `${marker}-missing`;
@@ -99,11 +118,33 @@ export async function waitForExecutableShell(currentSocketPath, token, paneRef, 
     ? `[ -x ${shellQuote(path.resolve(cwd || process.cwd(), executable))} ]`
     : `command -v ${shellQuote(executable)} >/dev/null 2>&1`;
   const probe = `${check} && printf '${octalEscape(`${found}\n`)}' || printf '${octalEscape(`${missing}\n`)}'`;
-  const deadline = Date.now() + spawnTimeoutMs();
-  let nextProbeAt = 0;
+  const paneID = paneIDFromRef(paneRef);
+  const questionDeadline = Date.now() + SHELL_QUESTION_WAIT_MS;
+  let waitLeft = spawnTimeoutMs();
+  let last = Date.now();
+  let screen;
+  let stillSince = Date.now();
+  let typedAt;
+  let state = "busy";
 
-  while (Date.now() < deadline) {
-    if (Date.now() >= nextProbeAt) {
+  for (;;) {
+    const now = Date.now();
+    // Time spent on a question is the user's: only the rest counts against the spawn's timeout.
+    if (state !== "question") waitLeft -= now - last;
+    last = now;
+    const shell = shellAt(paneID, now - stillSince);
+    if (shell.screen !== screen) {
+      screen = shell.screen;
+      stillSince = now;
+    }
+    state = shell.state;
+    if (state === "question" && now >= questionDeadline) {
+      fail(1, "spawnTimedOut", `The shell in '${paneRef}' asks a question that nobody answered in ${SHELL_QUESTION_WAIT_MS / 60000} minutes: ${lastLines(screen)}`);
+    }
+    if (waitLeft <= 0) {
+      fail(1, "spawnTimedOut", `Timed out waiting for the shell in spawned pane '${paneRef}' to show its prompt; its screen ends: ${lastLines(screen)}`);
+    }
+    if (state === "prompt" && (typedAt === undefined || now - typedAt >= 3000)) {
       assertOK(
         await requestAppControl(
           currentSocketPath,
@@ -114,9 +155,10 @@ export async function waitForExecutableShell(currentSocketPath, token, paneRef, 
         ),
         "surface readiness probe"
       );
-      nextProbeAt = Date.now() + 3000;
+      typedAt = Date.now();
     }
-    await sleep(150);
+    await sleep(50);
+    if (typedAt === undefined) continue;
     const response = await requestAppControl(
       currentSocketPath,
       token,
@@ -140,7 +182,11 @@ export async function waitForExecutableShell(currentSocketPath, token, paneRef, 
       fail(1, code, `shell readiness failed: ${response.error?.message || "unknown error"}`);
     }
   }
-  fail(1, "spawnTimedOut", `Timed out waiting for spawned pane '${paneRef}' to start an executable shell.`);
+}
+
+function lastLines(screen) {
+  const lines = (screen || "").split("\n").map(line => line.trimEnd()).filter(Boolean).slice(-3);
+  return lines.length > 0 ? lines.join(" / ") : "(empty)";
 }
 
 export async function runWorkspacePlacement(command, currentSocketPath) {

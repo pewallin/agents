@@ -190,6 +190,19 @@ Who watches, and how cheaply:
   over as a normal switch does. A switch the user makes in between ends that: the pane stays where
   the user put it.
 
+**A spawn types nothing into a shell that is not at its prompt** (src/shell-prompt.ts, used by
+`agents app-control agent spawn`'s wait in src/app-control/placement.ts). The readiness probe used
+to be typed at once and again every 3 s, and a question in a startup file took it as its answer.
+Now the probe is typed only once the shell's line editor waits for a command: zle, readline and
+libedit put the tty in raw mode without echo then (`stty -a` on the pane's tty: `-icanon -echo`),
+while a `read` in `.zshrc` keeps echo on. A shell without a line editor (dash) counts as at its
+prompt once its screen has stood still for a second with the cursor after a prompt mark
+(`$ # % > ❯ ➜ » λ`) on the last line. A screen with a terminal question is never typed into, and
+the time it waits does not count against `AGENTS_APP_SPAWN_TIMEOUT_MS`; the user answers it in the
+terminal (in the ACP view the pane shows its terminal, as above), and the spawn goes on, or fails
+with `spawnTimedOut` after ten minutes. Measured on 2026-11-13 against a normal oh-my-zsh shell,
+10 spawns each, alternating: 1.29 s median before, 1.32 s after (means 1.33 s both).
+
 Checked live on 2026-11-12 with a private app instance and tmux server: a zsh question
 (`[Y/n]` before the typed `agents acp-session` command) showed the terminal within a second and,
 answered, the Claude view with its brief; Codex's hooks review behind a view that was already
