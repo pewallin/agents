@@ -1897,6 +1897,10 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
   const now = useNow(working);
   const [review, setReview] = useState<FileChange[] | null>(null);
   const myReviews = useRef(new Set<string>());
+  // The conversation comes in with a motion only where it can be seen: a page that opens hidden (a
+  // window behind others or a locked screen) keeps its animations at their first frame, and the
+  // conversation stays invisible in any picture of the pane until the window is shown.
+  const [arrives] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
 
   // Comments sent from a review this view opened beside the pane come back here as a message.
   useEffect(() => {
@@ -2029,7 +2033,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           const element = event.currentTarget;
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
         }}>
-          <div className="col arrive">
+          <div className={arrives ? "col arrive" : "col"}>
             <WorkerLine />
             {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
