@@ -211,10 +211,22 @@ export function fileTarget(path: string, rel: string): ChipTarget {
 
 /** Where a worker stands, as a mark: a check when done, a spinner while working, a dot otherwise
  *  (orange when it waits for you, red when blocked). */
+const STATE_WORDS: Record<WorkerState, string> = { "needs-you": "Needs you", blocked: "Needs you", done: "Ready for review", working: "Working", idle: "Stopped" };
+
+/** A thread's mark, a shape for each state so it reads without its colour, as the app draws it:
+ *  a half-filled orange circle when it needs you (a blocker too), a green circle with a check
+ *  when it is ready for review, the spinner while working, a dashed grey circle when stopped. */
 export function StateMark({ state }: { state: WorkerState }) {
-  if (state === "done") return <svg className="wk-mark done" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 5.2l2 2 4-4.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
-  if (state === "working") return <span className="wk-mark spin" aria-hidden="true" />;
-  return <span className={`wk-mark dot ${state}`} aria-hidden="true" />;
+  const word = STATE_WORDS[state];
+  if (state === "working") return <span className="wk-mark spin" role="img" aria-label={word} title={word} />;
+  return (
+    <svg className={`wk-mark ${state}`} viewBox="0 0 10 10" role="img" aria-label={word}>
+      <title>{word}</title>
+      {(state === "needs-you" || state === "blocked") && <><circle cx="5" cy="5" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M5 0.8 A4.2 4.2 0 0 0 5 9.2 Z" fill="currentColor" /></>}
+      {state === "done" && <><circle cx="5" cy="5" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M3 5.2l1.4 1.4 2.6-3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></>}
+      {state === "idle" && <circle cx="5" cy="5" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.2" strokeDasharray="2 1.6" />}
+    </svg>
+  );
 }
 
 /** `counts`: the lines the turn changed in the file, which a step's row shows at its end instead. */
@@ -498,7 +510,6 @@ function ImagePeek({ path }: { path: string }) {
   return <img className="peek-image" alt="" src={host ? thumbnailURL(host, path, 640) : undefined} />;
 }
 
-const WORKER_STATE_WORDS: Record<WorkerState, string> = { "needs-you": "waits for you", blocked: "blocked", done: "done", working: "working", idle: "idle" };
 
 /** A worker's pane: its thread, where it stands and its latest report (the app lists the thread
  *  with its sessions; the pane itself is a click away). Any other pane: its last lines. */
@@ -515,7 +526,7 @@ export function WorkerPeek({ worker }: { worker: CoordinationPane }) {
     <>
       <div className="peek-head"><span className="peek-title"><StateMark state={state} />{title}</span></div>
       <div className="peek-dim">
-        {[worker.threadTitle && worker.task ? worker.task : undefined, worker.agent, WORKER_STATE_WORDS[state]].filter(Boolean).join(" · ")}
+        {[worker.threadTitle && worker.task ? worker.task : undefined, worker.agent, STATE_WORDS[state]].filter(Boolean).join(" · ")}
       </div>
       {worker.reportLine && <div className="peek-text">{worker.reportLine}</div>}
     </>

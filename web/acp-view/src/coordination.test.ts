@@ -44,3 +44,15 @@ describe("worker state", () => {
     expect(workerInPane(coordination, "%9")).toBeUndefined();
   });
 });
+
+describe("a worker's state from the app", () => {
+  it("takes the app's thread state over its own reading, so every view agrees", async () => {
+    const { workerState } = await import("./coordination");
+    // Peter, 2026-11-12: the pane's report option was gone while the thread asked him; the app
+    // says needs-you, and the chip does too.
+    expect(workerState({ pane: "%4", status: "idle", threadState: "needs-you" })).toBe("needs-you");
+    expect(workerState({ pane: "%4", status: "idle", report: "ask-user", threadState: "stopped" })).toBe("idle");
+    expect(workerState({ pane: "%4", status: "idle", report: "done", threadState: "done" })).toBe("done");
+    expect(workerState({ pane: "%4", status: "idle", report: "ask-user" })).toBe("needs-you");
+  });
+});

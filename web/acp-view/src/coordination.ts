@@ -21,6 +21,9 @@ export interface CoordinationPane {
   agent?: string;
   /** The thread's title in the user's words (agent spawn --title); its task names it otherwise. */
   threadTitle?: string;
+  /** Where its thread stands, as the app decides it for every view: needs-you, done, working,
+   *  stopped or resolved. */
+  threadState?: string;
 }
 
 export interface Coordination {
@@ -57,6 +60,13 @@ export function needsUser(worker: CoordinationPane): boolean {
 export type WorkerState = "needs-you" | "blocked" | "done" | "working" | "idle";
 
 export function workerState(worker: CoordinationPane): WorkerState {
+  // The app's word wins: the tabs column, its thread list and these chips then never disagree.
+  switch (worker.threadState) {
+    case "needs-you": return "needs-you";
+    case "done": case "resolved": return "done";
+    case "working": return "working";
+    case "stopped": return "idle";
+  }
   if (needsUser(worker)) return "needs-you";
   if (worker.report === "blocked") return "blocked";
   if (worker.status === "working" || worker.status === "compacting" || worker.status === "pending") return "working";

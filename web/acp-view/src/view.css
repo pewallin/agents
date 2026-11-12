@@ -722,12 +722,11 @@ th, td { overflow-wrap: break-word; }
 .trail.coordination { margin-top: -6px; border-left-color: color-mix(in srgb, var(--hue) 40%, transparent); }
 
 /* a worker's state mark, on its chip */
-.wk-mark { flex: none; }
-.wk-mark.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-.wk-mark.dot.needs-you { background: var(--orange); }
-.wk-mark.dot.blocked { background: var(--red); }
-.wk-mark.done { width: 10px; height: 10px; color: var(--ok); }
-.wk-mark.spin { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--acc); border-right-color: transparent; animation: spin var(--duration-spin) linear infinite; }
+.wk-mark { flex: none; width: 10px; height: 10px; }
+.wk-mark.needs-you, .wk-mark.blocked { color: var(--orange); }
+.wk-mark.done { color: var(--ok); }
+.wk-mark.idle { color: var(--dim); }
+.wk-mark.spin { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--fg2); border-right-color: transparent; animation: spin var(--duration-spin) linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .wk-mark.spin { animation: none; } }
 
