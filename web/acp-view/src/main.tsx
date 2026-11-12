@@ -2131,7 +2131,7 @@ function SessionGate({ info }: { info: HostInfo }) {
   useEffect(() => {
     if (gate.kind !== "finding") return;
     // An agent just started opens its session a moment after its host is up.
-    // An agent held up as it starts (a question in its terminal, TerminalWait) has none for as
+    // An agent held up as it starts (a question in its terminal, TerminalWatch) has none for as
     // long as it is held up: the view goes on waiting, and opens the session once it has one.
     // Only a host that does not answer at all ends the wait.
     const current = async () => {
@@ -2165,7 +2165,7 @@ function SessionGate({ info }: { info: HostInfo }) {
     return () => { stopped = true; };
   }, [gate]);
   switch (gate.kind) {
-    case "finding": return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} showsTail /></>;
+    case "finding": return <><Opening text={openingText(info.agent.name)} /><TerminalWatch agentName={info.agent.name} showsTail /></>;
     case "starts-new": return <SessionView info={info} sessionId={null} />;
     case "no-session": return <Notice>The pane has no {info.agent.name} session yet{gate.problem ? ` (${gate.problem})` : ""}.</Notice>;
     case "waiting-for-idle": return <Opening text={`${info.agent.name} is working; the session shows when it is done`} />;
@@ -2175,77 +2175,61 @@ function SessionGate({ info }: { info: HostInfo }) {
 }
 
 interface TerminalScreen {
-  prompt: { text: string[]; options: Array<{ index: number; label: string; selected: boolean }>; hint: string[] } | null;
+  question: { kind: "menu" | "yes-no" | "continue"; text: string[] } | null;
   tail: string[];
 }
 
 /** How long the view waits for a session before it shows what the agent's terminal shows. */
 const TERMINAL_TAIL_AFTER_MS = 6_000;
-/** How long an open conversation watches its agent's terminal for a question it starts with. */
-const TERMINAL_PROMPT_WATCH_MS = 120_000;
+/** How often the view asks what the pane's terminal shows: while it opens, and once it is open
+ *  beside a TUI that shares its session (Codex). The host reads the screen only when it changed. */
+const TERMINAL_POLL_MS = 700;
+const TERMINAL_POLL_OPEN_MS = 1_500;
 
 /**
- * What the pane's agent shows in its terminal while the view waits for its session (the host's
- * terminal-prompt.ts): a question it waits on as it starts (Codex's hooks review, a folder to
- * trust), with its answers as buttons, or with `showsTail`, after a while without a session, the
- * lines its terminal shows (an error it stopped on). Without either the opening frame stays as it is.
+ * Watches the pane's terminal (the host's terminal-question.ts) for as long as a TUI or a shell
+ * runs in it: a question there (Codex's hooks review, a folder to trust, a shell's [Y/n]) is
+ * answered there. In Agents Next the view asks the app to show the terminal, and the app comes back
+ * to the view once it is answered; elsewhere the view says what the terminal asks. With
+ * `showsTail`, after a while without a session and without a question, it shows the lines the
+ * terminal stopped on (an error). A hand-off pane whose view has the session shows only the
+ * view's transcript: the host answers nothing for it.
  */
-function TerminalWait({ agentName, showsTail = false, forMs }: { agentName: string; showsTail?: boolean; forMs?: number }) {
+function TerminalWatch({ agentName, showsTail = false, pollMs = TERMINAL_POLL_MS }: { agentName: string; showsTail?: boolean; pollMs?: number }) {
   const [screen, setScreen] = useState<TerminalScreen | null>(null);
   const [late, setLate] = useState(false);
-  const [answering, setAnswering] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  const promptShown = useRef(false);
   useEffect(() => {
     let stopped = false;
-    const started = Date.now();
+    let asked = false;
     const timer = setTimeout(() => setLate(true), TERMINAL_TAIL_AFTER_MS);
     const poll = async () => {
       while (!stopped) {
-        // Past its watch, a question still shown stays until it is answered.
-        if (forMs !== undefined && Date.now() - started > forMs && !promptShown.current) { setScreen(null); return; }
-        const next = await hostJson<TerminalScreen>("/api/terminal-prompt").catch(() => null);
-        if (!stopped && next) { setScreen(next); promptShown.current = Boolean(next.prompt); }
-        await new Promise((resolve) => setTimeout(resolve, 700));
+        const next = await hostJson<TerminalScreen>("/api/terminal-question").catch(() => null);
+        if (stopped) return;
+        if (next) setScreen(next);
+        // Once per question: the app shows the terminal, and this page may stay loaded behind it.
+        if (next?.question && !asked && inMacApp()) window.location.href = APP_ACTIONS.terminalQuestion;
+        if (next) asked = Boolean(next.question);
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
       }
     };
     void poll();
     return () => { stopped = true; clearTimeout(timer); };
   }, []);
-  const prompt = screen?.prompt;
-  const tail = showsTail && late && !prompt && screen?.tail.length ? screen.tail : null;
-  if (!prompt && !tail) return null;
-  const answer = async (option: { index: number; label: string }) => {
-    setAnswering(true);
-    setProblem(null);
-    try {
-      const answered = await hostJson<{ screen: TerminalScreen }>("/api/terminal-prompt", option);
-      setScreen(answered.screen);
-    } catch (error) {
-      setProblem(error instanceof HostAnswer && error.hostMessage ? error.hostMessage : `The answer did not reach ${agentName}.`);
-    } finally {
-      setAnswering(false);
-    }
-  };
+  const question = screen?.question;
+  const tail = showsTail && late && !question && screen?.tail.length ? screen.tail : null;
+  if (question && inMacApp()) return null;
+  if (!question && !tail) return null;
   const terminal = inMacApp()
     ? <button type="button" className="link" onClick={() => { window.location.href = APP_ACTIONS.backToTerminal; }}>Show terminal</button>
     : null;
   return (
-    <div className="terminal-wait" role="dialog" aria-label={`${agentName} asks in its terminal`}>
-      {prompt ? (
+    <div className="terminal-wait" role="status">
+      {question ? (
         <>
           <div className="terminal-wait-title">{agentName} is waiting for an answer in its terminal</div>
-          {prompt.text.length > 0 && <pre className="terminal-wait-text">{prompt.text.join("\n")}</pre>}
-          <div className="terminal-wait-options">
-            {prompt.options.map((option) => (
-              <button key={option.index} type="button" disabled={answering} className={option.selected ? "selected" : undefined}
-                onClick={() => void answer(option)}>
-                {option.index}. {option.label}
-              </button>
-            ))}
-          </div>
-          {problem && <div className="terminal-wait-problem">{problem}</div>}
-          <div className="terminal-wait-foot">{forMs === undefined ? `The session opens here once ${agentName} goes on.` : `${agentName} goes on once it is answered.`} {terminal}</div>
+          <pre className="terminal-wait-text">{question.text.join("\n")}</pre>
+          <div className="terminal-wait-foot">Answer it in the pane's terminal; the view goes on once it is answered.</div>
         </>
       ) : (
         <>
@@ -2397,12 +2381,12 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
       return <ErrorNotice title={phase.failure.title} error={phase.failure.detail} agentName={info.agent.name}
         onRetry={() => setReconnects((count) => count + 1)} />;
     case "connecting":
-      return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} /></>;
+      return <><Opening text={openingText(info.agent.name)} /><TerminalWatch agentName={info.agent.name} /></>;
     case "open":
-      if (!session) return <><Opening text={openingText(info.agent.name)} /><TerminalWait agentName={info.agent.name} /></>;
-      // An agent that shares its session live (Codex) runs its TUI beside the view: one held up by a
-      // question as it starts says so over its conversation, for a while after the view opens.
-      return <><Conversation session={session} info={info} /><TerminalWait agentName={info.agent.name} forMs={TERMINAL_PROMPT_WATCH_MS} /></>;
+      if (!session) return <><Opening text={openingText(info.agent.name)} /><TerminalWatch agentName={info.agent.name} /></>;
+      // An agent that shares its session live (Codex) runs its TUI beside the view for as long as
+      // the view is open: a question it asks there is answered there.
+      return <><Conversation session={session} info={info} /><TerminalWatch agentName={info.agent.name} pollMs={TERMINAL_POLL_OPEN_MS} /></>;
   }
 }
 

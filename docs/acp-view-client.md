@@ -144,3 +144,56 @@ and `agents resume` therefore decide for themselves whether a session is open el
 (src/session-holders.ts): the agent panes' own sessions (what their hooks report), Kiro's
 locks, Codex's writer locks and Claude's process records, each held by a live process, located
 to the pane whose process tree holds it.
+
+## A question in the terminal (2026-11-12)
+
+A question in a pane's terminal is answered in the terminal. When the terminal behind a pane's
+ACP view waits for an answer, Agents Next shows the pane's terminal by itself, and shows the view
+again once the question is answered and the agent goes on. The view shows no cards or buttons for
+it.
+
+What counts as a question (src/terminal-question.ts; Agents Next's TerminalQuestion.swift has the
+same rules and patterns, and both tests read the same screens):
+
+- **A menu**: a run of numbered lines from 1 with exactly one marked as selected (`›❯▶➤➜→>`), with at
+  most three hint lines under it and no TUI prompt line (a line that starts with a selection mark)
+  among them (Codex's "Hooks need review"), or, without numbers, a block of lines with exactly one
+  marked right above a key hint that says Enter picks it ("Enter to confirm", "enter confirm"):
+  Claude Code 2.1's folder trust ("❯ No, exit" over "Yes, I trust this folder"). A list in an
+  agent's output has no mark, a numbered message Codex shows beside its prompt mark has Codex's
+  prompt under it, and a TUI's prompt has no Enter-to-confirm hint ("enter to send" is none).
+- **Yes or no**: the last non-empty line ends in `[Y/n]`, `(y/N)`, `[yes/no]`, `[y/n/q]`, `[N/y]`,
+  then at most `:`, `?` or `>`. A shell's `read -q`, oh-my-zsh's "Would you like to update? [Y/n]".
+- **A key to go on**: the last non-empty line starts with "Press" or "Hit" and Enter, Return, any
+  key or a key, and is short ("Press Enter to continue").
+
+Dialog frames (box-drawing characters) are left out before the lines are read.
+
+Who watches, and how cheaply:
+
+- **The view's host** (`GET /api/terminal-question`, `{question: {kind, text} | null, tail}`) reads
+  the pane only when its screen changed and came to rest: the pane's tty's modification time is
+  when it last took output (a stat); the screen is captured with `tmux capture-pane` once per change,
+  400 ms after the last output. A screen that moves (a spinner, streaming output) asks nothing. A
+  hand-off pane whose view has the session shows only the view's transcript (whose "Press Enter
+  here to go on in the terminal" would read as a question): the host answers nothing for it.
+- **The view** asks the host every 700 ms while it opens and every 1.5 s while it is open beside a
+  TUI that shares its session (Codex), for as long as the view is open. On a question it navigates
+  to `agents-next-action://back-to-terminal?question=1` once per question; outside Agents Next it
+  shows the question's lines in a quiet notice instead. After 6 s without a session and without a
+  question it still shows the terminal's last lines ("has not opened its session yet", Show
+  terminal).
+- **Agents Next** reads the pane itself, by the same rules, while its own opening frame shows before
+  the host is up (a shell that asks before it starts the agent), or while a hand-off TUI still has
+  the session (host status `in-terminal`), and after it showed the terminal, until the question is
+  gone for a second and the view's host is up. Then it shows the view again, which hands the session
+  over as a normal switch does. A switch the user makes in between ends that: the pane stays where
+  the user put it.
+
+Checked live on 2026-11-12 with a private app instance and tmux server: a zsh question
+(`[Y/n]` before the typed `agents acp-session` command) showed the terminal within a second and,
+answered, the Claude view with its brief; Codex's hooks review behind a view that was already
+open sent the pane to its terminal (the view's request), and answered, back to the view with
+Codex's answer; the same review after a shell question kept the terminal until both were
+answered. The host read Claude 2.1.319's folder trust in a pane whose TUI ran. A Claude pane that
+starts in its view runs no TUI, so its folder trust never shows there.

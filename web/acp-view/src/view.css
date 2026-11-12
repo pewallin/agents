@@ -800,7 +800,7 @@ th, td { overflow-wrap: break-word; }
 }
 .trail .remark:has(> .ln) { max-width: none; }
 
-/* What the agent asks in its terminal while the view waits for its session (TerminalWait). */
+/* What the agent's terminal shows while the view waits for its session (TerminalWatch). */
 .terminal-wait {
   position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%);
   width: min(560px, calc(100vw - 32px)); max-height: 70vh; overflow: auto;
@@ -813,15 +813,6 @@ th, td { overflow-wrap: break-word; }
   margin: 0; font-family: var(--mono); font-size: var(--fs-mono); white-space: pre-wrap; word-break: break-word;
   color: var(--fg2); background: var(--codebg); border-radius: var(--radius-md); padding: 8px 10px;
 }
-.terminal-wait-options { display: grid; gap: 6px; }
-.terminal-wait-options button {
-  font: inherit; text-align: left; color: var(--fg); background: var(--tint); border: 1px solid var(--hair);
-  border-radius: var(--radius-md); padding: 6px 10px; cursor: pointer;
-}
-.terminal-wait-options button:hover:not(:disabled) { background: var(--tint2); }
-.terminal-wait-options button.selected { border-color: color-mix(in srgb, var(--acc) 45%, transparent); }
-.terminal-wait-options button:disabled { opacity: .6; }
-.terminal-wait-problem { color: var(--red); }
 .terminal-wait-foot { color: var(--dim); }
 .terminal-wait button.link { font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: pointer; }
 /* Last, so it wins over every class above: a control that is off takes no click. */

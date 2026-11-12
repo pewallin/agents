@@ -3,7 +3,7 @@
 // version it speaks (data-acp-bridge on <html>), so a view and an app of different releases are
 // noticed in the pane's log instead of failing quietly. Bump BRIDGE_VERSION when a channel or its
 // message changes.
-export const BRIDGE_VERSION = 2;
+export const BRIDGE_VERSION = 3;
 
 /** The app's message handlers (window.webkit.messageHandlers.<name>.postMessage). */
 export const APP_HANDLERS = {
@@ -36,6 +36,8 @@ export const PAGE_EVENTS = {
 /** Actions the page asks of the app by navigating to agents-next-action://<action>. */
 export const APP_ACTIONS = {
   backToTerminal: "agents-next-action://back-to-terminal",
+  /** The pane's terminal asks something: the app shows it, and comes back once it is answered. */
+  terminalQuestion: "agents-next-action://back-to-terminal?question=1",
   restartViewHost: "agents-next-action://restart-view-host",
   /** The pane's agent starts again on its session, under the CLI's current host. */
   restartInACPMode: "agents-next-action://restart-acp",
