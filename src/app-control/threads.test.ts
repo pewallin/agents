@@ -6,9 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import { writeTaskMeta } from "./briefs.js";
+import { permissionSummary } from "./delivery.js";
 import { taskPaths } from "./program.js";
 import {
-  appendSessionLine, derivedTitle, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
+  appendSessionLine, derivedTitle, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
   resolvesOnClose, sessionsFile, threadState, transcriptRecords, userTexts,
 } from "./threads.js";
 
@@ -233,4 +234,42 @@ test("a title made from a brief drops its label and stops at the first clause, e
   assert.equal(derivedTitle("Uppgift (fas 2): mät kallstarten"), "Mät kallstarten");
   assert.deepEqual(titleWarning("Fix Safari export button"), {});
   assert.equal(titleWarning("Follow up after Peter merged all eleven MRs from the triage").titleLong, true);
+});
+
+test("a permission in an agent's screen in a few words: Claude Code's prompt, Codex's command, a bare question", () => {
+  const claude = [
+    "⏺ I'll push the branch now.",
+    "────────────────────────────────────────────",
+    " Bash command",
+    "",
+    "   git push origin main",
+    "   Push the release commit",
+    "",
+    " Do you want to proceed?",
+    " ❯ 1. Yes",
+    "   2. Yes, and don't ask again for git push commands in /repo",
+    "   3. No, and tell Claude what to do differently (esc)",
+  ].join("\n");
+  assert.equal(permissionSummary(claude), "Bash command: git push origin main");
+  const boxed = ["╭──────────────────────╮", "│ Edit file            │", "│ src/app.ts           │", "│ Do you want to make this edit? │", "│ ❯ 1. Yes │", "╰──────────────────────╯"].join("\n");
+  assert.equal(permissionSummary(boxed), "Edit file: src/app.ts");
+  const codex = ["  Would you like to run the following command?", "", "  Reason: push the fix", "", "  $ git push origin main", "", "› 1. Yes, proceed (y)", "  2. No, and tell Codex what to do differently (esc)"].join("\n");
+  assert.equal(permissionSummary(codex), "git push origin main");
+  assert.equal(permissionSummary(["──────", "Allow this action?", "❯ 1. Yes", "  2. No"].join("\n")), "Allow this action?");
+  assert.equal(permissionSummary("❯ ready for input"), undefined);
+});
+
+test("a thread that needs you says what it waits on: the question for the user, else the blocker, else the permission", () => {
+  const report = { line: "Working again.", history: [
+    { at: "1", state: "ask-user", line: "Ship to TestFlight now or after the review?" },
+    { at: "2", state: "progress", line: "Working again.", by: "supervisor" },
+  ] };
+  assert.deepEqual(threadWaitingOn("ask-user", report, undefined, ""), { kind: "question", text: "Ship to TestFlight now or after the review?" });
+  assert.deepEqual(threadWaitingOn("blocked", { line: "No access to the staging database." }, undefined, ""), { kind: "blocker", text: "No access to the staging database." });
+  const screen = ["─────", "Bash command", "  git push origin main", "Do you want to proceed?", "❯ 1. Yes"].join("\n");
+  assert.deepEqual(threadWaitingOn("progress", report, { status: "attention" }, screen), { kind: "permission", text: "Waiting for permission: Bash command: git push origin main" });
+  // An ACP view's host names the tool call where the pane's screen shows none.
+  assert.deepEqual(threadWaitingOn("progress", report, { status: "attention", detail: "git push origin main" }, ""), { kind: "permission", text: "Waiting for permission: git push origin main" });
+  assert.deepEqual(threadWaitingOn("progress", report, { status: "attention" }, ""), { kind: "permission", text: "Waiting for permission" });
+  assert.deepEqual(threadWaitingOn("progress", report, { status: "question", detail: "Which branch should I use?" }, ""), { kind: "question", text: "Which branch should I use?" });
 });

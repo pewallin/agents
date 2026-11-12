@@ -29,10 +29,11 @@ import { commandWords, shellCommand } from "./command-words.js";
 /** What the view's clients see, reported as the pane's agent state: the app's "needs you" dot
  *  lights while a permission waits in the view, as it does for one in the terminal. */
 export function reportViewActivity(stateAgent: string, paneId: string) {
-  return (state: "needs-you" | "working" | "idle") => {
+  return (state: "needs-you" | "working" | "idle", waitingOn?: string) => {
     try {
-      // No context: an empty object here would be read as one, which the app cannot take.
-      reportState(stateAgent, paneId, state === "needs-you" ? "approval" : state);
+      // What a permission asks for is the state's detail while it waits (agents threads shows it),
+      // and goes with it.
+      reportState(stateAgent, paneId, state === "needs-you" ? "approval" : state, waitingOn && state === "needs-you" ? { detail: waitingOn } : { clearDetail: true });
     } catch {
       // The view works without the app's dot.
     }

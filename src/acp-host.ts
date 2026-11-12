@@ -56,8 +56,9 @@ export interface AcpHostOptions {
   /** Every line between a client and its adapter, for the pane's plain-text transcript. */
   onAgentLine?: (line: string) => void;
   onClientLine?: (line: string) => void;
-  /** Called when what the view's clients see changes: a permission waits, a prompt runs, or neither. */
-  onActivity?: (state: "needs-you" | "working" | "idle") => void;
+  /** Called when what the view's clients see changes: a permission waits (with what it asks
+   *  for), a prompt runs, or neither. */
+  onActivity?: (state: "needs-you" | "working" | "idle", waitingOn?: string) => void;
   /** Where the app's control socket is; defaults to the one agents-app-control uses. */
   appControl?: AppControlTarget;
   /** Keep one agent process started ahead of the next client. */
@@ -202,7 +203,8 @@ export interface AcpHandoffControl {
  */
 export class AcpActivity {
   private readonly prompts = new Set<string>();
-  private readonly asks = new Set<string>();
+  /** The permission requests waiting, each with what it asks for (its tool call's title). */
+  private readonly asks = new Map<string, string>();
 
   clientLine(client: number, line: string): void {
     const message = parseMessage(line);
@@ -214,13 +216,13 @@ export class AcpActivity {
   agentLine(client: number, line: string): void {
     const message = parseMessage(line);
     if (!message || message.id === undefined) return;
-    if (message.method === "session/request_permission") this.asks.add(`${client}:${message.id}`);
+    if (message.method === "session/request_permission") this.asks.set(`${client}:${message.id}`, message.permission || "");
     else if (message.method === undefined) this.prompts.delete(`${client}:${message.id}`);
   }
 
   clientGone(client: number): void {
-    for (const set of [this.prompts, this.asks]) {
-      for (const key of [...set]) if (key.startsWith(`${client}:`)) set.delete(key);
+    for (const keys of [this.prompts, this.asks]) {
+      for (const key of [...keys.keys()]) if (key.startsWith(`${client}:`)) keys.delete(key);
     }
   }
 
@@ -228,14 +230,22 @@ export class AcpActivity {
     if (this.asks.size > 0) return "needs-you";
     return this.prompts.size > 0 ? "working" : "idle";
   }
+
+  /** What the latest permission request waiting asks for ("git push origin main"), if any. */
+  get waitingOn(): string | undefined {
+    return [...this.asks.values()].reverse().find(Boolean);
+  }
 }
 
-function parseMessage(line: string): { id?: string; method?: string } | undefined {
+function parseMessage(line: string): { id?: string; method?: string; permission?: string } | undefined {
   try {
-    const value = JSON.parse(line) as { id?: unknown; method?: unknown };
+    const value = JSON.parse(line) as { id?: unknown; method?: unknown; params?: { toolCall?: { title?: unknown } } };
+    const title = value.method === "session/request_permission" ? value.params?.toolCall?.title : undefined;
     return {
       id: value.id === undefined || value.id === null ? undefined : String(value.id),
       method: typeof value.method === "string" ? value.method : undefined,
+      // One line, without the Markdown code marks agents put around a command or a path.
+      permission: typeof title === "string" ? title.replace(/`/g, "").replace(/\s+/g, " ").trim().slice(0, 160) || undefined : undefined,
     };
   } catch {
     return undefined;
@@ -374,10 +384,18 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   queue.onChange(() => broadcast("queue", { items: queue.list() }));
   queue.onSteered((message, state) => broadcast("steered", { id: message.id, text: message.text, state }));
   let lastActivity = activity.state;
+  let lastWaitingOn = activity.waitingOn;
   const activityChanged = () => {
     const state = activity.state;
-    if (state === lastActivity) return;
+    const waitingOn = activity.waitingOn;
+    if (state === lastActivity && waitingOn === lastWaitingOn) return;
+    const stateChanged = state !== lastActivity;
     lastActivity = state;
+    lastWaitingOn = waitingOn;
+    if (!stateChanged) {
+      options.onActivity?.(state, waitingOn);
+      return;
+    }
     if (state === "idle") {
       queue.turnEnded();
       // No view to send what waits (a worker the host runs on its own): the host prompts it.
@@ -388,7 +406,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         }
       }
     }
-    options.onActivity?.(state);
+    options.onActivity?.(state, waitingOn);
   };
   // The agent's own state as its hooks report it, sent to the views as it changes.
   let agentState: string | undefined;

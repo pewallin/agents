@@ -119,6 +119,8 @@ export function agentStatuses(paneIDs) {
           statuses.set(entry.session, {
             status: entry.stateSource ? entry.status : undefined,
             responsePreview: entry.responsePreview,
+            // What a permission or a question in the pane asks, where its agent or host says so.
+            detail: typeof entry.detail === "string" ? entry.detail : undefined,
             contextUsed: context,
             // The agent and the session it runs now: a thread records every session (threads.ts).
             agent: typeof entry.agent === "string" ? entry.agent : undefined,
@@ -141,6 +143,7 @@ export function agentStatuses(paneIDs) {
       status: answered ? known?.status : known?.status || state?.state,
       responsePreview: known?.responsePreview || state?.responsePreview,
       contextUsed: known?.contextUsed,
+      detail: known?.detail,
       agent: known?.agent,
       sessionId: known?.sessionId,
     });

@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { taskRows } from "./briefs.js";
+import { paneContent, permissionSummary } from "./delivery.js";
 import { programDirectories } from "./coordinator.js";
 import { agentNameFromLaunchCommand } from "./launch.js";
 import { fail } from "./output.js";
@@ -255,6 +256,18 @@ export function threadRows(program) {
 }
 
 // One thread as `agents threads` lists it. `record` is its live pane, if it has one.
+// What a thread that needs you waits on, for its row: the worker's question for the user, else
+// its blocker, else the question or permission waiting in its pane (from its screen, else from
+// what its agent or the ACP view's host said of it).
+export function threadWaitingOn(reportState, report, status, screen) {
+  const own = (report?.history || []).filter(entry => !entry.by && entry.state === reportState).at(-1);
+  if (reportState === "ask-user") return { kind: "question", text: own?.line || report?.line || "A question for you" };
+  if (reportState === "blocked") return { kind: "blocker", text: own?.line || report?.line || "Blocked" };
+  const asked = permissionSummary(screen) || status?.detail;
+  if (status?.status === "question") return { kind: "question", text: status?.detail || asked || "A question for you" };
+  return { kind: "permission", text: asked ? `Waiting for permission: ${asked}` : "Waiting for permission" };
+}
+
 export function threadEntry(program, row, record, status, transcriptOf) {
   const { meta, report, files } = row;
   const sessions = readSessionLines(sessionsFile(program, row.task)).reverse()
@@ -262,6 +275,7 @@ export function threadEntry(program, row, record, status, transcriptOf) {
   const reportState = record ? (record.reportState || report?.state) : report?.state;
   const state = threadState({ live: Boolean(record), agent: status?.status, reportState, resolved: meta.resolved });
   const title = threadTitleOf(program, row);
+  const waitingOn = state === "needs-you" ? threadWaitingOn(reportState, report, status, paneContent(record.paneID).text) : undefined;
   return {
     task: row.task,
     program,
@@ -272,6 +286,7 @@ export function threadEntry(program, row, record, status, transcriptOf) {
     createdAt: meta.createdAt,
     updatedAt: report?.updatedAt || meta.createdAt || folderTime(files.dir),
     line: report?.line || undefined,
+    waitingOn,
     reportState: report?.state || "started",
     outputs: report?.outputs?.length ? report.outputs : undefined,
     under: meta.parentTask || undefined,

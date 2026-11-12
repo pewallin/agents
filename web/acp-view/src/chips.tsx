@@ -528,7 +528,9 @@ export function WorkerPeek({ worker }: { worker: CoordinationPane }) {
       <div className="peek-dim">
         {[worker.threadTitle && worker.task ? worker.task : undefined, worker.agent, STATE_WORDS[state]].filter(Boolean).join(" · ")}
       </div>
-      {worker.reportLine && <div className="peek-text">{worker.reportLine}</div>}
+      {state === "needs-you" && worker.threadWaiting
+        ? <div className="peek-text">{worker.threadWaiting}</div>
+        : worker.reportLine && <div className="peek-text">{worker.reportLine}</div>}
     </>
   );
 }

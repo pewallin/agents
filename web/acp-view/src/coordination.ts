@@ -24,6 +24,9 @@ export interface CoordinationPane {
   /** Where its thread stands, as the app decides it for every view: needs-you, done, working,
    *  stopped or resolved. */
   threadState?: string;
+  /** What it waits on while it needs the user: its question for them, its blocker, or the
+   *  permission in its pane ("Waiting for permission: git push origin main"). */
+  threadWaiting?: string;
 }
 
 export interface Coordination {

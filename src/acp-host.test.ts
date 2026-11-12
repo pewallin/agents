@@ -310,6 +310,12 @@ describe("acp-host", () => {
     expect(activity.state).toBe("working");
     activity.agentLine(1, JSON.stringify({ jsonrpc: "2.0", id: 0, method: "session/request_permission", params: {} }));
     expect(activity.state).toBe("needs-you");
+    expect(activity.waitingOn).toBeUndefined();
+    // What it asks for is its tool call's title, on one line and without code marks.
+    activity.agentLine(1, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/request_permission", params: { toolCall: { toolCallId: "t", title: "`git push\n origin main`" } } }));
+    expect(activity.waitingOn).toBe("git push origin main");
+    activity.clientLine(1, JSON.stringify({ jsonrpc: "2.0", id: 1, result: { outcome: { outcome: "selected", optionId: "allow" } } }));
+    expect(activity.waitingOn).toBeUndefined();
     activity.clientLine(1, JSON.stringify({ jsonrpc: "2.0", id: 0, result: { outcome: { outcome: "cancelled" } } }));
     expect(activity.state).toBe("working");
     activity.agentLine(1, JSON.stringify({ jsonrpc: "2.0", id: 7, result: { stopReason: "end_turn" } }));

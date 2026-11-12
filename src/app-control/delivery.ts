@@ -45,6 +45,26 @@ export function screenChoiceText(text) {
   return oneLine(bottom.slice(Math.max(0, first - 3)).join(" "), 400);
 }
 
+// What a permission waiting in an agent's screen asks for, in a few words: the command a Codex
+// prompt shows ("$ git push origin main"), else the first two lines of the prompt's block, from a
+// rule or a box's edge down to its question (Claude Code's "Bash command" and the command), else
+// the question itself.
+export function permissionSummary(text) {
+  const lines = String(text || "").split(/\r?\n/).map(line => line.replace(/[│┃╭╮╰╯┌┐└┘]/g, "").trim());
+  const bottom = lines.slice(-24);
+  const choice = bottom.findIndex(line => SCREEN_CHOICE.test(line));
+  if (choice < 0) return undefined;
+  let start = choice;
+  while (start > 0 && choice - start < 8 && !/^[─━╌═-]{3,}$/.test(bottom[start - 1])) start--;
+  const block = bottom.slice(start, choice).filter(Boolean);
+  const command = block.find(line => line.startsWith("$ "));
+  if (command) return oneLine(command.slice(2), 120);
+  const question = block.findLastIndex(line => line.endsWith("?"));
+  const head = (question < 0 ? block : block.slice(0, question)).slice(0, 2);
+  if (head.length) return oneLine(head.join(": "), 120);
+  return question >= 0 ? oneLine(block[question], 120) : undefined;
+}
+
 // The states a hook reports; anything else (nothing, or "unknown") leaves it to the screen.
 export const HOOK_STATES = new Set(["working", "idle", "question", "attention", "compacting"]);
 
