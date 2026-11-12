@@ -560,6 +560,9 @@ th, td { overflow-wrap: break-word; }
 .peek-dim.more { padding: 2px 6px 0; }
 .peek-title { font-weight: 600; color: var(--fg); }
 .peek-text { color: var(--fg2); }
+/* a working worker's plan in its peek: the plan list's rows, without its own ground */
+.pl-list.peek-plan { padding: 2px 0 0; max-height: none; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.peek-plan .pl-item { padding: 2px 0; }
 .peek-code { font: calc(var(--fs-mono) - 1px)/1.55 var(--mono); background: var(--codebg); border-radius: var(--radius-sm); padding: 4px 0; overflow: hidden; }
 .peek-code > div { padding: 0 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; color: var(--fg2); }
 .peek-code .no { display: inline-block; min-width: 3ch; margin-right: 10px; text-align: right; color: var(--faint); }

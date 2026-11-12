@@ -13,11 +13,13 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, re
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
-import { getBuildInfo, getSelfArgv, getStateDir, getRuntimeTempDir } from "./paths.js";
+import { getBuildInfo, getSelfArgv, getStateDir } from "./paths.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
 import { AcpUsageFill } from "./acp-usage-fill.js";
+import { AcpPlanRecorder } from "./acp-plan.js";
+import { acpHostMetadataPath, acpHostPlanPath } from "./acp-host-paths.js";
 import { KiroSteering } from "./kiro-steering.js";
 import { AcpCompaction, compactionWay } from "./acp-compaction.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
@@ -280,17 +282,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
-/** Where the panes' ACP hosts keep their metadata (paths.ts: AGENTS_TMP_DIR, else the agents
- *  home's runtime/tmp). `acp-session` and `codex-session` start with this rule, and Agents Next
- *  finds a pane's host by it (AgentsPaths in AgentsCore). */
-export function acpHostRuntimeTempDir(env: NodeJS.ProcessEnv = process.env): string {
-  return getRuntimeTempDir(env);
-}
-
-export function acpHostMetadataPath(runtimeTempDir: string, paneId: string): string {
-  const normalized = paneId.trim().replace(/^%/, "pane-").replace(/[^A-Za-z0-9._-]/g, "-");
-  return join(runtimeTempDir, "acp-session", `${normalized || "pane-unknown"}.json`);
-}
+export { acpHostMetadataPath, acpHostRuntimeTempDir } from "./acp-host-paths.js";
 
 export function readAcpHostMetadata(path: string): AcpHostMetadata | undefined {
   try {
@@ -372,6 +364,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const metadataPath = acpHostMetadataPath(options.runtimeTempDir, options.paneId);
   const children = new Set<ChildProcess>();
   const activity = new AcpActivity();
+  const plan = new AcpPlanRecorder(acpHostPlanPath(metadataPath));
   const reviews = new ReviewStore();
   const events = new Set<ServerResponse>();
   const broadcast = (name: string, data: unknown) => {
@@ -672,6 +665,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
           diagnostics.message(client, "agent→view", line);
           usage?.agentLine(line);
           view.sessions.agentLine(line);
+          plan.agentLine(line);
           activity.agentLine(client, line);
           activityChanged();
           options.onAgentLine?.(line);
@@ -784,6 +778,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         sessionUsage: options.sessionUsage,
         onAgentLine: (line) => {
           diagnostics.message(0, "agent→host", line);
+          plan.agentLine(line);
           activity.agentLine(0, line);
           activityChanged();
           options.onAgentLine?.(line);
@@ -805,7 +800,10 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       closed = true;
       if (options.agentStateFile) unwatchFile(options.agentStateFile, agentStateChanged);
       queue.close();
-      if (readAcpHostMetadata(metadataPath)?.token === token) rmSync(metadataPath, { force: true });
+      if (readAcpHostMetadata(metadataPath)?.token === token) {
+        rmSync(metadataPath, { force: true });
+        plan.close();
+      }
       for (const client of wss.clients) client.close(1001, "host closing");
       for (const child of children) {
         child.stdin?.end();

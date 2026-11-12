@@ -519,6 +519,16 @@ function PaneOrWorkerPeek({ id }: { id: string }) {
   return <WorkerPeek worker={worker} />;
 }
 
+/** A step's mark in a plan: a check when done, a ring (spinning while the agent works) when under
+ *  way, an empty ring to do. */
+export function PlanMark({ status, working }: { status: string; working: boolean }) {
+  if (status === "completed") {
+    return <svg className="pl-mark done" viewBox="0 0 12 12" aria-label="Done"><path d="M2.2 6.4l2.5 2.5 5.1-5.4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+  }
+  if (status === "in_progress") return <span className={`pl-mark now${working ? " spin" : ""}`} aria-label="Under way" />;
+  return <span className="pl-mark todo" aria-label="To do" />;
+}
+
 export function WorkerPeek({ worker }: { worker: CoordinationPane }) {
   const state = workerState(worker);
   const title = worker.threadTitle ?? worker.task ?? worker.pane;
@@ -530,7 +540,19 @@ export function WorkerPeek({ worker }: { worker: CoordinationPane }) {
       </div>
       {state === "needs-you" && worker.threadWaiting
         ? <div className="peek-text">{worker.threadWaiting}</div>
-        : worker.reportLine && <div className="peek-text">{worker.reportLine}</div>}
+        : state === "working" && worker.threadStep
+          ? <div className="peek-text">{worker.threadStep}</div>
+          : worker.reportLine && <div className="peek-text">{worker.reportLine}</div>}
+      {state === "working" && worker.threadPlan?.length ? (
+        <ol className="pl-list peek-plan">
+          {worker.threadPlan.map((step, index) => (
+            <li key={index} className={`pl-item ${step.status}`}>
+              <PlanMark status={step.status} working={false} />
+              <span className="pl-text">{step.text}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
     </>
   );
 }

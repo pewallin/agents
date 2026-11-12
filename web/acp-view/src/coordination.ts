@@ -27,6 +27,9 @@ export interface CoordinationPane {
   /** What it waits on while it needs the user: its question for them, its blocker, or the
    *  permission in its pane ("Waiting for permission: git push origin main"). */
   threadWaiting?: string;
+  /** While it works, its agent's plan: "Step 3 of 5 · Write the tests" and every step. */
+  threadStep?: string;
+  threadPlan?: { text: string; status: string }[];
 }
 
 export interface Coordination {

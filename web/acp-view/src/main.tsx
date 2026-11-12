@@ -10,13 +10,13 @@ import { StrictMode, createContext, lazy, Suspense, useCallback, type ComponentP
 import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
-import type { ContentBlock, PlanEntry, SessionConfigOption } from "@agentclientprotocol/sdk";
+import type { ContentBlock, SessionConfigOption } from "@agentclientprotocol/sdk";
 import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type AllowAll } from "./acp-connection";
 import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOptions, withModels } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
-import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, ResultStrip, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
+import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, ResultStrip, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
@@ -1872,13 +1872,6 @@ function PlanLine() {
   );
 }
 
-function PlanMark({ status, working }: { status: PlanEntry["status"]; working: boolean }) {
-  if (status === "completed") {
-    return <svg className="pl-mark done" viewBox="0 0 12 12" aria-label="Done"><path d="M2.2 6.4l2.5 2.5 5.1-5.4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;
-  }
-  if (status === "in_progress") return <span className={`pl-mark now${working ? " spin" : ""}`} aria-label="Under way" />;
-  return <span className="pl-mark todo" aria-label="To do" />;
-}
 
 function Conversation({ session, info }: { session: AcpSession; info: HostInfo }) {
   const items = useSession((s) => s.items);

@@ -13,6 +13,8 @@ import os from "node:os";
 import path from "node:path";
 import { taskRows } from "./briefs.js";
 import { paneContent, permissionSummary } from "./delivery.js";
+import { acpHostMetadataPath, acpHostPlanPath, acpHostRuntimeTempDir } from "../acp-host-paths.js";
+import { readPlanFile } from "../acp-plan.js";
 import { programDirectories } from "./coordinator.js";
 import { agentNameFromLaunchCommand } from "./launch.js";
 import { fail } from "./output.js";
@@ -268,6 +270,24 @@ export function threadWaitingOn(reportState, report, status, screen) {
   return { kind: "permission", text: asked ? `Waiting for permission: ${asked}` : "Waiting for permission" };
 }
 
+// The plan a worker's agent keeps, as its pane's ACP host last saw it: how many steps are done,
+// the step under way (else the next), and the whole checklist. Nothing for a pane without a host
+// (an agent in its terminal: its hooks do not carry its todo list).
+export function threadPlan(paneID, read = readPlanFile) {
+  const file = read(acpHostPlanPath(acpHostMetadataPath(acpHostRuntimeTempDir(), paneID)));
+  if (!file?.steps?.length) return undefined;
+  const steps = file.steps.map(step => ({ text: step.text, status: step.status }));
+  const index = steps.findIndex(step => step.status === "in_progress");
+  const current = index >= 0 ? index : steps.findIndex(step => step.status === "pending");
+  return {
+    done: steps.filter(step => step.status === "completed").length,
+    total: steps.length,
+    current: current >= 0 ? current : undefined,
+    at: file.at,
+    steps,
+  };
+}
+
 export function threadEntry(program, row, record, status, transcriptOf) {
   const { meta, report, files } = row;
   const sessions = readSessionLines(sessionsFile(program, row.task)).reverse()
@@ -287,6 +307,7 @@ export function threadEntry(program, row, record, status, transcriptOf) {
     updatedAt: report?.updatedAt || meta.createdAt || folderTime(files.dir),
     line: report?.line || undefined,
     waitingOn,
+    plan: record ? threadPlan(record.paneID) : undefined,
     reportState: report?.state || "started",
     outputs: report?.outputs?.length ? report.outputs : undefined,
     under: meta.parentTask || undefined,
