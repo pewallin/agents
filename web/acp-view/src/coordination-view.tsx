@@ -130,14 +130,20 @@ export function AgentEventLine({ event, failed }: { event: AgentEvent; failed: b
 }
 
 /** At the top of a worker's view: whose worker it is, its task and its latest report. */
+/** The small square in a coordinator's colour before its name (decoration only). */
+export function CoordinatorBadge({ color }: { color?: string }) {
+  if (!color || !/^#[0-9a-f]{6}$/i.test(color)) return null;
+  return <span className="coord-badge" style={{ background: color }} aria-hidden="true" />;
+}
+
 export function WorkerLine() {
-  const { role, task, threadTitle, coordinator, report, reportLine } = useCoordination();
+  const { role, task, threadTitle, coordinator, report, reportLine, programName, programColor } = useCoordination();
   if (role !== "worker" || !coordinator) return null;
   return (
     <div className="worker-line">
       <Spark />
       <span className="what">
-        Worker of <Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={coordinator.title ?? coordinator.pane} />
+        Worker of <CoordinatorBadge color={programColor} /><Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={programName ?? coordinator.title ?? coordinator.pane} />
         {threadTitle ? <> · {threadTitle}</> : task && <> · task <code>{task}</code></>}
         {task && <> · <a className="threads-link" href={threadHref()} title="Show the coordinator's threads">threads</a></>}
         {report && <span className="dim"> · {report}{reportLine ? `: ${reportLine}` : ""}</span>}

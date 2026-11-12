@@ -28,6 +28,10 @@ export interface Coordination {
   task?: string;
   /** The pane's own thread title, for a worker. */
   threadTitle?: string;
+  /** The coordinator's program by the name users see, and its colour now (#rrggbb): the colour
+   *  is decoration only, never used to decide anything. */
+  programName?: string;
+  programColor?: string;
   /** The pane's own latest report, for a worker. */
   report?: string;
   reportLine?: string;

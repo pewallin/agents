@@ -14,7 +14,7 @@ import path from "node:path";
 import { taskRows } from "./briefs.js";
 import { programDirectories } from "./coordinator.js";
 import { agentNameFromLaunchCommand } from "./launch.js";
-import { coordinationPaneRecords, coordinatorLeads, programMeta, readJSON, runGit, taskPaths, writeFileAtomic } from "./program.js";
+import { coordinationPaneRecords, coordinatorLeads, programMeta, programName, readJSON, runGit, taskPaths, writeFileAtomic } from "./program.js";
 import { briefSummary, isRoleLine, lastWorkerReport, workerStatus } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { agentStatuses } from "./supervisor-control.js";
@@ -345,6 +345,9 @@ export function programThreads(program, records, statuses, transcriptOf) {
   const meta = programMeta(program);
   return {
     program,
+    // What users call it (program.json `name`, else its directory's), and whether it was named.
+    name: programName(program),
+    named: Boolean(meta?.name) || undefined,
     folder: meta?.folder,
     coordinator: coordinatorEntry(program, records, statuses, transcriptOf, openThreads),
     threads,

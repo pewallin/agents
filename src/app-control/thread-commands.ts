@@ -8,7 +8,7 @@ import { threadTitle, writeStatusFile, writeTaskReport } from "./briefs.js";
 import { agentNameFromLaunchCommand, normalizeAgentName } from "./launch.js";
 import { fail } from "./output.js";
 import { localPaneRef, resolveLocalSourcePane, runTMuxRequired, setPaneOption } from "./panes.js";
-import { coordinationPaneRecords, coordinatorLeads, notifyApp, ownCoordinationRecord, readJSON, taskPaths } from "./program.js";
+import { coordinationPaneRecords, coordinatorLeads, notifyApp, ownCoordinationRecord, programName, readJSON, setProgramName, taskPaths } from "./program.js";
 import { runAgentRespawn } from "./promote.js";
 import { closeOpenQuestions } from "./questions.js";
 import { closedReportState } from "./report.js";
@@ -84,6 +84,23 @@ export async function runAgentTitle(command) {
   const title = threadTitle(command.title);
   const record = setThreadTitle(program, command.task, title);
   return { id: requestID("cli"), ok: true, result: { program, task: command.task, title, pane: record ? localPaneRef(record.paneID) : undefined, ...titleWarning(title) } };
+}
+
+// A program's name in the user's words, 2-4 words from their goal ("Security triage").
+export function programNameOf(text) {
+  const name = String(text || "").replace(/\s+/g, " ").trim().slice(0, 60);
+  if (!name) fail(64, "usage", "agent name needs a name, e.g. agent name \"Security triage\".");
+  return name;
+}
+
+export async function runAgentName(command) {
+  const params = command.params;
+  const { program } = commandProgram(params, "agent name");
+  const name = programNameOf(command.name);
+  setProgramName(program, name);
+  for (const record of coordinationPaneRecords().filter(candidate => candidate.program === program)) notifyApp(record.sessionName);
+  const words = name.split(" ").length;
+  return { id: requestID("cli"), ok: true, result: { program, name, ...(words > 4 ? { nameLong: true, nameHint: `The name has ${words} words; a program's name is 2-4 words from the user's goal.` } : {}) } };
 }
 
 // The pane a reopened thread's new tab opens beside: the coordinator that leads the program, else

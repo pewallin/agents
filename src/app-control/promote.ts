@@ -13,7 +13,7 @@ import { enqueueMessage } from "./messages.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, paneIDFromRef, runTMux, runTMuxRequired, setPaneOption, tmuxPaneOption } from "./panes.js";
 import { paneRunsAgent } from "./processes.js";
-import { coordinationPaneRecords, coordinatorProgram, ensurePaneUUID, folderCoordinator, notifyApp, ownCoordinationRecord, readJSON, recordedCoordinatorProgram, taskPaths, uniqueTaskName, writeFileAtomic } from "./program.js";
+import { coordinationPaneRecords, coordinatorProgram, ensurePaneUUID, folderCoordinator, notifyApp, ownCoordinationRecord, programMeta, programName, readJSON, recordedCoordinatorProgram, setProgramName, taskPaths, uniqueTaskName, writeFileAtomic } from "./program.js";
 import { closeOpenQuestions } from "./questions.js";
 import { closedReportState } from "./report.js";
 import { runAgentSpawn } from "./spawn.js";
@@ -60,11 +60,17 @@ export async function runAgentPromote(command) {
     ? ` The coordinator in pane ${rival.paneID} still leads earlier work in this folder (${rival.program}), so this is a new program of your own. If the user wants you to carry on that work, run \`${shellQuote(cli)} agent promote --take-over ${localPaneRef(rival.paneID)}\` and carry on from its notes; ask them when you cannot tell.`
     : "";
   const tookOver = old ? takeOver(old, record, program) : undefined;
+  // The program's name in the user's words: given here, else the coordinator names it once.
+  if (params.name !== undefined && params.name !== true && String(params.name).trim()) setProgramName(program, String(params.name).replace(/\s+/g, " ").trim().slice(0, 60));
+  const unnamed = !programMeta(program)?.name;
+  const naming0 = unnamed
+    ? ` Name this program once, from the user's goal in 2-4 words (it shows as "${programName(program)}" until then): \`${shellQuote(cli)} agent name "<name>"\`.`
+    : "";
   // Threads from before titles (or a coordinator that left them out): the new one names them once.
   const untitled = threadRows(program).filter(row => !row.meta.title && !row.meta.resolved).map(row => row.task);
-  const naming = untitled.length
+  const naming = naming0 + (untitled.length
     ? ` These open threads have no title yet: ${untitled.join(", ")}. Name each once with \`${shellQuote(cli)} agent title <task> "<title>"\` (verb first, 3-6 words, in the user's words).`
-    : "";
+    : "");
   // Workers whose coordinator's pane is gone report to this one from now on.
   const adopted = old ? [] : goneCoordinators(program, record, records)
     .flatMap(gone => takeOver({ uuid: gone, program, live: false }, record, program).workers);
@@ -114,6 +120,7 @@ export async function runAgentPromote(command) {
       pane,
       role: "coordinator",
       program,
+      name: programName(program),
       language,
       context: contextFile,
       overview: overviewFile,

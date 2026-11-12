@@ -134,9 +134,22 @@ export function programsRoot() {
   return getProgramsDir();
 }
 
-// A program made for a folder says so in program.json: { folder, repo }.
+// A program made for a folder says so in program.json: { folder, repo, name }.
 export function programMeta(program) {
   return readJSON(path.join(program, "program.json"), undefined);
+}
+
+// What users call a program: the name its coordinator gave it (program.json `name`), else its
+// directory's ("code", "code-2" until named). The directory stays its identity in code.
+export function programName(program) {
+  const name = programMeta(program)?.name;
+  return typeof name === "string" && name.trim() ? name.trim() : path.basename(program);
+}
+
+// Names a program, keeping what else program.json says.
+export function setProgramName(program, name) {
+  const meta = programMeta(program) || {};
+  writeFileAtomic(path.join(program, "program.json"), `${JSON.stringify({ ...meta, name }, null, 2)}\n`);
 }
 
 export function runGit(cwd, args) {
@@ -277,7 +290,7 @@ export function coordinatorProgram(record, explicit, records) {
   if (resolved.meta) {
     const current = programMeta(program);
     if (!current || current.folder !== resolved.meta.folder || current.repo !== resolved.meta.repo) {
-      writeFileAtomic(path.join(program, "program.json"), `${JSON.stringify(resolved.meta, null, 2)}\n`);
+      writeFileAtomic(path.join(program, "program.json"), `${JSON.stringify({ ...current, ...resolved.meta }, null, 2)}\n`);
     }
   }
   if (!explicit && !record.program && resolved.workspace) {

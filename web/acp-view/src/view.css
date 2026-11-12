@@ -554,6 +554,7 @@ th, td { overflow-wrap: break-word; }
 .worker-line .threads-link { color: var(--dim); text-decoration: none; }
 .worker-line .threads-link:hover { color: var(--fg2); text-decoration: underline; }
 .chip.thread { text-decoration: none; color: inherit; }
+.coord-badge { display: inline-block; width: 9px; height: 9px; border-radius: var(--radius-xs); box-shadow: 0 0 0 1px var(--edge); margin-right: 4px; vertical-align: -1px; }
 .peek .mono { font: calc(var(--fs-mono) - .5px) var(--mono); }
 .peek-dim { color: var(--dim); font-size: var(--prose-caption); white-space: nowrap; }
 .peek-dim.more { padding: 2px 6px 0; }
