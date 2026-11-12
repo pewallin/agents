@@ -198,7 +198,34 @@ export function humanizedTask(task) {
 export function threadTitleOf(program, row) {
   const given = typeof row.meta.title === "string" ? row.meta.title.trim() : "";
   if (given && !isRoleLine(given)) return given;
-  return briefSummary(program, row.task) || humanizedTask(row.task);
+  const about = briefSummary(program, row.task);
+  return (about && derivedTitle(about)) || humanizedTask(row.task);
+}
+
+// The longest a derived title gets, in words; a title the coordinator gives that is longer is
+// kept, with a warning (titleWarning).
+export const TITLE_WORDS = 8;
+
+// A title made from a brief's first line: without a label ("Goal:", "Goal (phase 1 of a larger
+// triage):", "Task:", "Objective:", "Mål:", "Uppgift:"), up to the first sentence end, colon,
+// " — ", " (" or ";", at most eight words, its first letter capitalised.
+export function derivedTitle(line) {
+  let text = String(line || "").replace(/\s+/g, " ").trim();
+  text = text.replace(/^(goal|task|objective|aim|mål|uppgift)\s*(\([^)]*\))?\s*:\s*/i, "");
+  const cut = text.search(/[.!?](\s|$)|:|\s[—–]\s|\s\(|;/);
+  if (cut > 0) text = text.slice(0, cut);
+  const words = text.split(" ").filter(Boolean).slice(0, TITLE_WORDS);
+  text = words.join(" ").replace(/[\s,.:;—–-]+$/, "").replace(/…$/, "");
+  return text ? text[0].toUpperCase() + text.slice(1) : "";
+}
+
+// A title the coordinator gives that says too much: `titleLong` and a one-line hint in its result.
+export function titleWarning(title) {
+  if (!title) return {};
+  const words = String(title).trim().split(/\s+/).filter(Boolean).length;
+  return words > TITLE_WORDS
+    ? { titleLong: true, titleHint: `The title has ${words} words; a thread's title is 3-6 words, verb first, in the user's words.` }
+    : {};
 }
 
 // When a task's directory was last written, for a task with no time of its own.

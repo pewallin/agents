@@ -250,6 +250,12 @@ export function parseCommand(argv) {
     return { kind: "agent-resolve", tasks: positional, params };
   }
 
+  if (command === "agent" && subcommand === "title") {
+    const { positional, params } = parseOptions(rest);
+    if (positional.length < 2) fail(64, "usage", "agent title requires a task name and its title, e.g. agent title safari-export \"Fix Safari export button\".");
+    return { kind: "agent-title", task: positional[0], title: positional.slice(1).join(" "), params };
+  }
+
   if (command === "agent" && subcommand === "reopen") {
     const { positional, params } = parseOptions(rest, new Set(["dry-run"]));
     if (positional.length !== 1) fail(64, "usage", "agent reopen requires exactly one task name.");

@@ -151,6 +151,8 @@ export function statusRow(task, program, report, live) {
     status: workerStatus(live.agent, live.reportState || report?.state),
     // The thread's title in the user's words, where the coordinator gave one; `about` otherwise.
     title: live.title,
+    // False for a thread its coordinator has not named yet: it names it with agent title.
+    titled: Boolean(live.title),
     about: briefSummary(program, task),
     // When a closed task was resolved: nothing is left for anyone.
     resolved: live.resolved,

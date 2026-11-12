@@ -20,7 +20,7 @@ import { runAgentSpawn } from "./spawn.js";
 import { noteSubWorker, subWorkerLead } from "./spawn-support.js";
 import { deliverQueuedNow } from "./steer.js";
 import { agentStatuses, ensureSupervisor } from "./supervisor-control.js";
-import { readSessionLines, recordCoordinatorSession, sessionsFile, threadsEpoch, transcriptLookup } from "./threads.js";
+import { readSessionLines, recordCoordinatorSession, sessionsFile, threadRows, threadsEpoch, titleWarning, transcriptLookup } from "./threads.js";
 
 export async function runAgentPromote(command) {
   const params = command.params;
@@ -60,6 +60,11 @@ export async function runAgentPromote(command) {
     ? ` The coordinator in pane ${rival.paneID} still leads earlier work in this folder (${rival.program}), so this is a new program of your own. If the user wants you to carry on that work, run \`${shellQuote(cli)} agent promote --take-over ${localPaneRef(rival.paneID)}\` and carry on from its notes; ask them when you cannot tell.`
     : "";
   const tookOver = old ? takeOver(old, record, program) : undefined;
+  // Threads from before titles (or a coordinator that left them out): the new one names them once.
+  const untitled = threadRows(program).filter(row => !row.meta.title && !row.meta.resolved).map(row => row.task);
+  const naming = untitled.length
+    ? ` These open threads have no title yet: ${untitled.join(", ")}. Name each once with \`${shellQuote(cli)} agent title <task> "<title>"\` (verb first, 3-6 words, in the user's words).`
+    : "";
   // Workers whose coordinator's pane is gone report to this one from now on.
   const adopted = old ? [] : goneCoordinators(program, record, records)
     .flatMap(gone => takeOver({ uuid: gone, program, live: false }, record, program).workers);
@@ -88,7 +93,7 @@ export async function runAgentPromote(command) {
     const transcript = tookOver?.previousSession
       ? ` The coordinator before you ran as ${tookOver.previousSession.agent}; its transcript is ${tookOver.previousSession.file}. Read it only where MEMORY.md leaves a gap, and check what either says was done against the repository before you build on it.`
       : "";
-    enqueueMessage(program, uuid, `${lead} Program directory: ${program}; run the CLI as ${shellQuote(cli)}. ${asHint(coordinatorCLIName(uuid))}${skill}${instructions}${carryOn}${elsewhere}${memory}${transcript}`, "You are the coordinator now");
+    enqueueMessage(program, uuid, `${lead} Program directory: ${program}; run the CLI as ${shellQuote(cli)}. ${asHint(coordinatorCLIName(uuid))}${skill}${instructions}${carryOn}${naming}${elsewhere}${memory}${transcript}`, "You are the coordinator now");
   }
   // The user who made a running agent coordinator is about to talk to it: the line goes in now
   // if the agent waits at its prompt, not a supervisor tick or two later. An agent that has just
@@ -97,7 +102,7 @@ export async function runAgentPromote(command) {
   if (params.tell || tookOver || adopted.length) ensureSupervisor(program);
   const next = tookOver?.memoryRequested
     ? `The coordinator before you writes ${tookOver.memory} now and tells you with a ⟢ agents line when it is there. Wait for that line and read the file before you act; do not write ${tookOver.memory} yourself until then.`
-    : (carryOn + elsewhere).trim() || undefined;
+    : (carryOn + naming + elsewhere).trim() || undefined;
   const handover = tookOver?.previousSession
     ? `The coordinator before you ran as ${tookOver.previousSession.agent}; its transcript is ${tookOver.previousSession.file}. Read it only where MEMORY.md leaves a gap, and check what either says was done against the repository.`
     : undefined;
@@ -186,6 +191,7 @@ export async function runAgentAdopt(command) {
     adopted: true,
     ...(params.title !== undefined ? { title: threadTitle(params.title) } : {}),
   });
+  const titleCheck = titleWarning(readJSON(files.meta, {}).title);
   const pane = localPaneRef(target.paneID);
   ensureSharedCLI();
   setPaneOption(pane, "@agents_parent", uuid);
@@ -206,7 +212,7 @@ export async function runAgentAdopt(command) {
   notifyApp(own.sessionName);
   if (target.sessionName !== own.sessionName) notifyApp(target.sessionName);
   const from = previous ? { program: previous.program, task: previous.task, coordinator: previous.coordinator } : undefined;
-  return { id: requestID("cli"), ok: true, result: { task, pane, program, brief: files.brief, background, from } };
+  return { id: requestID("cli"), ok: true, result: { task, pane, program, brief: files.brief, background, from, ...titleCheck } };
 }
 
 // The task a worker had under a coordinator that is gone ends where the next one adopts it: its

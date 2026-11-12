@@ -18,6 +18,7 @@ import { oneLine, processTable } from "./processes.js";
 import { readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { respawnMarker } from "./promote.js";
 import { getRuntimeTempDir } from "../paths.js";
+import { titleWarning } from "./threads.js";
 
 // A hand-off agent that starts in its ACP view: `acp-session` starts it with no TUI and gives the
 // brief to its host, which prompts the agent with it over ACP. The TUI command keeps the brief
@@ -266,7 +267,7 @@ export async function acquireSpawnLock(paneID) {
 export function spawnSummary(planned, task) {
   if (!task) return planned;
   const { launch, ...summary } = planned;
-  return { ...summary, harness: { agent: planned.harness.agent, profile: planned.harness.profile, model: planned.harness.model }, cwd: launch.cwd };
+  return { ...summary, ...titleWarning(planned.title), harness: { agent: planned.harness.agent, profile: planned.harness.profile, model: planned.harness.model }, cwd: launch.cwd };
 }
 
 // Coordinators and workers. tmux carries the structure (who is whose parent, roles, task names,

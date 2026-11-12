@@ -8,7 +8,7 @@ import { test } from "vitest";
 import { writeTaskMeta } from "./briefs.js";
 import { taskPaths } from "./program.js";
 import {
-  appendSessionLine, markResolved, markUnresolved, programThreads, readSessionLines, recordTaskSession, reopenStep, repairProgram,
+  appendSessionLine, derivedTitle, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
   resolvesOnClose, sessionsFile, threadState, transcriptRecords, userTexts,
 } from "./threads.js";
 
@@ -193,9 +193,9 @@ test("a thread is titled by its title, else its brief's subject, never a worker 
   const listed = programThreads(program, [], new Map(), () => null).threads;
   const title = (task: string) => listed.find(thread => thread.task === task)?.title;
   assert.equal(title("titled"), "Fix Safari export button");
-  assert.equal(title("medium-tier-b-backend"), "Move the medium tier's backend to the new queue.");
+  assert.equal(title("medium-tier-b-backend"), "Move the medium tier's backend to the new");
   assert.equal(title("only-role"), "Only role");
-  assert.equal(title("role-title"), "Do role-title.");
+  assert.equal(title("role-title"), "Do role-title");
 });
 
 test("only task directories are threads, and a thread without times takes its folder's", () => {
@@ -221,4 +221,16 @@ test("the repair pass finds a worker whose prompt names its brief through anothe
   const result = repairProgram(program, { history, transcriptOf: () => file });
   assert.equal(result.sessions, 1);
   assert.deepEqual(readSessionLines(sessionsFile(program, "medium-tier-b-backend")).map(line => line.session), ["sess_5f0c1b8e-7a3f-4c2e-9b1d-0e6f2a4c8d10"]);
+});
+
+// Peter's thread list at work (2026-11-12): titles that were the brief's first line, "Goal: …".
+test("a title made from a brief drops its label and stops at the first clause, eight words at most", () => {
+  assert.equal(derivedTitle("Goal: follow-up after Peter merged all 11 MRs from the Medium triage (2026-11-10 ~16:14 CET). Verify, …"), "Follow-up after Peter merged all 11 MRs from");
+  assert.equal(derivedTitle("Goal (phase 1 of a larger triage): build one complete, deduplicated inventory of all MEDIUM and LOW vuln…"), "Build one complete, deduplicated inventory of all MEDIUM");
+  assert.equal(derivedTitle("Task: fix the Safari export button; keep the old path for Chrome"), "Fix the Safari export button");
+  assert.equal(derivedTitle("Mål: gör om README — kortare och tydligare"), "Gör om README");
+  assert.equal(derivedTitle("objective: add a restore test for Kiro. Then pin it."), "Add a restore test for Kiro");
+  assert.equal(derivedTitle("Uppgift (fas 2): mät kallstarten"), "Mät kallstarten");
+  assert.deepEqual(titleWarning("Fix Safari export button"), {});
+  assert.equal(titleWarning("Follow up after Peter merged all eleven MRs from the triage").titleLong, true);
 });

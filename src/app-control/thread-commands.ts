@@ -4,17 +4,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { requestID } from "./app-socket.js";
-import { writeStatusFile, writeTaskReport } from "./briefs.js";
+import { threadTitle, writeStatusFile, writeTaskReport } from "./briefs.js";
 import { agentNameFromLaunchCommand, normalizeAgentName } from "./launch.js";
 import { fail } from "./output.js";
-import { localPaneRef, resolveLocalSourcePane, runTMuxRequired } from "./panes.js";
+import { localPaneRef, resolveLocalSourcePane, runTMuxRequired, setPaneOption } from "./panes.js";
 import { coordinationPaneRecords, coordinatorLeads, notifyApp, ownCoordinationRecord, readJSON, taskPaths } from "./program.js";
 import { runAgentRespawn } from "./promote.js";
 import { closeOpenQuestions } from "./questions.js";
 import { closedReportState } from "./report.js";
 import { runAgentSpawn } from "./spawn.js";
 import { isWorkerRecord } from "./spawn-support.js";
-import { markResolved, markUnresolved, readSessionLines, reopenStep, resumeTarget, sessionsFile, transcriptLookup } from "./threads.js";
+import { markResolved, markUnresolved, readSessionLines, reopenStep, resumeTarget, sessionsFile, titleWarning, transcriptLookup, updateTaskMeta } from "./threads.js";
 import { agentResumeInvocation } from "../resume.js";
 
 // The program a thread command acts on: --program (the app names it), else the program of the
@@ -65,6 +65,27 @@ export async function runAgentResolve(command) {
   return { id: requestID("cli"), ok: true, result: { program, resolved: command.tasks, closed: closed.length ? closed : undefined } };
 }
 
+// Names a thread in the user's words: task.json's title, and the title its live pane shows. Any
+// thread of the program, open or resolved.
+export function setThreadTitle(program, task, title) {
+  updateTaskMeta(program, task, meta => ({ ...meta, title }));
+  const record = coordinationPaneRecords().find(candidate => candidate.program === program && candidate.task === task && isWorkerRecord(candidate));
+  if (record) {
+    setPaneOption(localPaneRef(record.paneID), "@agents_title", title);
+    notifyApp(record.sessionName);
+  }
+  return record;
+}
+
+export async function runAgentTitle(command) {
+  const params = command.params;
+  const { program } = commandProgram(params, "agent title");
+  knownTask(program, command.task);
+  const title = threadTitle(command.title);
+  const record = setThreadTitle(program, command.task, title);
+  return { id: requestID("cli"), ok: true, result: { program, task: command.task, title, pane: record ? localPaneRef(record.paneID) : undefined, ...titleWarning(title) } };
+}
+
 // The pane a reopened thread's new tab opens beside: the coordinator that leads the program, else
 // the agent (or the app's active pane, --pane) that runs the command.
 function reopenParent(program, params, records) {
@@ -84,6 +105,8 @@ export async function runAgentReopen(command, currentSocketPath) {
   const params = command.params;
   const { program } = commandProgram(params, "agent reopen");
   const files = knownTask(program, command.task);
+  // --title names the thread as it opens again.
+  if (params.title !== undefined && !params["dry-run"]) setThreadTitle(program, command.task, threadTitle(params.title));
   const meta = readJSON(files.meta, {});
   const records = coordinationPaneRecords();
   const live = records.find(record => record.program === program && record.task === command.task && isWorkerRecord(record));
