@@ -14,6 +14,7 @@ import path from "node:path";
 import { taskRows } from "./briefs.js";
 import { programDirectories } from "./coordinator.js";
 import { agentNameFromLaunchCommand } from "./launch.js";
+import { fail } from "./output.js";
 import { coordinationPaneRecords, coordinatorLeads, programMeta, programName, readJSON, runGit, taskPaths, writeFileAtomic } from "./program.js";
 import { briefSummary, isRoleLine, lastWorkerReport, workerStatus } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
@@ -226,6 +227,15 @@ export function titleWarning(title) {
   return words > TITLE_WORDS
     ? { titleLong: true, titleHint: `The title has ${words} words; a thread's title is 3-6 words, verb first, in the user's words.` }
     : {};
+}
+
+// A new thread is named when it starts (agent spawn, agent adopt): without --title the command
+// stops, with a title made from the brief as the example to give.
+export function requireTitle(params, brief, commandName) {
+  if (params.title !== undefined) return;
+  const line = String(brief || "").split("\n").map(text => text.trim().replace(/^[-*#>\s]+/, "")).find(text => text && !isRoleLine(text));
+  const example = derivedTitle(line).split(" ").slice(0, 6).join(" ").replace(/"/g, "'") || "Fix Safari export button";
+  fail(64, "titleRequired", `${commandName} needs --title, e.g. --title "${example}": verb first, 3-6 words, the user's words.`);
 }
 
 // When a task's directory was last written, for a task with no time of its own.

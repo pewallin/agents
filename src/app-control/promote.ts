@@ -20,7 +20,7 @@ import { runAgentSpawn } from "./spawn.js";
 import { noteSubWorker, subWorkerLead } from "./spawn-support.js";
 import { deliverQueuedNow } from "./steer.js";
 import { agentStatuses, ensureSupervisor } from "./supervisor-control.js";
-import { readSessionLines, recordCoordinatorSession, sessionsFile, threadRows, threadsEpoch, titleWarning, transcriptLookup } from "./threads.js";
+import { readSessionLines, recordCoordinatorSession, requireTitle, sessionsFile, threadRows, threadsEpoch, titleWarning, transcriptLookup } from "./threads.js";
 
 export async function runAgentPromote(command) {
   const params = command.params;
@@ -188,6 +188,8 @@ export async function runAgentAdopt(command) {
   const task = continues ? previous.task : uniqueTaskName(command.text, records, program, params.task);
   if (previous && !continues) closeAdoptedTask(previous, target, own, program, task);
   const files = taskPaths(program, task);
+  // A task that goes on under its name keeps its title; a new thread is named as it starts.
+  if (!(continues && readJSON(files.meta, {}).title)) requireTitle(params, command.text, "agent adopt");
   const language = coordinatorLanguage(params, own);
   writeBrief(program, task, command.text, own, language);
   writeTaskMeta(program, task, {

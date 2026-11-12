@@ -9,10 +9,10 @@ import { writeStatusFile, writeTaskReport } from "./briefs.js";
 import { deliveryFile, deliveryHold, effectiveStatus, noteDelivery, paneContent, screenChoiceText, screenState, updateMessageRecord } from "./delivery.js";
 import { RIDER_SUFFIX, deliveryReminder, enqueueMessage, noteForCoordinator, noteLine, queueNames, readQueued, turnDriver, waitsLine, wakeLine, wakeSummary } from "./messages.js";
 import { fail, usage } from "./output.js";
-import { localPaneRef, runTMux } from "./panes.js";
+import { localPaneRef, runTMux, setPaneOption } from "./panes.js";
 import { sleep } from "./placement.js";
 import { AT_PROMPT_STATES, COORDINATOR_ANSWER_PATIENCE_MS, SETTLED_REPORTS } from "./processes.js";
-import { coordinationPaneRecords, readJSON, taskPaths, writeFileAtomic } from "./program.js";
+import { coordinationPaneRecords, notifyApp, readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { isRespawning } from "./promote.js";
 import { closeOpenQuestions } from "./questions.js";
 import { closedReportState, lastWorkerReport, setWorkerReportState } from "./report.js";
@@ -183,6 +183,14 @@ export async function runSupervisor(command) {
       if (session?.sessionId && session.agent && session.sessionId !== tracked.session) {
         recordTaskSession(program, record.task, { agent: session.agent, session: session.sessionId, uuid: record.uuid });
         tracked.session = session.sessionId;
+      }
+      // A pane a tmux restore brought back without its thread's title gets it again.
+      if (!record.title) {
+        const title = readJSON(taskPaths(program, record.task).meta, {}).title;
+        if (title) {
+          setPaneOption(localPaneRef(record.paneID), "@agents_title", title);
+          notifyApp(record.sessionName);
+        }
       }
       // A coordinator that took over is the parent from now on.
       tracked.parent = record.parent;

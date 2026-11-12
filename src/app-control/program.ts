@@ -40,17 +40,18 @@ export function coordinationPaneRecords(options = {}) {
       "#{pane_dead}",
       "#{window_name}",
       "#{pane_pid}",
+      "#{@agents_title}",
     ].join("\t"),
   ]);
   if (output === undefined) return options.strict ? undefined : [];
   if (!output) return [];
   const byPane = new Map();
   for (const line of output.split(/\r?\n/).filter(Boolean)) {
-    const [paneID, sessionName, sessionID, windowID, uuid, parent, task, role, program, reportState, reportAt, tabOf, currentCommand, inMode, dead, windowName, panePid] = line.split("\t");
+    const [paneID, sessionName, sessionID, windowID, uuid, parent, task, role, program, reportState, reportAt, tabOf, currentCommand, inMode, dead, windowName, panePid, title] = line.split("\t");
     const record = {
       paneID, sessionName, sessionID, windowID, uuid, parent, task, role, program, reportState,
       reportAt: Number(reportAt) || 0, tabOf, currentCommand, inMode: inMode === "1", dead: dead === "1", windowName,
-      panePid: Number(panePid) || 0,
+      panePid: Number(panePid) || 0, title: title || undefined,
     };
     // A window linked into the app's internal sessions is listed once per session.
     const existing = byPane.get(paneID);

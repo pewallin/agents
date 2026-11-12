@@ -6,6 +6,7 @@ import path from "node:path";
 import { readAgentStateForPane } from "./agent-state.js";
 import { readToken, requestAppControl, requestID } from "./app-socket.js";
 import { LANGUAGE_OPTION, coordinatorLanguage, ensureSharedCLI, threadTitle, workerPrompt, writeBrief, writeTaskMeta } from "./briefs.js";
+import { requireTitle } from "./threads.js";
 import { inheritCoordinatorBackground } from "./coordinator.js";
 import { agentLaunch, agentNameFromLaunchCommand, agentProfile, assertOK, buildNewAgentArgv, controlHasArgument, normalizeAgentName, renderLaunchCommand } from "./launch.js";
 import { fail, setFailureContext, usage } from "./output.js";
@@ -94,6 +95,7 @@ export async function runAgentSpawn(command, currentSocketPath) {
   const model = explicitModel || (!profile && stateAgent === launchAgent ? state?.modelId || state?.model : undefined);
   const taskFiles = task ? taskPaths(program, task) : undefined;
   // The thread's title in the user's words; a respawn keeps the one it has unless given another.
+  if (task && !respawn) requireTitle(params, command.prompt, "agent spawn");
   const title = task ? threadTitle(params.title) : undefined;
   const language = task ? coordinatorLanguage(params, parentRecord) : undefined;
   const prompt = task
@@ -119,7 +121,7 @@ export async function runAgentSpawn(command, currentSocketPath) {
     axis: !intoPane && placement === "split" ? axis : undefined,
     parentPane: parentRecord ? localPaneRef(parentRecord.paneID) : undefined,
     task,
-    title,
+    title: title || (respawn && taskFiles ? readJSON(taskFiles.meta, {}).title : undefined),
     program,
     language,
     brief: taskFiles?.brief,
