@@ -19,6 +19,8 @@ export interface AgentSessionHistoryItem {
   resumeTargetKind?: AgentSessionResumeTargetKind;
   resumeCommand?: string;
   resumeArgv?: string[];
+  /** The first prompt was a message another agent or a host wrapped (isWrappedPrompt). */
+  startedByAgent?: boolean;
   /** Another pane (or process) has the session open: where (session-holders.ts). */
   openIn?: { pane?: string; session?: string; window?: string; pid?: number };
 }
@@ -568,6 +570,15 @@ function expandHomePath(pathLike?: string): string | undefined {
 // fix the login`); a prompt of elements only is the first element with text, read the same way
 // inside: a child element with text is the message and loose text beside it the framing of a
 // message another agent or a host wrapped (`<relay …>framing<note>the brief</note></relay>`).
+/** Whether a prompt is one element and nothing else: a message another agent or a host wrapped. */
+export function isWrappedPrompt(raw: string): boolean {
+  const text = raw.trim();
+  const open = text.match(/^<([A-Za-z][\w:.-]*)\b[^>]*>/);
+  if (!open) return false;
+  const close = `</${open[1]}>`;
+  return text.indexOf(close) === text.length - close.length;
+}
+
 export function unwrappedPromptText(raw: string): string {
   const text = raw.trim();
   if (!/^<[A-Za-z]/.test(text)) return text;
@@ -800,6 +811,7 @@ function parseClaudeHistoryEntry(filePath: string, currentSessionId?: string, in
       ...(isCurrent ? { current: true } : {}),
       ...resumeInfoFields("claude", { sessionId }),
     };
+    if (firstUserPrompt && isWrappedPrompt(firstUserPrompt)) item.startedByAgent = true;
     if (titleSource === "first_prompt" && firstUserPrompt) firstPrompts.set(item, firstUserPrompt);
     return item;
   } catch {

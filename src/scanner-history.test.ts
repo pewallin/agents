@@ -11,7 +11,7 @@ const savedHome = process.env.HOME;
 const savedCodexHome = process.env.CODEX_HOME;
 process.env.HOME = home;
 process.env.CODEX_HOME = join(home, ".codex");
-const { loadHistoryForAgent, unwrappedPromptText } = await import("./scanner-history.js");
+const { isWrappedPrompt, loadHistoryForAgent, unwrappedPromptText } = await import("./scanner-history.js");
 
 const cwd = "/repo/app";
 // A first prompt another agent wrapped: an envelope, its framing sentence, then the brief.
@@ -139,6 +139,13 @@ describe("agents history titles a conversation by what it is about", () => {
   it("prefers the title Claude gives a conversation, and a name given to it over that", () => {
     expect(titles()["ai-named"]).toEqual(["Keep tab widths steady", "summary"]);
     expect(titles().renamed).toEqual(["Tabs that stay put", "rename"]);
+  });
+
+  it("marks a conversation another agent or a host started", () => {
+    const started = loadHistoryForAgent("claude", "/repo/titles", 10).filter((item) => item.startedByAgent).map((item) => item.sessionId).sort();
+    expect(started).toEqual(["ai-named", "renamed", "wrapped"]);
+    expect(isWrappedPrompt("<system-reminder>context</system-reminder>\nfix the login")).toBe(false);
+    expect(isWrappedPrompt("<command-message>review</command-message>\n<command-name>/review</command-name>")).toBe(false);
   });
 
   it("unwraps markup by its structure", () => {
