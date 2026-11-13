@@ -15,6 +15,7 @@ import { readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { appInputState, deliveredAt } from "./supervisor.js";
 import { readFileOr } from "./supervisor-control.js";
 import { clockText } from "./watch.js";
+import { DELIVERY_MARKER } from "../delivery-marker.js";
 
 // A queued line carries its message and a few words on what it is about: the agent's prompt gets
 // only those words and the file the message waits in (deliveryLine).
@@ -67,7 +68,7 @@ export function readQueued(file) {
 // What a line typed into an agent's prompt is: one short row the user can read at a glance, that
 // says what came and where the whole of it is. The marker says the line is the app's, not the
 // user's; the messages themselves wait in a file under <program>/messages/.
-export const DELIVERY_MARKER = "⟢ agents";
+export { DELIVERY_MARKER };
 export const SUMMARY_LIMIT = 80;
 export const MESSAGE_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
 

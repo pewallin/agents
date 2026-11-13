@@ -54,6 +54,8 @@ beforeAll(() => {
   claudeSaid("ai-named", relay, { type: "ai-title", aiTitle: "Keep tab widths steady", sessionId: "ai-named" });
   claudeSaid("alike-1", "Reply in Swedish; all artifacts in English. Fix the export button on Safari.");
   claudeSaid("alike-2", "Reply in Swedish; all artifacts in English. Make the tabs keep their width.");
+  claudeSaid("woken", "⟢ agents · Worker cp-test is done · read /home/p/.agents/programs/web/messages/20261029T1-ab12.md");
+  claudeSaid("asked", "Install the TypeSafe skill. If you're in Claude Code, run the marketplace command.");
   claudeSaid("renamed", relay, { type: "ai-title", aiTitle: "Keep tab widths steady" }, { type: "custom-title", customTitle: "Tabs that stay put" });
 
   const pi = join(home, ".pi", "agent", "sessions", "--repo-app--");
@@ -143,9 +145,20 @@ describe("agents history titles a conversation by what it is about", () => {
 
   it("marks a conversation another agent or a host started", () => {
     const started = loadHistoryForAgent("claude", "/repo/titles", 10).filter((item) => item.startedByAgent).map((item) => item.sessionId).sort();
-    expect(started).toEqual(["ai-named", "renamed", "wrapped"]);
+    expect(started).toEqual(["ai-named", "renamed", "woken", "wrapped"]);
     expect(isWrappedPrompt("<system-reminder>context</system-reminder>\nfix the login")).toBe(false);
     expect(isWrappedPrompt("<command-message>review</command-message>\n<command-name>/review</command-name>")).toBe(false);
+  });
+
+  it("titles a conversation an agents line woke by what the line says, as started by an agent", () => {
+    const woken = loadHistoryForAgent("claude", "/repo/titles", 10).find((item) => item.sessionId === "woken");
+    expect([woken?.title, woken?.startedByAgent]).toEqual(["Worker cp-test is done", true]);
+  });
+
+  it("shortens a title made from a prompt to its first sentence", () => {
+    const asked = loadHistoryForAgent("claude", "/repo/titles", 10).find((item) => item.sessionId === "asked");
+    expect(asked?.shortTitle).toBe("Install the TypeSafe skill");
+    expect(asked?.title).toBe("Install the TypeSafe skill. If you're in Claude Code, run the marketplace command.");
   });
 
   it("unwraps markup by its structure", () => {

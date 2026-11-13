@@ -4,6 +4,7 @@ import { basename, join } from "path";
 import { exec } from "./shell.js";
 import { shellCommand } from "./command-words.js";
 import { kiroContinuedSession, kiroHistoryForCwd, kiroSessionTranscript } from "./kiro-sessions.js";
+import { DELIVERY_MARKER } from "./delivery-marker.js";
 
 export interface AgentSessionHistoryItem {
   sessionId: string;
@@ -688,11 +689,26 @@ export function retitledSharedOpenings(items: AgentSessionHistoryItem[]): AgentS
   });
 }
 
+// A conversation that opened with a line the agents CLI typed into the agent's prompt (a
+// coordinator's or a worker's wake) was started by an agent; its title is what the line says.
+function withDeliveryLineTitle(item: AgentSessionHistoryItem): AgentSessionHistoryItem {
+  if (!item.title.startsWith(DELIVERY_MARKER)) return item;
+  const said = item.title.slice(DELIVERY_MARKER.length).replace(/^\s*·\s*/, "").replace(/\s*·\s*read\s.*$/, "").trim();
+  return { ...item, title: said || item.title, startedByAgent: true };
+}
+
+// The short title of one made from a prompt is its first sentence, as a list shows a subject.
 function withShortTitle(item: AgentSessionHistoryItem): AgentSessionHistoryItem {
+  const fromPrompt = item.titleSource === "first_prompt" || item.titleSource === "stored_title";
   return {
     ...item,
-    shortTitle: shortTitleForHistoryTitle(item.title),
+    shortTitle: shortTitleForHistoryTitle(fromPrompt ? firstSentence(item.title) : item.title),
   };
+}
+
+export function firstSentence(text: string): string {
+  const end = text.search(/[.!?](\s|$)/);
+  return (end > 0 ? text.slice(0, end + 1) : text).replace(/\.$/, "").trim();
 }
 
 function withCurrentTitleFallback(items: AgentSessionHistoryItem[], currentTitle?: string): AgentSessionHistoryItem[] {
@@ -1292,7 +1308,7 @@ export function loadHistoryForAgent(agent: string, cwdRaw: string, limit: number
     default:
       return [];
   }
-  return retitledSharedOpenings(items).map(withShortTitle);
+  return retitledSharedOpenings(items).map(withDeliveryLineTitle).map(withShortTitle);
 }
 
 /**
