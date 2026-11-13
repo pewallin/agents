@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeAgentEvent, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, workerInPane, workerState } from "./coordination";
+import { describeAgentEvent, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, threadNamed, workerInPane, workerState, workerTitle } from "./coordination";
 
 describe("coordination lines", () => {
   it("reads a wake-up line", () => {
@@ -54,5 +54,21 @@ describe("a worker's state from the app", () => {
     expect(workerState({ pane: "%4", status: "idle", report: "ask-user", threadState: "stopped" })).toBe("idle");
     expect(workerState({ pane: "%4", status: "idle", report: "done", threadState: "done" })).toBe("done");
     expect(workerState({ pane: "%4", status: "idle", report: "ask-user" })).toBe("needs-you");
+  });
+});
+
+describe("worker titles", () => {
+  // Peter, 2026-11-13: the view names a worker by its thread's title, never only by its task.
+  it("names a worker by its pane's thread title, else its thread's, else its task", () => {
+    const coordination = {
+      workers: [{ pane: "%4", task: "ios-tests", threadTitle: "Run the iOS tests" }, { pane: "%5", task: "ui" }],
+      threads: [{ task: "ui", title: "Restyle the list" }, { task: "old", title: "Review the layout", threadState: "resolved" }],
+    };
+    expect(workerTitle(coordination, "ios-tests")).toBe("Run the iOS tests");
+    expect(workerTitle(coordination, "ui")).toBe("Restyle the list");
+    expect(workerTitle(coordination, "old")).toBe("Review the layout");
+    expect(workerTitle(coordination, "nope")).toBe("nope");
+    expect(threadNamed(coordination, "old")?.threadState).toBe("resolved");
+    expect(threadNamed({ workers: [] }, "old")).toBeUndefined();
   });
 });

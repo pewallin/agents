@@ -32,6 +32,14 @@ export interface CoordinationPane {
   threadPlan?: { text: string; status: string }[];
 }
 
+/** A thread of the program, with a pane or without (closed, resolved): its title names it where
+ *  the conversation mentions its task. */
+export interface CoordinationThread {
+  task: string;
+  title: string;
+  threadState?: string;
+}
+
 export interface Coordination {
   role?: "coordinator" | "worker";
   task?: string;
@@ -46,6 +54,8 @@ export interface Coordination {
   reportLine?: string;
   coordinator?: CoordinationPane;
   workers: CoordinationPane[];
+  /** Every thread of the program, as the app last read them. */
+  threads?: CoordinationThread[];
 }
 
 export const useCoordination = create<Coordination>(() => ({ workers: [] }));
@@ -88,6 +98,17 @@ export function workerInPane(coordination: Coordination, pane: string): Coordina
 export function workerNamed(coordination: Coordination, name: string): CoordinationPane | undefined {
   return coordination.workers.find((worker) => worker.task === name)
     ?? (coordination.coordinator?.task === name ? coordination.coordinator : undefined);
+}
+
+/** A thread of the program by its task, with a pane or without. */
+export function threadNamed(coordination: Coordination, task: string): CoordinationThread | undefined {
+  return coordination.threads?.find((thread) => thread.task === task);
+}
+
+/** What the view calls a worker the conversation names by its task: its thread's title, as the
+ *  app's lists show it; the task only while it has none. The task stays what commands use. */
+export function workerTitle(coordination: Coordination, task: string): string {
+  return workerNamed(coordination, task)?.threadTitle ?? threadNamed(coordination, task)?.title ?? task;
 }
 
 const MARKER = "⟢ agents · ";

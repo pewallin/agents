@@ -4,7 +4,7 @@
 // coordinator and thread. A coordinator's workers are its threads, listed in the app.
 import { lazy, Suspense, useContext, useEffect, useState, type ReactNode } from "react";
 import { Chip, ChipHostContext, NamedChip } from "./chips";
-import { describeAgentEvent, tasksIn, useCoordination, workerNamed, type AgentEvent } from "./coordination";
+import { describeAgentEvent, tasksIn, useCoordination, workerNamed, workerTitle, type AgentEvent } from "./coordination";
 
 const Markdown = lazy(() => import("./markdown"));
 
@@ -19,14 +19,20 @@ export function threadHref(task?: string): string {
 }
 
 /** A worker as a chip: its thread's title, its pane's status mark; a click shows its pane. A
- *  worker whose pane is gone links to its thread instead. */
+ *  worker whose pane is gone links to its thread instead, its task in the tooltip. */
 export function WorkerChip({ task, pane }: { task: string; pane?: string }) {
   const coordination = useCoordination();
   const worker = workerNamed(coordination, task);
   // A pane a worker no longer has (closed, or its number reused) shows no pane: the thread.
   const id = worker?.pane ?? (coordination.workers.length === 0 && coordination.role !== "coordinator" ? pane : undefined);
-  const label = worker?.threadTitle ?? task;
-  if (!id) return <a className="chip thread" href={threadHref(task)} title="Show the thread"><span className="nm">{label}</span></a>;
+  const label = workerTitle(coordination, task);
+  if (!id) {
+    return (
+      <a className="chip thread" href={threadHref(task)} title={label === task ? "Show the thread" : `${label}\n${task} · Show the thread`}>
+        <span className="nm">{label}</span>
+      </a>
+    );
+  }
   return <Chip target={{ kind: "pane", id, state: worker?.status }} label={label} />;
 }
 
@@ -93,7 +99,7 @@ export function BriefRow({ task, brief, prompt, respawn }: { task: string; brief
         <span className="what">
           {respawn ? "Taken over from an earlier worker: " : "Brief from the coordinator"}
           {coordinator && <> <Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={coordinator.title ?? coordinator.pane} /></>}
-          {" · task "}<WorkerChip task={task} />
+          {" · "}<WorkerChip task={task} />
           {" "}<NamedChip name={brief} label="brief" fallback={<span />} />
         </span>
         {canOpen && <svg className="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>}
@@ -144,7 +150,7 @@ export function WorkerLine() {
       <Spark />
       <span className="what">
         Worker of <CoordinatorBadge color={programColor} /><Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={programName ?? coordinator.title ?? coordinator.pane} />
-        {threadTitle ? <> · {threadTitle}</> : task && <> · task <code>{task}</code></>}
+        {threadTitle ? <> · <span title={task}>{threadTitle}</span></> : task && <> · task <code>{task}</code></>}
         {task && <> · <a className="threads-link" href={threadHref()} title="Show the coordinator's threads">threads</a></>}
         {report && <span className="dim"> · {report}{reportLine ? `: ${reportLine}` : ""}</span>}
       </span>

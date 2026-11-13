@@ -5,7 +5,8 @@
 // directory (src/acp-peek.ts); what is not found stays plain code.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { diffLines } from "diff";
-import { useCoordination, workerInPane, workerNamed, workerState, type CoordinationPane, type WorkerState } from "./coordination";
+import { threadNamed, useCoordination, workerInPane, workerNamed, workerState, type CoordinationPane, type WorkerState } from "./coordination";
+import { WorkerChip } from "./coordination-view";
 import type { FileChange } from "./turns";
 import type { SentAttachment } from "./session-state";
 import { APP_HANDLERS, appHandler, THUMBNAIL_SCHEME } from "./bridge";
@@ -198,10 +199,13 @@ const ASKING_STATES = new Set(["approval", "question", "attention"]);
 export function NamedChip({ name, label, fallback, counts = true }: { name: string; label?: ReactNode; fallback: ReactNode; counts?: boolean }) {
   // A worker's task name stands for its pane (in a coordinator's or a worker's view).
   const worker = useCoordination((state) => workerNamed(state, name));
+  // A thread without a pane only when the name stands for nothing else (a file, a folder).
+  const thread = useCoordination((state) => threadNamed(state, name));
   const target = useResolved(worker ? null : name);
   if (worker) return <Chip target={{ kind: "pane", id: worker.pane, state: worker.status }} label={label ?? worker.threadTitle ?? name} />;
-  if (!target) return <>{fallback}</>;
-  return <Chip target={target} label={label} counts={counts} />;
+  if (target) return <Chip target={target} label={label} counts={counts} />;
+  if (thread && target === null) return <WorkerChip task={name} />;
+  return <>{fallback}</>;
 }
 
 /** A file the turn changed, as its chip: an image's with the image mark. */
@@ -267,7 +271,7 @@ export function Chip({ target, label, counts = true }: { target: ChipTarget; lab
     {(target.kind === "file" || target.kind === "image") && target.line !== undefined && <span className="at">:{target.line}</span>}
   </>;
   return (
-    <span ref={element} className={`chip ${target.kind}${change ? " changed" : ""}${split ? " split" : ""}`} role="link" tabIndex={0}
+    <span ref={element} className={`chip ${target.kind}${worker ? " worker" : ""}${change ? " changed" : ""}${split ? " split" : ""}`} role="link" tabIndex={0}
       data-path={target.kind === "file" || target.kind === "image" || target.kind === "dir" ? `${target.path}${target.line ? `:${target.line}` : ""}` : target.kind === "url" || target.kind === "ticket" ? target.url : target.kind === "pane" ? target.id : undefined}
       draggable={target.kind === "file" || target.kind === "image"}
       onDragStart={(event) => {
