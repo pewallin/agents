@@ -21,11 +21,11 @@ describe("ticket ids in prose", () => {
   it("links an id as a word of its own", () => {
     const ids = (text: string) => ticketTokens(text, [jira]).map((token) => token.id);
     expect(ids("Fixed TH-3826 and (TH-12), see TH-7.")).toEqual(["TH-3826", "TH-12", "TH-7"]);
-    expect(ids("th-3826 too")).toEqual(["TH-3826"]);
+    expect(ids("th-3826 too")).toEqual([]);
     expect(ids("TH-12345")).toEqual(["TH-12345"]);
     expect(ids("MATH-12 TH-12-fix src/TH-12 TH-12.md TH-12x TH-")).toEqual([]);
     expect(ticketTokens("TH-3826", [jira])[0].href).toBe("https://jira.example.com/browse/TH-3826");
-    expect(ticketTokens("ops-5", [{ prefix: "OPS-", url: "https://t.example/{number}?k={id}" }])[0].href).toBe("https://t.example/5?k=OPS-5");
+    expect(ticketTokens("OPS-5", [{ prefix: "OPS-", url: "https://t.example/{number}?k={id}" }])[0].href).toBe("https://t.example/5?k=OPS-5");
   });
 
   it("leaves ids in code alone in what you typed", () => {

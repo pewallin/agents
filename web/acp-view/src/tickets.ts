@@ -1,13 +1,14 @@
 // Ticket ids in prose (`TH-1234`) as chips, by the rules the user set in Agents Next (Settings ›
 // Agents › Ticket Links, or `agents-app-control settings set agents.ticketLinks`). The app hands
 // them to the page in its look (ACPViewLook.tickets in AgentsAppCore); nothing about a tracker is
-// built in. An id is linked only as a word of its own, and never in code or inside a link. The
+// built in. An id is linked as written, only as a word of its own, and never in code or inside a
+// link (the same matching as TicketLinks.matches in AgentsCore, for terminals). The
 // chip's peek asks the app for the ticket's title (the ticketTitle handler), which it reads with
 // the user's logins.
 import { useSyncExternalStore } from "react";
 
 export interface TicketRule {
-  /** What the id starts with, matched without regard to case. */
+  /** What the id starts with (`TH-`), matched as written. */
   prefix: string;
   /** An http(s) address with {id} (the whole id) or {number} (its digits). */
   url: string;
@@ -36,7 +37,7 @@ export function ticketTokens(text: string, rules: readonly TicketRule[]): Ticket
   if (rules.length === 0 || !text) return [];
   const found: TicketToken[] = [];
   for (const rule of rules) {
-    const pattern = new RegExp(`(?<![\\p{L}\\p{N}_\\-/.#@])${escaped(rule.prefix)}(\\d+)(?![\\p{L}\\p{N}_\\-/@]|\\.\\p{L})`, "giu");
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}_\\-/.#@])${escaped(rule.prefix)}(\\d+)(?![\\p{L}\\p{N}_\\-/@]|\\.\\p{L})`, "gu");
     for (const match of text.matchAll(pattern)) {
       const start = match.index ?? 0;
       const end = start + match[0].length;
