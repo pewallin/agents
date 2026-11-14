@@ -27,7 +27,7 @@ import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, opti
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import { announceBridge, APP_ACTIONS, APP_HANDLERS, appHandler, definePageEntry, PAGE_ENTRIES, PAGE_EVENTS, type AppHandler } from "./bridge";
-import { gateFromHost, initialGate, nextViewPhase, type GatePhase, type ViewPhase } from "./opening";
+import { gateFromHost, initialGate, nextViewPhase, SessionWait, type GatePhase, type ViewPhase } from "./opening";
 import { typedTicketTokens, useTicketRules } from "./tickets";
 import { contextPercent, usageText, usageTitle, type SessionUsage } from "./usage";
 import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
@@ -221,11 +221,13 @@ interface HostDiagnosticsReport {
 }
 
 /** What went wrong, as the agent and the host say it, with the diagnostics to send on. */
-function ErrorNotice({ title, error, agentName, onRetry }: {
+function ErrorNotice({ title, error, agentName, onRetry, showsTerminal = false }: {
   title: string;
   error: { message: string; data?: string };
   agentName: string;
   onRetry?: () => void;
+  /** In Agents Next, a link to the pane's terminal (where an agent that ended left its words). */
+  showsTerminal?: boolean;
 }) {
   const [report, setReport] = useState<HostDiagnosticsReport | null>(null);
   const [hostGone, setHostGone] = useState(false);
@@ -275,6 +277,9 @@ function ErrorNotice({ title, error, agentName, onRetry }: {
         {error.data && <pre>{error.data}</pre>}
         {stderr.length > 0 && (<><div className="d">Last output from {agentName}:</div><pre>{stderr.join("\n")}</pre></>)}
         <div className="acts">
+          {showsTerminal && inMacApp() && (
+            <button type="button" className="link" onClick={() => { window.location.href = APP_ACTIONS.backToTerminal; }}>Show terminal</button>
+          )}
           {hostGone && OPEN_REVIEW_BESIDE && (
             <button type="button" className="link" onClick={() => { location.href = APP_ACTIONS.restartViewHost; }}>Restart view host</button>
           )}
@@ -919,6 +924,13 @@ async function hostJson<T>(path: string, body?: unknown): Promise<T> {
     throw new HostAnswer(response.status, typeof message === "string" ? message : undefined);
   }
   return response.json() as Promise<T>;
+}
+
+/** The host did not answer at all for a while: it ended. */
+class HostSilent extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
 }
 
 // The app's context menu opens a link beside the pane through the view's host (Open Beside).
@@ -2130,18 +2142,22 @@ function SessionGate({ info }: { info: HostInfo }) {
   const [gate, setGate] = useState<GatePhase>(() => initialGate(sessionId));
   useEffect(() => {
     if (gate.kind !== "finding") return;
+    let stopped = false;
     // An agent just started opens its session a moment after its host is up.
     // An agent held up as it starts (a question in its terminal, TerminalWatch) has none for as
     // long as it is held up: the view goes on waiting, and opens the session once it has one.
-    // Only a host that does not answer at all ends the wait.
+    // A host that does not answer at all ends the wait (SessionWait).
     const current = async () => {
       const started = Date.now();
-      for (let failures = 0; ;) {
+      const wait = new SessionWait();
+      for (;;) {
         try {
           return await hostJson<{ sessionId: string | null; persisted?: boolean; busy?: boolean }>("/api/session");
         } catch (error) {
-          if (error instanceof HostAnswer && error.status === 404) failures = 0;
-          else if ((failures += 1) >= 300) throw error;
+          const verdict = wait.failed(error instanceof HostAnswer ? error.status : null, Date.now());
+          if (verdict === "host-silent") throw new HostSilent(error);
+          if (verdict === "host-failing") throw error;
+          if (stopped) return null;
           // Asked often at first: the view opens the moment the host has the session.
           await new Promise((resolve) => setTimeout(resolve, Date.now() - started < 30_000 ? 100 : 1_000));
         }
@@ -2149,13 +2165,19 @@ function SessionGate({ info }: { info: HostInfo }) {
     };
     current().then(
       (value) => {
+        if (stopped || value === null) return;
         setGate(gateFromHost(value));
         // A reload opens the same thread, whatever the pane has open then.
         if (value.sessionId !== null) history.replaceState(null, "", `/thread/${encodeURIComponent(value.sessionId)}${location.search}${location.hash}`);
       },
-      (error: unknown) => setGate({ kind: "no-session", problem: error instanceof Error ? error.message : String(error) }),
+      (error: unknown) => {
+        if (stopped) return;
+        const problem = error instanceof Error ? error.message : String(error);
+        setGate(error instanceof HostSilent ? { kind: "host-silent", problem } : { kind: "no-session", problem });
+      },
     );
-  }, []);
+    return () => { stopped = true; };
+  }, [gate.kind]);
   // codex-acp does not follow a turn that is already running when it loads the thread.
   useEffect(() => {
     if (gate.kind !== "waiting-for-idle") return;
@@ -2168,6 +2190,10 @@ function SessionGate({ info }: { info: HostInfo }) {
     case "finding": return <><Opening text={openingText(info.agent.name)} /><TerminalWatch agentName={info.agent.name} showsTail /></>;
     case "starts-new": return <SessionView info={info} sessionId={null} />;
     case "no-session": return <Notice>The pane has no {info.agent.name} session yet{gate.problem ? ` (${gate.problem})` : ""}.</Notice>;
+    case "host-silent":
+      return <ErrorNotice title={`${info.agent.name}'s view stopped answering`}
+        error={{ message: `The view's host in this pane does not answer (${gate.problem}). It ends when ${info.agent.name} ends: the pane's terminal shows what happened.` }}
+        agentName={info.agent.name} showsTerminal onRetry={() => setGate({ kind: "finding" })} />;
     case "waiting-for-idle": return <Opening text={`${info.agent.name} is working; the session shows when it is done`} />;
     case "first-prompt": return <FirstPrompt info={info} sessionId={gate.sessionId} onStarted={() => setGate({ kind: "open", sessionId: gate.sessionId })} />;
     case "open": return <SessionView info={info} sessionId={gate.sessionId} />;

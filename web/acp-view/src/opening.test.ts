@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gateFromHost, initialGate, nextViewPhase, type ViewPhase } from "./opening";
+import { gateFromHost, HOST_ERRORS_BEFORE_GIVING_UP, HOST_SILENT_AFTER_MS, initialGate, nextViewPhase, SessionWait, type ViewPhase } from "./opening";
 
 describe("which session the view opens", () => {
   it("asks the host for the pane's session, or opens the one it was given", () => {
@@ -36,5 +36,34 @@ describe("how the view's connection stands", () => {
     expect(run({ type: "failed", failure }, { type: "connect" })).toEqual({ kind: "connecting" });
     expect(run({ type: "taken-over" }, { type: "connect" }, { type: "loaded" })).toEqual({ kind: "open" });
     expect(run({ type: "failed", failure }, { type: "loaded" })).toEqual({ kind: "failed", failure });
+  });
+});
+
+describe("how long the view waits for the pane's session", () => {
+  it("waits on while the agent has no session yet, however long that takes", () => {
+    const wait = new SessionWait();
+    for (let at = 0; at < 10 * 60_000; at += 1_000) expect(wait.failed(404, at)).toBe("ask-again");
+  });
+
+  it("says so a few seconds after the host stopped answering at all", () => {
+    const wait = new SessionWait();
+    expect(wait.failed(404, 0)).toBe("ask-again");
+    expect(wait.failed(null, 1_000)).toBe("ask-again");
+    expect(wait.failed(null, 1_000 + HOST_SILENT_AFTER_MS - 1)).toBe("ask-again");
+    expect(wait.failed(null, 1_000 + HOST_SILENT_AFTER_MS)).toBe("host-silent");
+  });
+
+  it("counts the silence from the last answer: a host that answers again is waited for afresh", () => {
+    const wait = new SessionWait();
+    expect(wait.failed(null, 0)).toBe("ask-again");
+    expect(wait.failed(404, HOST_SILENT_AFTER_MS - 100)).toBe("ask-again");
+    expect(wait.failed(null, HOST_SILENT_AFTER_MS)).toBe("ask-again");
+    expect(wait.failed(null, 2 * HOST_SILENT_AFTER_MS - 1)).toBe("ask-again");
+  });
+
+  it("gives a host that answers with errors many tries", () => {
+    const wait = new SessionWait();
+    for (let tries = 1; tries < HOST_ERRORS_BEFORE_GIVING_UP; tries += 1) expect(wait.failed(500, tries)).toBe("ask-again");
+    expect(wait.failed(500, HOST_ERRORS_BEFORE_GIVING_UP)).toBe("host-failing");
   });
 });

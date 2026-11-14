@@ -21,7 +21,10 @@ export type GatePhase =
   | { kind: "waiting-for-idle"; sessionId: string }
   /** Nothing written yet: the first prompt starts the session through the host. */
   | { kind: "first-prompt"; sessionId: string }
-  | { kind: "open"; sessionId: string };
+  | { kind: "open"; sessionId: string }
+  /** The host stopped answering while the view waited for the session (it ended with its agent,
+   *  or was stopped): the view says so and can ask again. */
+  | { kind: "host-silent"; problem: string };
 
 /** The gate of a view opened on `sessionId` ("current": the one the pane has now; none: an
  *  address that names no session). */
@@ -36,6 +39,38 @@ export function gateFromHost(answer: HostSession): GatePhase {
   if (answer.persisted === false) return { kind: "first-prompt", sessionId: answer.sessionId };
   if (answer.busy === true) return { kind: "waiting-for-idle", sessionId: answer.sessionId };
   return { kind: "open", sessionId: answer.sessionId };
+}
+
+/** How long the view goes on asking a host that does not answer at all before it says so. */
+export const HOST_SILENT_AFTER_MS = 5_000;
+/** How many error answers in a row (other than 404) the view takes before it gives up. */
+export const HOST_ERRORS_BEFORE_GIVING_UP = 300;
+
+/**
+ * Whether the view asks the host for the pane's session again after an ask failed. A 404 says the
+ * agent has no session yet (it may be held up by a question in its terminal for as long as anyone
+ * takes to answer it): the view waits on. A host that answers with errors gets many tries. A host
+ * that does not answer at all has ended (with its agent, or stopped): the view says so after a few
+ * seconds, instead of its opening frame for half a minute and then a line with no way on.
+ */
+export class SessionWait {
+  private silentSince: number | null = null;
+  private errors = 0;
+
+  /** `status`: the HTTP status the host answered with; null when it did not answer. */
+  failed(status: number | null, now: number): "ask-again" | "host-silent" | "host-failing" {
+    if (status === null) {
+      this.silentSince ??= now;
+      return now - this.silentSince >= HOST_SILENT_AFTER_MS ? "host-silent" : "ask-again";
+    }
+    this.silentSince = null;
+    if (status === 404) {
+      this.errors = 0;
+      return "ask-again";
+    }
+    this.errors += 1;
+    return this.errors >= HOST_ERRORS_BEFORE_GIVING_UP ? "host-failing" : "ask-again";
+  }
 }
 
 export interface FailureDetail {
