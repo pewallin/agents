@@ -178,7 +178,11 @@ Who watches, and how cheaply:
   hand-off pane whose view has the session shows only the view's transcript (whose "Press Enter
   here to go on in the terminal" would read as a question): the host answers nothing for it.
 - **The view** asks the host every 700 ms while it opens and every 1.5 s while it is open beside a
-  TUI that shares its session (Codex), for as long as the view is open. On a question it navigates
+  TUI that shares its session (Codex), for as long as the view is open and seen
+  (`document.visibilityState`): Agents Next keeps a pane's page loaded while the pane shows its
+  terminal, and that page asks nothing. A screen still changing (`moving`: the user answers with
+  arrow keys, a spinner turns) says nothing either: a question counts as asked until a still screen
+  shows it gone, so answering it never asks again. On a question it navigates
   to `agents-next-action://back-to-terminal?question=1` once per question; outside Agents Next it
   shows the question's lines in a quiet notice instead. After 6 s without a session and without a
   question it still shows the terminal's last lines ("has not opened its session yet", Show

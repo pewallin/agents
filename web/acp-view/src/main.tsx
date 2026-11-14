@@ -2177,6 +2177,7 @@ function SessionGate({ info }: { info: HostInfo }) {
 interface TerminalScreen {
   question: { kind: "menu" | "yes-no" | "continue"; text: string[] } | null;
   tail: string[];
+  moving?: boolean;
 }
 
 /** How long the view waits for a session before it shows what the agent's terminal shows. */
@@ -2204,12 +2205,20 @@ function TerminalWatch({ agentName, showsTail = false, pollMs = TERMINAL_POLL_MS
     const timer = setTimeout(() => setLate(true), TERMINAL_TAIL_AFTER_MS);
     const poll = async () => {
       while (!stopped) {
-        const next = await hostJson<TerminalScreen>("/api/terminal-question").catch(() => null);
-        if (stopped) return;
-        if (next) setScreen(next);
-        // Once per question: the app shows the terminal, and this page may stay loaded behind it.
-        if (next?.question && !asked && inMacApp()) window.location.href = APP_ACTIONS.terminalQuestion;
-        if (next) asked = Boolean(next.question);
+        // Only a view someone sees watches: the app keeps a pane's page loaded while the pane
+        // shows its terminal, and that page has nothing to ask.
+        if (document.visibilityState === "visible") {
+          const next = await hostJson<TerminalScreen>("/api/terminal-question").catch(() => null);
+          if (stopped) return;
+          // A screen still changing (the user answering with arrow keys, a spinner) says nothing:
+          // the question it showed counts as asked until a still screen shows it gone.
+          if (next && !next.moving) {
+            setScreen(next);
+            // Once per question: the app shows the terminal, and this page may stay loaded behind it.
+            if (next.question && !asked && inMacApp() && document.visibilityState === "visible") window.location.href = APP_ACTIONS.terminalQuestion;
+            asked = Boolean(next.question);
+          }
+        }
         await new Promise((resolve) => setTimeout(resolve, pollMs));
       }
     };

@@ -27,6 +27,9 @@ export interface TerminalScreen {
   question: TerminalQuestion | null;
   /** The last lines on the pane's screen, for an agent stuck without a question (an error it stopped on). */
   tail: string[];
+  /** The screen is still changing (someone types, a spinner turns): it says nothing yet, and a
+   *  question it showed may still be there. */
+  moving?: boolean;
 }
 
 /** The marks TUIs put beside the selected option of a menu. */
@@ -165,7 +168,7 @@ export class TerminalReader {
     }
     const modified = this.ttyPath ? this.io.modified(this.ttyPath) : undefined;
     if (modified !== undefined && modified === this.readAt) return this.screen;
-    if (modified !== undefined && this.io.now() - modified < SETTLE_MS) return { question: null, tail: this.screen.tail };
+    if (modified !== undefined && this.io.now() - modified < SETTLE_MS) return { question: null, tail: this.screen.tail, moving: true };
     const text = this.io.capture(this.paneId);
     this.readAt = modified;
     this.screen = { question: parseTerminalQuestion(text), tail: nonEmpty(text.split("\n")).slice(-12) };

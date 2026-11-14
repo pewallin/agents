@@ -181,7 +181,7 @@ describe("TerminalReader", () => {
     screen = "• Working (1s • esc to interrupt)\n› Ask Codex\n";
     modified = now;
     now += 100;
-    expect(pane.read().question).toBeNull();
+    expect(pane.read()).toEqual({ question: null, tail: CODEX_HOOKS.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim()).slice(-12), moving: true });
     expect(pane.captures()).toBe(1);
     now += SETTLE_MS;
     expect(pane.read()).toEqual({ question: null, tail: ["• Working (1s • esc to interrupt)", "› Ask Codex"] });
