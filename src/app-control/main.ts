@@ -1,12 +1,13 @@
 // @ts-nocheck
 // agents app-control: run one command.
 
+import { controlHelp, createWorkspace, helpTopics, invokeControl, listState, openReview, ownPane, topicHelp } from "./app-commands.js";
 import { readToken, requestAppControl, requestID, socketPath } from "./app-socket.js";
 import { runAgentAsk } from "./ask.js";
 import { ensureSharedCLI } from "./briefs.js";
 import { parseCommand } from "./command.js";
 import { runMCPServer } from "./mcp.js";
-import { outputResponse } from "./output.js";
+import { outputResponse, usage } from "./output.js";
 import { runWorkspacePlacement } from "./placement.js";
 import { runAgentAdopt, runAgentPromote, runAgentProtocol, runAgentRespawn } from "./promote.js";
 import { runAgentClose, runAgentReport, runAgentStatus, runAgentWait } from "./report.js";
@@ -19,6 +20,28 @@ import { runAgentRemind, runAgentWatch } from "./watch.js";
 export async function runAppControl(argv) {
   const command = parseCommand(argv);
   const currentSocketPath = socketPath();
+  if (command.kind === "help") {
+    const text = !command.topic
+      ? usage()
+      : topicHelp(command.topic)
+        ?? (command.topic === "agent" ? usage().split("\n").filter(line => / agent /.test(line)).join("\n") : undefined)
+        ?? (command.topic.includes(".") ? await controlHelp(currentSocketPath, command.topic) : undefined)
+        ?? `No help for '${command.topic}'. Topics: ${helpTopics().join(", ")}, agent, or a control id (agents app controls list).`;
+    process.stdout.write(`${text}\n`);
+    process.exit(0);
+  }
+  if (command.kind === "ls") {
+    outputResponse(await listState(currentSocketPath));
+  }
+  if (command.kind === "invoke") {
+    outputResponse(await invokeControl(currentSocketPath, command.controlID, command.params));
+  }
+  if (command.kind === "workspace-new") {
+    outputResponse(await createWorkspace(currentSocketPath, command.params));
+  }
+  if (command.kind === "review") {
+    outputResponse(await openReview(currentSocketPath, command.params));
+  }
   if (command.kind === "workspace-placement") {
     outputResponse(await runWorkspacePlacement(command, currentSocketPath));
   }
@@ -91,5 +114,9 @@ export async function runAppControl(argv) {
 
   const token = readToken(currentSocketPath);
   const response = await requestAppControl(currentSocketPath, token, command.method, command.params, "cli");
+  if (command.method === "app.context" && response.ok !== false) {
+    // The focused pane is the user's; an agent's own pane is `you`.
+    response.result = { you: ownPane() || null, ...response.result };
+  }
   outputResponse(response);
 }

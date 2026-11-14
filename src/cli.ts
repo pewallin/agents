@@ -79,7 +79,7 @@ if (shouldRunCodexAppServerProxy(args, process.env)) {
 
 // agents-app-control: the app's control socket and the coordination of agents (src/app-control).
 // Every result is one JSON line on stdout, so nothing else of the CLI may run before it.
-if (firstArg === "app-control") {
+if (firstArg === "app" || firstArg === "app-control") {
   await (await import("./app-control/main.js")).runAppControl(args.slice(1));
   process.exit(0);
 }

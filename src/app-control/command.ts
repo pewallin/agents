@@ -51,11 +51,61 @@ export function rejectExtraArguments(commandName, tokens) {
   }
 }
 
+// `help [<topic>|<control-id>]`, or --help after a command: help for that command alone.
+function helpRequest(argv) {
+  if (argv[0] === "help") return { kind: "help", topic: argv[1] };
+  if (!argv.includes("--help") && !argv.includes("-h")) return undefined;
+  const words = argv.filter(token => !token.startsWith("-"));
+  if (words[0] === "controls" && words[1] === "invoke" && words[2]) return { kind: "help", topic: words[2] };
+  if (words[0] === "agent") return { kind: "help", topic: "agent" };
+  return { kind: "help", topic: words[0] };
+}
+
 export function parseCommand(argv) {
   const [command, subcommand, ...rest] = argv;
-  if (!command || command === "--help" || command === "-h") {
+  if (!command) {
     process.stdout.write(`${usage()}\n`);
-    process.exit(command ? 0 : 64);
+    process.exit(64);
+  }
+  const help = helpRequest(argv);
+  if (help) return help;
+
+  if (command === "ls") {
+    rejectExtraArguments("ls", [subcommand, ...rest].filter(Boolean));
+    return { kind: "ls" };
+  }
+
+  if (command === "open") {
+    const { positional, params } = parseOptions([subcommand, ...rest].filter(token => token !== undefined));
+    if (positional.length !== 1) fail(64, "usage", "open takes one file or URL: agents app open README.md --direction right.");
+    const target = positional[0];
+    const isURL = /^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[a-z]:\\/i.test(target) || /^localhost(:\d+)?(\/|$)/.test(target);
+    return isURL
+      ? { kind: "invoke", controlID: "workspace.open-web-page", params: { ...params, url: target } }
+      : { kind: "invoke", controlID: "workspace.open-file-preview", params: { ...params, path: target } };
+  }
+
+  if (command === "review") {
+    const { positional, params } = parseOptions([subcommand, ...rest].filter(token => token !== undefined), new Set(), new Set(["path"]));
+    if (positional.length > 0) fail(64, "usage", "review takes options only: agents app review [--cwd <repo>] [--base <rev> | --commit <sha>].");
+    return { kind: "review", params };
+  }
+
+  if (command === "workspace" && subcommand === "new") {
+    const { positional, params } = parseOptions(rest);
+    if (positional.length > 0) fail(64, "usage", "workspace new takes --cwd <dir> and --name <name>, not positional arguments.");
+    return { kind: "workspace-new", params };
+  }
+
+  if (command === "workspace" && subcommand === "rename") {
+    const { positional, params } = parseOptions(rest);
+    if (positional.length !== 1) fail(64, "usage", "workspace rename takes the new name: agents app workspace rename \"Shop work\".");
+    return { kind: "invoke", controlID: "workspace.rename", params: { ...params, name: positional[0] } };
+  }
+
+  if (command === "panel" && subcommand === "hide") {
+    rejectExtraArguments("panel hide", rest);
+    return { kind: "socket", method: "panel.hide", params: {} };
   }
 
   if (command === "identify") {
@@ -91,7 +141,7 @@ export function parseCommand(argv) {
     }
     // Control arguments are strings.
     if (params.submit === true) params.submit = "true";
-    return { kind: "socket", method: "control.invoke", params: { ...params, id: controlID } };
+    return { kind: "invoke", controlID, params };
   }
 
   if (command === "surface" && subcommand === "send-text") {
@@ -103,7 +153,8 @@ export function parseCommand(argv) {
     if (positional.length > 1) {
       fail(64, "usage", "surface send-text accepts exactly one text argument.");
     }
-    return { kind: "socket", method: "surface.send_text", params: { ...params, text } };
+    if (params.submit === true) params.submit = "true";
+    return { kind: "invoke", controlID: "surface.send-text", params: { ...params, text } };
   }
 
   if (command === "surface" && subcommand === "send-key") {
@@ -115,7 +166,7 @@ export function parseCommand(argv) {
     if (positional.length > 1) {
       fail(64, "usage", "surface send-key accepts exactly one key.");
     }
-    return { kind: "socket", method: "surface.send_key", params: { ...params, key } };
+    return { kind: "invoke", controlID: "surface.send-key", params: { ...params, key } };
   }
 
   if (command === "surface" && subcommand === "read-text") {
@@ -123,7 +174,7 @@ export function parseCommand(argv) {
     if (positional.length > 0) {
       fail(64, "usage", "surface read-text does not accept positional arguments.");
     }
-    return { kind: "socket", method: "surface.read_text", params };
+    return { kind: "invoke", controlID: "surface.read-text", params };
   }
 
   if (command === "panel" && subcommand === "show") {
@@ -189,6 +240,12 @@ export function parseCommand(argv) {
     const { positional, params } = parseOptions(rest, new Set(["dry-run"]));
     if (positional.length > 0) {
       fail(64, "usage", "workspace split does not accept positional arguments.");
+    }
+    if (params.direction !== undefined) {
+      const axis = { right: "horizontal", down: "vertical" }[String(params.direction).toLowerCase()];
+      if (!axis) fail(64, "usage", `--direction is right or down; got '${params.direction}'.`);
+      delete params.direction;
+      params.axis = axis;
     }
     return { kind: "workspace-placement", placement: "split", params };
   }

@@ -167,19 +167,33 @@ function options(args: string[], name: string): string[] {
   return args.flatMap((arg, index) => (arg === name && args[index + 1] !== undefined ? [args[index + 1]] : []));
 }
 
+/** A review page of a repository's changes: uncommitted ones, against `base`, or a commit's. */
+export async function reviewPage(request: { cwd: string; base?: string; commit?: string; paths?: string[]; focus?: string; label?: string }): Promise<string> {
+  const { cwd, base, commit } = request;
+  const paths = request.paths ?? [];
+  const label = request.label ?? (commit ? `commit ${commit.slice(0, 7)}` : base ? `against ${base}` : "uncommitted");
+  const changes = collectChanges({ cwd, base, commit, paths });
+  if (changes.length === 0) throw new Error("no changes to review");
+  const message = commit ? git(cwd, ["log", "-1", "--format=%B", commit])?.trim() || undefined : undefined;
+  return openReview({ changes, cwd, agentName: label, focus: request.focus ?? paths[0], message, readOnly: true });
+}
+
+/** The files a review would show: those uncommitted, against `base`, or a commit's. */
+export function reviewFiles(request: { cwd: string; base?: string; commit?: string; paths?: string[] }): string[] {
+  return collectChanges({ cwd: request.cwd, base: request.base, commit: request.commit, paths: request.paths ?? [] }).map((change) => change.path);
+}
+
 /** `agents review`: prints the page's address (as JSON with --json). */
 export async function runReviewCommand(args: string[]): Promise<number> {
-  const cwd = resolve(option(args, "--cwd") ?? process.cwd());
-  const commit = option(args, "--commit");
-  const base = option(args, "--base");
-  const paths = options(args, "--path");
-  const focus = option(args, "--focus") ?? paths[0];
-  const label = option(args, "--label") ?? (commit ? `commit ${commit.slice(0, 7)}` : base ? `against ${base}` : "uncommitted");
   try {
-    const changes = collectChanges({ cwd, base, commit, paths });
-    if (changes.length === 0) throw new Error("no changes to review");
-    const message = commit ? git(cwd, ["log", "-1", "--format=%B", commit])?.trim() || undefined : undefined;
-    const url = await openReview({ changes, cwd, agentName: label, focus, message, readOnly: true });
+    const url = await reviewPage({
+      cwd: resolve(option(args, "--cwd") ?? process.cwd()),
+      base: option(args, "--base"),
+      commit: option(args, "--commit"),
+      paths: options(args, "--path"),
+      focus: option(args, "--focus"),
+      label: option(args, "--label"),
+    });
     console.log(args.includes("--json") ? JSON.stringify({ ok: true, url }) : url);
     return 0;
   } catch (error) {
