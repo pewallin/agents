@@ -28,7 +28,7 @@ import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, opti
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import { announceBridge, APP_ACTIONS, APP_HANDLERS, appHandler, definePageEntry, PAGE_ENTRIES, PAGE_EVENTS, type AppHandler } from "./bridge";
-import { gateFromHost, initialGate, nextViewPhase, SessionWait, type GatePhase, type ViewPhase } from "./opening";
+import { gateFromHost, historyArriving, HISTORY_SETTLED_MS, initialGate, nextViewPhase, SessionWait, type GatePhase, type ViewPhase } from "./opening";
 import { typedTicketTokens, useTicketRules } from "./tickets";
 import { contextPercent, usageText, usageTitle, type SessionUsage } from "./usage";
 import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
@@ -1116,8 +1116,10 @@ function Usage({ usage }: { usage: SessionUsage }) {
 }
 
 
-function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel }: {
+function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, opening }: {
   session: AcpSession; info: HostInfo; now: number; onHeight: (height: number) => void; onSend: () => void; level: DetailLevel; onCycleLevel: () => void;
+  /** The agent still opens the session: what the row says meanwhile. */
+  opening?: string;
 }) {
   const [draft, setDraft] = useState("");
   const [flying, setFlying] = useState(false);
@@ -1642,47 +1644,51 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel }: {
             }}>
               <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
             </button>
-            {showModes && (
-              <label className="opt" title={modesLabel(info.agent.id)}>
-                <span className="lb">{modesLabel(info.agent.id)}</span>
-                <span className="v">{modes!.availableModes.find((mode) => mode.id === modes!.currentModeId)?.name ?? modes!.currentModeId}</span> <Down />
-                <select value={modes!.currentModeId} onChange={(event) => void session.setMode(event.target.value)} aria-label={modesLabel(info.agent.id)}>
-                  {modes!.availableModes.map((mode) => <option key={mode.id} value={mode.id}>{mode.name}</option>)}
-                </select>
-              </label>
-            )}
-            {options.map((option) => (
-              <label className={`opt${option.category === "model" ? " model" : ""}`} key={option.id} title={`${settingTitle(option, info.agent.id)}: ${currentName(option)}`}>
-                <span className="lb">{settingLabel(option, info.agent.id)}</span> <span className="v">{currentName(option)}</span> <Down />
-                <select value={String(option.currentValue)} aria-label={settingLabel(option, info.agent.id)}
-                  onChange={(event) => void session.setConfigOption(option.id, event.target.value)}>
-                  {choicesOf(option).map((choice) => <option key={choice.value} value={choice.value}>{choice.name}</option>)}
-                </select>
-              </label>
-            ))}
-            {allowAll.offered && (
-              <button className={`opt level allow fold${allowAll.on ? " on" : ""}`} type="button" aria-pressed={allowAll.on}
-                aria-label={`Approvals: ${allowAll.on ? "Allow all" : "Ask"}`} title={allowAllTitle(allowAll.on)}
-                onClick={() => void allowAll.set(!allowAll.on)}>
-                <ApprovalsIcon on={allowAll.on} />
-                <span className="lb">Approvals</span> <span className="v">{allowAll.on ? "Allow all" : "Ask"}</span>
-              </button>
-            )}
-            <button className="opt level fold" type="button" aria-label={`Detail: ${DETAIL_TITLES[level]}`} title={`How much of the work shows: ${DETAIL_TITLES[level]} (⌃O)`} onClick={onCycleLevel}>
-              <LevelIcon level={level} />
-              <span className="v">{DETAIL_TITLES[level]}</span>
-            </button>
-            <MoreOptions options={moreOptions} session={session} agentId={info.agent.id}>
-              {/* What the row folds in when the field is too narrow for it (view.css). */}
+            {/* While the agent still opens the session its history shows above, and the row says
+                so where the session's choices come once it is open. */}
+            {opening ? <span className="opening-line shown" role="status"><i className="pulse" />{opening}</span> : <>
+              {showModes && (
+                <label className="opt" title={modesLabel(info.agent.id)}>
+                  <span className="lb">{modesLabel(info.agent.id)}</span>
+                  <span className="v">{modes!.availableModes.find((mode) => mode.id === modes!.currentModeId)?.name ?? modes!.currentModeId}</span> <Down />
+                  <select value={modes!.currentModeId} onChange={(event) => void session.setMode(event.target.value)} aria-label={modesLabel(info.agent.id)}>
+                    {modes!.availableModes.map((mode) => <option key={mode.id} value={mode.id}>{mode.name}</option>)}
+                  </select>
+                </label>
+              )}
+              {options.map((option) => (
+                <label className={`opt${option.category === "model" ? " model" : ""}`} key={option.id} title={`${settingTitle(option, info.agent.id)}: ${currentName(option)}`}>
+                  <span className="lb">{settingLabel(option, info.agent.id)}</span> <span className="v">{currentName(option)}</span> <Down />
+                  <select value={String(option.currentValue)} aria-label={settingLabel(option, info.agent.id)}
+                    onChange={(event) => void session.setConfigOption(option.id, event.target.value)}>
+                    {choicesOf(option).map((choice) => <option key={choice.value} value={choice.value}>{choice.name}</option>)}
+                  </select>
+                </label>
+              ))}
               {allowAll.offered && (
-                <button className="it folded" type="button" aria-pressed={allowAll.on} title={allowAllTitle(allowAll.on)} onClick={() => void allowAll.set(!allowAll.on)}>
-                  <span>Approvals</span><span className={`mv${allowAll.on ? " on" : ""}`}>{allowAll.on ? "Allow all" : "Ask"}</span>
+                <button className={`opt level allow fold${allowAll.on ? " on" : ""}`} type="button" aria-pressed={allowAll.on}
+                  aria-label={`Approvals: ${allowAll.on ? "Allow all" : "Ask"}`} title={allowAllTitle(allowAll.on)}
+                  onClick={() => void allowAll.set(!allowAll.on)}>
+                  <ApprovalsIcon on={allowAll.on} />
+                  <span className="lb">Approvals</span> <span className="v">{allowAll.on ? "Allow all" : "Ask"}</span>
                 </button>
               )}
-              <button className="it folded" type="button" title="How much of the work shows (⌃O)" onClick={onCycleLevel}>
-                <span>Detail</span><span className="mv"><LevelIcon level={level} /> {DETAIL_TITLES[level]}</span>
+              <button className="opt level fold" type="button" aria-label={`Detail: ${DETAIL_TITLES[level]}`} title={`How much of the work shows: ${DETAIL_TITLES[level]} (⌃O)`} onClick={onCycleLevel}>
+                <LevelIcon level={level} />
+                <span className="v">{DETAIL_TITLES[level]}</span>
               </button>
-            </MoreOptions>
+              <MoreOptions options={moreOptions} session={session} agentId={info.agent.id}>
+                {/* What the row folds in when the field is too narrow for it (view.css). */}
+                {allowAll.offered && (
+                  <button className="it folded" type="button" aria-pressed={allowAll.on} title={allowAllTitle(allowAll.on)} onClick={() => void allowAll.set(!allowAll.on)}>
+                    <span>Approvals</span><span className={`mv${allowAll.on ? " on" : ""}`}>{allowAll.on ? "Allow all" : "Ask"}</span>
+                  </button>
+                )}
+                <button className="it folded" type="button" title="How much of the work shows (⌃O)" onClick={onCycleLevel}>
+                  <span>Detail</span><span className="mv"><LevelIcon level={level} /> {DETAIL_TITLES[level]}</span>
+                </button>
+              </MoreOptions>
+            </>}
             <span className="sp" />
             {dictation.available && (
               <button className={`icon mic${dictation.state === "recording" ? " rec" : ""}${dictation.error ? " err" : ""}`} type="button"
@@ -1887,7 +1893,7 @@ function PlanLine() {
 }
 
 
-function Conversation({ session, info }: { session: AcpSession; info: HostInfo }) {
+function Conversation({ session, info, opening }: { session: AcpSession; info: HostInfo; opening?: string }) {
   const items = useSession((s) => s.items);
   const toolCalls = useSession((s) => s.toolCalls);
   const title = useSession((s) => s.title);
@@ -2063,7 +2069,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           </div>
         </div>
         </div>
-        <Dock session={session} info={info} now={now} onHeight={onDockHeight} onSend={toEnd} level={level} onCycleLevel={cycleLevel} />
+        <Dock session={session} info={info} now={now} onHeight={onDockHeight} onSend={toEnd} level={level} onCycleLevel={cycleLevel} opening={opening} />
       </div>
       {review && (
         <ReviewPane changes={review} cwd={info.cwd} agentName={info.agent.name}
@@ -2243,6 +2249,9 @@ const TERMINAL_POLL_OPEN_MS = 1_500;
 function TerminalWatch({ agentName, showsTail = false, pollMs = TERMINAL_POLL_MS }: { agentName: string; showsTail?: boolean; pollMs?: number }) {
   const [screen, setScreen] = useState<TerminalScreen | null>(null);
   const [late, setLate] = useState(false);
+  // The same watch goes on as the view opens (its history shows before the session is open).
+  const interval = useRef(pollMs);
+  interval.current = pollMs;
   useEffect(() => {
     let stopped = false;
     let asked = false;
@@ -2263,7 +2272,7 @@ function TerminalWatch({ agentName, showsTail = false, pollMs = TERMINAL_POLL_MS
             asked = Boolean(next.question);
           }
         }
-        await new Promise((resolve) => setTimeout(resolve, pollMs));
+        await new Promise((resolve) => setTimeout(resolve, interval.current));
       }
     };
     void poll();
@@ -2359,6 +2368,32 @@ function FirstPrompt({ info, sessionId, onStarted }: { info: HostInfo; sessionId
   );
 }
 
+/**
+ * Whether the session's history has come in while the agent still opens the session: some of it
+ * has, and nothing more for a moment (a replay comes in one burst), and the Markdown that draws
+ * it is ready, so the conversation comes in whole, once. An agent that replays only as it answers
+ * the load (Codex, Kiro, Pi, OpenCode) is open by then, and this never says so.
+ */
+function useHistoryCameIn(session: AcpSession | null, watching: boolean): boolean {
+  const [cameIn, setCameIn] = useState<AcpSession | null>(null);
+  useEffect(() => {
+    if (!session || !watching || cameIn === session) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const follow = (state: SessionState) => {
+      if (!historyArriving(state)) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        void markdownReady.catch(() => undefined).then(() => { if (!stopped) setCameIn(session); });
+      }, HISTORY_SETTLED_MS);
+    };
+    follow(useSession.getState());
+    const unsubscribe = useSession.subscribe(follow);
+    return () => { stopped = true; clearTimeout(timer); unsubscribe(); };
+  }, [session, watching, cameIn]);
+  return session !== null && cameIn === session;
+}
+
 /** The session, loaded and followed live; with no session given, one the view starts. */
 function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | null }) {
   const dispatch = useSession((s) => s.dispatch);
@@ -2402,6 +2437,8 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
     return () => { cancelled = true; };
   }, [session, info.agent.name]);
 
+  const historyShown = useHistoryCameIn(session, phase.kind === "connecting");
+
   // Another conversation is opening in the pane: its connection ends as the pane's agent starts
   // again, which is no error to show.
   if (opening) return <Opening text={opening} />;
@@ -2434,6 +2471,9 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
       return <ErrorNotice title={phase.failure.title} error={phase.failure.detail} agentName={info.agent.name}
         onRetry={() => setReconnects((count) => count + 1)} />;
     case "connecting":
+      // The session's history has come in while the agent still opens it (Claude replays its
+      // transcript while Claude Code starts): it shows, and the field once the agent has it.
+      if (session && historyShown) return <><Conversation session={session} info={info} opening={`${info.agent.name} is opening the session…`} /><TerminalWatch agentName={info.agent.name} /></>;
       return <><Opening text={openingText(info.agent.name)} /><TerminalWatch agentName={info.agent.name} /></>;
     case "open":
       if (!session) return <><Opening text={openingText(info.agent.name)} /><TerminalWatch agentName={info.agent.name} /></>;

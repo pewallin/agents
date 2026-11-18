@@ -214,3 +214,43 @@ open sent the pane to its terminal (the view's request), and answered, back to t
 Codex's answer; the same review after a shell question kept the terminal until both were
 answered. The host read Claude 2.1.319's folder trust in a pane whose TUI ran. A Claude pane that
 starts in its view runs no TUI, so its folder trust never shows there.
+
+## The history while the agent opens its session (2026-11-18)
+
+A session opened in the view (a pane restored in its view, a switch from the terminal, `/resume`)
+shows its history as soon as the agent has replayed it, before the agent is ready for a prompt.
+One mechanism for every agent, with no reader of any agent's files:
+
+- **The hand-off host** lets the view attach while its own `session/load` runs: `/api/session`
+  names the session being loaded, and the app's `POST /api/handoff` is answered as soon as the
+  load is under way (a new session, whose id is not known yet, is still waited for). The view's
+  `initialize` and `session/load` wait for the host's own (src/acp-hosted-session.ts); the view
+  is given the history replayed so far, then the rest as it comes, and its load is answered when
+  the session is open. A load that fails is answered with its error, and the pane's TUI goes on as
+  before.
+- **The view** (web/acp-view/src/main.tsx `useHistoryCameIn`) shows the conversation once some of
+  the history has come in and nothing more for 200 ms (`HISTORY_SETTLED_MS`), with Markdown ready,
+  so it comes in whole, once, with its usual fade. The field is in place; its row says "Claude is
+  opening the session…" where the session's choices come once it is open. A message sent
+  meanwhile shows at once and goes to the agent when the session is open
+  (acp-connection.ts `whenOpen`). The load's answer changes nothing above the field: the same
+  updates drew it.
+
+What it gains depends on when each agent replays (measured on the mini, `session/load` of a
+scratch copy, warm):
+
+| Agent | Replay | Answer | The history shows |
+| --- | --- | --- | --- |
+| Claude (claude-agent-acp 0.100) | 50-170 ms after the load: it replays the transcript while Claude Code starts | 0.35-3 s after the load (host logs: 0.4-4.3 s) | 0.3-3 s earlier. Restored into the view: 1.0 s earlier; from the terminal: 0.3 s earlier |
+| Kiro 3.1 (v3), OpenCode 1.18, Pi (pi-acp 0.0.34) | in the same few ms as the answer | 0.6 s after the load (Kiro), 0.5 s after a 2 s initialize (OpenCode), 3.6 s (Pi through npx) | as before |
+| Codex (codex-acp 2.5) | with the answer | | as before |
+
+So an agent that replays only once it is ready shows nothing earlier. Showing its history sooner
+would need it from somewhere else: its own files, read and drawn as its adapter would replay them
+(one reader per agent, and a view that changes when the real replay comes), or a copy of what the
+view last showed, which is only right while nothing else changed the session. Neither is built.
+
+Checked headless on 2026-11-18 with a private tmux server, `agents acp-session --agent claude-acp`
+on scratch copies of three real Claude sessions (1-4 MB of history) and a Chromium page: the
+conversation showed with the same text, the same position of its last turn and the same number of
+messages as once the session opened, with no layout shift and no message twice.

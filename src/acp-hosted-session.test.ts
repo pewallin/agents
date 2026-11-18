@@ -7,7 +7,9 @@ import { startAcpHost } from "./acp-host.js";
 import { HostedSession } from "./acp-hosted-session.js";
 
 // A small ACP agent: one session; a prompt answers "echo: <text>", and a prompt "ask" first asks
-// for a permission and ends its turn with the answer it got.
+// for a permission and ends its turn with the answer it got. A load replays two messages, the
+// second a moment after the first, and answers a while later, as Claude does while Claude Code
+// starts; a load of "broken" fails.
 const FAKE_AGENT = `
 const readline = require("node:readline");
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
@@ -16,6 +18,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
   else if (message.method === "session/new") send({ id: message.id, result: { sessionId: "s1", modes: { currentModeId: "default", availableModes: [] } } });
+  else if (message.method === "session/load") {
+    const sessionId = message.params.sessionId;
+    if (sessionId === "broken") { setTimeout(() => send({ id: message.id, error: { code: -32603, message: "no such session" } }), 200); return; }
+    const said = (text) => send({ method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } } });
+    said("earlier");
+    setTimeout(() => said("and then"), 50);
+    setTimeout(() => send({ id: message.id, result: { modes: { currentModeId: "default", availableModes: [] } } }), 300);
+  }
   else if (message.method === "session/prompt") {
     const text = message.params.prompt.map((block) => block.text).join("");
     if (text === "ask") {
@@ -114,6 +124,68 @@ describe("a session the host holds", () => {
     const ask = await next((message) => message.method === "session/request_permission");
     view.fromView(JSON.stringify({ jsonrpc: "2.0", id: ask.id, result: { outcome: { outcome: "selected", optionId: "ok" } } }));
     expect(await turn).toBe("end_turn");
+  });
+});
+
+describe("a view that attaches while the host opens the session", () => {
+  const sessions: HostedSession[] = [];
+  afterEach(async () => {
+    for (const session of sessions.splice(0)) await session.stop();
+  });
+
+  function attachedEarly(existing: string) {
+    const child = spawn(process.execPath, ["-e", FAKE_AGENT], { stdio: ["pipe", "pipe", "pipe"] });
+    const session = new HostedSession(child);
+    sessions.push(session);
+    const started = session.start("/tmp", existing);
+    started.catch(() => {});
+    const received: Array<{ at: number; message: Record<string, unknown> }> = [];
+    const view = session.attach((line) => received.push({ at: Date.now(), message: JSON.parse(line) as Record<string, unknown> }));
+    const next = async (match: (message: Record<string, unknown>) => boolean) => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const found = received.find((entry) => match(entry.message));
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`no such message in ${JSON.stringify(received)}`);
+    };
+    return { session, started, view, received, next };
+  }
+
+  it("waits for the host's initialize and load, and gets the history before the answer, once", async () => {
+    const { started, view, received, next } = attachedEarly("s2");
+    // Sent at once, before the host's own initialize has been answered.
+    view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params: {} }));
+    expect((await next((message) => message.id === 0)).message.result).toMatchObject({ agentCapabilities: { loadSession: true } });
+    view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "s2", cwd: "/tmp" } }));
+    const answer = await next((message) => message.id === 1);
+    expect(answer.message.result).toEqual({ modes: { currentModeId: "default", availableModes: [] } });
+    expect(await started).toBe("s2");
+    const updates = received.filter((entry) => entry.message.method === "session/update");
+    expect(updates.map((entry) => (entry.message.params as { update: { content: { text: string } } }).update.content.text)).toEqual(["earlier", "and then"]);
+    // The history came while the agent was still opening the session.
+    expect(updates.every((entry) => entry.at < answer.at)).toBe(true);
+    // The agent got one initialize and one load: the host's own.
+    expect(received.filter((entry) => entry.message.id === 1)).toHaveLength(1);
+  });
+
+  it("gets nothing of the history before it asks for the session", async () => {
+    const { view, received, next } = attachedEarly("s3");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(received.filter((entry) => entry.message.method === "session/update")).toEqual([]);
+    view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "s3", cwd: "/tmp" } }));
+    await next((message) => message.id === 1);
+    expect(received.filter((entry) => entry.message.method === "session/update")).toHaveLength(2);
+  });
+
+  it("is told when the session did not open", async () => {
+    const { started, view, next } = attachedEarly("broken");
+    view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params: {} }));
+    await next((message) => message.id === 0);
+    view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "broken", cwd: "/tmp" } }));
+    const answer = await next((message) => message.id === 1);
+    expect(answer.message.error).toMatchObject({ message: "The session did not open: no such session" });
+    await expect(started).rejects.toThrow("no such session");
   });
 });
 

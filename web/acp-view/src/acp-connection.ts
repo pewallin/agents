@@ -14,7 +14,9 @@ import type { SessionAction } from "./session-state";
 import { MODEL_STATE_OPTION } from "./session-options";
 
 export interface AcpSession {
-  /** Loads the session, or with no session given starts one in the pane's directory. */
+  /** Loads the session, or with no session given starts one in the pane's directory. The
+   *  session's history comes in (as `update`s) while the agent opens it; what the view sends
+   *  meanwhile goes once it is open. */
   load(): Promise<LoadSessionResponse & { sessionId: string }>;
   prompt(blocks: ContentBlock[]): Promise<void>;
   /** Adds to the turn in progress, for an agent that takes steering over ACP (`_session/steering`:
@@ -125,6 +127,14 @@ export function connectSession(options: {
   const url = `${options.url}&view=${encodeURIComponent(viewId())}${options.takeOver ? "&takeover=1" : ""}`;
   const connection: ClientConnection = app.connect(createWebSocketStream(url));
   const agent = connection.agent;
+  // What the view sends to the session waits until the agent has it open: a message written while
+  // its history shows and the agent still starts goes when it can take it.
+  let markOpen: () => void = () => {};
+  const open = new Promise<void>((resolve) => { markOpen = resolve; });
+  const whenOpen = async <T>(send: () => Promise<T>): Promise<T> => {
+    await open;
+    return send();
+  };
   const ready = agent.request("initialize", {
     protocolVersion: PROTOCOL_VERSION,
     clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
@@ -140,6 +150,7 @@ export function connectSession(options: {
         const started = await agent.request("session/new", { cwd, mcpServers: [] });
         sessionId = started.sessionId;
         dispatch({ type: "loaded", modes: started.modes, configOptions: started.configOptions, models: (started as { models?: unknown }).models });
+        markOpen();
         return { ...started, sessionId };
       }
       if (!initialized.agentCapabilities?.loadSession) throw new CannotLoadSession(initialized.agentInfo ?? undefined);
@@ -149,12 +160,13 @@ export function connectSession(options: {
         throw error;
       });
       dispatch({ type: "loaded", modes: response.modes, configOptions: response.configOptions, models: (response as { models?: unknown }).models });
+      markOpen();
       return { ...response, sessionId };
     },
     async prompt(blocks) {
       dispatch({ type: "promptSent", blocks, at: Date.now() });
       try {
-        await agent.request("session/prompt", { sessionId, prompt: blocks });
+        await whenOpen(() => agent.request("session/prompt", { sessionId, prompt: blocks }));
       } finally {
         dispatch({ type: "promptEnded" });
       }
@@ -167,9 +179,9 @@ export function connectSession(options: {
       }
       // promptRequired: a turn that ended meanwhile gets the message as a prompt of the view's own,
       // whose answer the view follows like any other.
-      const result = await agent.request("_session/steering", {
+      const result = await whenOpen(() => agent.request("_session/steering", {
         sessionId, prompt: blocks, _meta: { steering: { idleBehavior: "promptRequired" } },
-      } as never) as { outcome?: string } | undefined;
+      } as never)) as { outcome?: string } | undefined;
       if (result?.outcome === "promptRequired") {
         await this.prompt(blocks);
         return "prompted";
@@ -192,7 +204,7 @@ export function connectSession(options: {
     async cancel() {
       // Codex interrupts the thread's turn, whichever client started it (the pane's TUI too).
       dispatch({ type: "stopped" });
-      await agent.notify("session/cancel", { sessionId });
+      await whenOpen(() => agent.notify("session/cancel", { sessionId }));
     },
     answerPermission(id, optionId) {
       const resolve = answers.get(id);
@@ -203,18 +215,18 @@ export function connectSession(options: {
     async setConfigOption(configId, value) {
       // The picker made from the session's `models` field (session-options withModels).
       if (configId === MODEL_STATE_OPTION) {
-        await agent.request("session/set_model", { sessionId, modelId: String(value) } as never);
+        await whenOpen(() => agent.request("session/set_model", { sessionId, modelId: String(value) } as never));
         dispatch({ type: "modelSet", modelId: String(value) });
         return;
       }
-      const response = await agent.request("session/set_config_option", { sessionId, configId, value } as never) as
+      const response = await whenOpen(() => agent.request("session/set_config_option", { sessionId, configId, value } as never)) as
         { configOptions?: unknown };
       if (Array.isArray(response?.configOptions)) {
         dispatch({ type: "update", update: { sessionUpdate: "config_option_update", configOptions: response.configOptions } as never });
       }
     },
     async setMode(modeId) {
-      await agent.request("session/set_mode", { sessionId, modeId });
+      await whenOpen(() => agent.request("session/set_mode", { sessionId, modeId }));
       dispatch({ type: "update", update: { sessionUpdate: "current_mode_update", currentModeId: modeId } });
     },
     async allowAll() {

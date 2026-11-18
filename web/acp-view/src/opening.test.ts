@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gateFromHost, HOST_ERRORS_BEFORE_GIVING_UP, HOST_SILENT_AFTER_MS, initialGate, nextViewPhase, SessionWait, type ViewPhase } from "./opening";
+import { gateFromHost, historyArriving, HOST_ERRORS_BEFORE_GIVING_UP, HOST_SILENT_AFTER_MS, initialGate, nextViewPhase, SessionWait, type ViewPhase } from "./opening";
 
 describe("which session the view opens", () => {
   it("asks the host for the pane's session, or opens the one it was given", () => {
@@ -36,6 +36,20 @@ describe("how the view's connection stands", () => {
     expect(run({ type: "failed", failure }, { type: "connect" })).toEqual({ kind: "connecting" });
     expect(run({ type: "taken-over" }, { type: "connect" }, { type: "loaded" })).toEqual({ kind: "open" });
     expect(run({ type: "failed", failure }, { type: "loaded" })).toEqual({ kind: "failed", failure });
+  });
+
+  it("keeps the first failure: a session that did not open is why its connection closed", () => {
+    const notOpened = { title: "The session could not be opened", detail: { message: "The session did not open: no such session" } };
+    expect(run({ type: "failed", failure: notOpened }, { type: "failed", failure })).toEqual({ kind: "failed", failure: notOpened });
+  });
+});
+
+describe("whether the session's history is coming in as it loads", () => {
+  it("is once a replay has brought something, and not for a session already open", () => {
+    expect(historyArriving({ replaying: true, items: [], toolCalls: {} })).toBe(false);
+    expect(historyArriving({ replaying: true, items: [{}], toolCalls: {} })).toBe(true);
+    expect(historyArriving({ replaying: true, items: [], toolCalls: { t1: {} } })).toBe(true);
+    expect(historyArriving({ replaying: false, items: [{}], toolCalls: {} })).toBe(false);
   });
 });
 

@@ -73,6 +73,15 @@ export class SessionWait {
   }
 }
 
+/** How long the session's history stands still, while the agent still opens the session, before
+ *  the view shows it: a replay comes in one burst (Claude's ~700 updates within 30 ms). */
+export const HISTORY_SETTLED_MS = 200;
+
+/** Whether some of the session's history has come in as its load replays it. */
+export function historyArriving(state: { replaying: boolean; items: readonly unknown[]; toolCalls: Record<string, unknown> }): boolean {
+  return state.replaying && (state.items.length > 0 || Object.keys(state.toolCalls).length > 0);
+}
+
 export interface FailureDetail {
   title: string;
   detail: { message: string; data?: string };
@@ -96,7 +105,8 @@ export type ViewEvent =
   | { type: "failed"; failure: FailureDetail };
 
 /** The view's phase after `event`. A session another view took, or one this agent cannot load,
- *  stays said: the connection's end that follows is no failure of its own. */
+ *  stays said: the connection's end that follows is no failure of its own. So does the first
+ *  failure: a session that did not open is why its connection then closed. */
 export function nextViewPhase(phase: ViewPhase, event: ViewEvent): ViewPhase {
   switch (event.type) {
     case "connect": return { kind: "connecting" };
@@ -105,7 +115,7 @@ export function nextViewPhase(phase: ViewPhase, event: ViewEvent): ViewPhase {
     case "open-elsewhere": return { kind: "open-elsewhere" };
     case "taken-over": return phase.kind === "cannot-load" ? phase : { kind: "taken-over" };
     case "failed":
-      return phase.kind === "taken-over" || phase.kind === "open-elsewhere" || phase.kind === "cannot-load"
+      return phase.kind === "taken-over" || phase.kind === "open-elsewhere" || phase.kind === "cannot-load" || phase.kind === "failed"
         ? phase
         : { kind: "failed", failure: event.failure };
   }

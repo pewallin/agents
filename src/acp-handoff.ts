@@ -396,6 +396,9 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
   let sessionId: string | undefined;
   /** The host is starting its own session: the view waits for it. */
   let hostedStarting = false;
+  /** The session the host is opening meanwhile (a load): a view can attach to it already, and is
+   *  given its history as the agent replays it. */
+  let openingSession: string | undefined;
   /** Why the host's session last failed to start. */
   let lastHostError: string | undefined;
   /** The session a view started and prompted in, when the TUI had none to give. */
@@ -489,8 +492,12 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
 
   // `retry`: the refusal passes by itself (the agent is busy or switching): the app waits and asks again.
   const handOff = async (id: string): Promise<{ status: number; message?: string; session?: string | null; retry?: boolean }> => {
-    // The host is opening its session (a pane that starts in the view): the app asks again.
-    if (mode === "view" && hostedStarting) return { status: 409, message: `${agent.name} is opening its session; try again.`, retry: true };
+    // The host is opening its session (a pane that starts in the view): the view can have it once
+    // the host knows which; a new one the app asks for again.
+    if (mode === "view" && hostedStarting) {
+      if (openingSession && (id === "current" || id === openingSession || continued(id) === openingSession)) return { status: 200, session: openingSession };
+      return { status: 409, message: `${agent.name} is opening its session; try again.`, retry: true };
+    }
     if (mode === "view") {
       const current = sessionId ?? startedSession ?? null;
       return id === "current" || id === current || (current !== null && continued(id) === current)
@@ -522,8 +529,19 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     status("loading", sessionId ? "Loading the session…" : `Starting ${agent.name}…`);
     resetTerminal(transcript);
     // The host holds the session while the view has it: the view attaches to it, and lines for
-    // the agent (its coordinator's, its watches') reach it as prompts through the host.
-    const hostedId = await hostSession(sessionId);
+    // the agent (its coordinator's, its watches') reach it as prompts through the host. A session
+    // it loads the view has at once: the view shows its history as the agent replays it, and the
+    // field once the agent has it open. A new one the view waits for, to know its id.
+    const opened = hostSession(sessionId).then((hostedId) => settleHandOff(hostedId));
+    if (sessionId) {
+      opened.catch((error: unknown) => log(`the hand-off did not end: ${error instanceof Error ? error.message : String(error)}`));
+      return { status: 200, session: sessionId };
+    }
+    return await opened;
+  };
+
+  /** The end of a hand-off: the view has the host's session, or the TUI goes on with it. */
+  const settleHandOff = async (hostedId: string | undefined): Promise<{ status: number; message?: string; session?: string | null }> => {
     if (!hostedId) {
       const back = sessionId;
       mode = "tui";
@@ -544,6 +562,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     if (!host) return undefined;
     mode = "view";
     hostedStarting = true;
+    openingSession = existing;
     // A loaded session replays its history: the pane shows its end once the view has it (inView).
     if (existing) transcript.beginReplay();
     try {
@@ -558,6 +577,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
       return undefined;
     } finally {
       hostedStarting = false;
+      openingSession = undefined;
     }
   };
 
@@ -650,7 +670,10 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
           }
         },
         // While the host starts its own session the view waits for it (404, asked again).
-        currentSession: async () => mode === "view" && !hostedStarting ? { id: sessionId ?? startedSession ?? null, persisted: true } : undefined,
+        currentSession: async () => mode !== "view" ? undefined
+          : !hostedStarting ? { id: sessionId ?? startedSession ?? null, persisted: true }
+          // A session being loaded the view can attach to already; a new one it waits for.
+          : openingSession ? { id: openingSession, persisted: true } : undefined,
         log,
       });
       log(`host ${host.url} for ${agent.name} in ${paneId}`);

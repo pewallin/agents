@@ -6,6 +6,12 @@
 //
 // One agent process, one session: the view's requests get ids of their own toward the agent, and
 // the agent's questions (permissions) wait for a view when none is attached.
+//
+// A view may attach while the host still opens the session (a pane restored in its view, a TUI
+// handing over): its initialize and load wait for the host's own, it is given the history the
+// load has replayed so far and then the rest as it comes, and its load is answered when the
+// session is open. An agent that replays its history before it is ready (Claude replays the
+// transcript while Claude Code starts) fills the view meanwhile.
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
@@ -56,6 +62,20 @@ export interface HostedView {
   detach(): void;
 }
 
+interface AttachedView {
+  send: (line: string) => void;
+  ids: Map<string, Id>;
+  /** The view has been given the session's history: the session's updates go to it live. */
+  synced: boolean;
+}
+
+/** Settles with `work`, and never rejects unhandled while no one waits on it. */
+function settled(work: Promise<unknown>): Promise<void> {
+  const done = work.then(() => undefined);
+  done.catch(() => {});
+  return done;
+}
+
 export class HostedSession {
   sessionId: string | undefined;
   private nextId = 1;
@@ -67,7 +87,10 @@ export class HostedSession {
   private readonly history: string[] = [];
   /** The agent's requests no view has answered yet: sent again to the next view. */
   private readonly asks = new Map<string, string>();
-  private view: { send: (line: string) => void; ids: Map<string, Id> } | undefined;
+  private view: AttachedView | undefined;
+  /** Settled when the host's own initialize and session open have: views that ask meanwhile wait. */
+  private initializing: Promise<void> | undefined;
+  private opening: Promise<void> | undefined;
   private readonly exited: Promise<void>;
   private readonly launchSettings: AcpLaunchSettingsApplier | undefined;
   private readonly usage: AcpUsageFill | undefined;
@@ -94,15 +117,20 @@ export class HostedSession {
 
   /** Initializes the agent and starts a session in `cwd`, or loads `existing`. */
   async start(cwd: string, existing?: string): Promise<string> {
-    this.initialized = await this.request("initialize", {
+    // A view that attaches while the session opens waits for these (fromView).
+    if (existing) this.sessionId = existing;
+    const initialize = this.request("initialize", {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
       clientInfo: { name: "agents-acp-host", version: "1" },
     }, 30_000);
+    this.initializing = settled(initialize);
+    this.initialized = await initialize;
     if (existing) {
       // The load replays the session: its updates are the history a view is given.
-      this.sessionId = existing;
-      this.opened = { ...await this.request("session/load", { sessionId: existing, cwd, mcpServers: [] }, 90_000), sessionId: existing };
+      const load = this.request("session/load", { sessionId: existing, cwd, mcpServers: [] }, 90_000);
+      this.opening = settled(load);
+      this.opened = { ...await load, sessionId: existing };
       return existing;
     }
     this.opened = await this.request("session/new", { cwd, mcpServers: [] }, 60_000);
@@ -144,7 +172,7 @@ export class HostedSession {
    *  attaches last has the session; one before it is let go (`replaced`). */
   attach(send: (line: string) => void, replaced?: () => void): HostedView {
     const previous = this.view;
-    const view = { send, ids: new Map<string, Id>() };
+    const view: AttachedView = { send, ids: new Map<string, Id>(), synced: false };
     this.view = view;
     if (previous) replaced?.();
     return {
@@ -199,7 +227,7 @@ export class HostedSession {
       params: { sessionId: this.sessionId, update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } } },
     });
     this.history.push(line);
-    if (live) this.view?.send(line);
+    if (live && this.view?.synced) this.view.send(line);
   }
 
   private fromAgent(raw: string): void {
@@ -230,8 +258,41 @@ export class HostedSession {
       return;
     }
     if (key !== undefined) this.asks.set(key, line);
-    else if (message.method === "session/update" && message.params?.sessionId === this.sessionId) this.history.push(line);
+    else if (message.method === "session/update" && message.params?.sessionId === this.sessionId) {
+      this.history.push(line);
+      // A view not given the history yet gets this update with it.
+      if (!this.view?.synced) return;
+    }
     this.view?.send(line);
+  }
+
+  private loadsOwnSession(message: Message): boolean {
+    return (message.method === "session/load" || message.method === "session/resume")
+      && this.sessionId !== undefined && message.params?.sessionId === this.sessionId;
+  }
+
+  /** The session's history so far; what comes after goes to the view live. */
+  private giveHistory(view: AttachedView): void {
+    for (const update of this.history) view.send(update);
+    view.synced = true;
+  }
+
+  private answerLoad(view: AttachedView, id: Id): void {
+    const { sessionId: _sessionId, ...opened } = this.opened ?? {};
+    view.send(JSON.stringify({ jsonrpc: "2.0", id, result: opened }));
+    for (const ask of this.asks.values()) view.send(ask);
+  }
+
+  /** `answer` once `work` is done, for a view still attached; an error answer if it failed. */
+  private whenSettled(view: AttachedView, id: Id, work: Promise<void>, answer: () => void): void {
+    work.then(
+      () => { if (this.view === view) answer(); },
+      (error: unknown) => {
+        if (this.view !== view) return;
+        const reason = error instanceof Error ? error.message : String(error);
+        view.send(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: `The session did not open: ${reason}` } }));
+      },
+    );
   }
 
   /** A view that loads the session later is given the mode and settings it has now, not those
@@ -247,12 +308,23 @@ export class HostedSession {
     }
   }
 
-  private fromView(view: { send: (line: string) => void; ids: Map<string, Id> }, line: string): void {
+  private fromView(view: AttachedView, line: string): void {
     const message = parse(line);
     if (!message) return;
     const id = message.id;
     if (id === undefined || id === null) {
       this.toAgent(line);
+      return;
+    }
+    // The host's own initialize or session open is under way: the view's waits for it. A load is
+    // given the history so far at once, the rest live, and its answer once the session is open.
+    if (message.method === "initialize" && !this.initialized && this.initializing) {
+      this.whenSettled(view, id, this.initializing, () => view.send(JSON.stringify({ jsonrpc: "2.0", id, result: this.initialized })));
+      return;
+    }
+    if (this.loadsOwnSession(message) && !this.opened && this.opening) {
+      this.giveHistory(view);
+      this.whenSettled(view, id, this.opening, () => this.answerLoad(view, id));
       return;
     }
     if (message.method === undefined) {
@@ -265,12 +337,9 @@ export class HostedSession {
       view.send(JSON.stringify({ jsonrpc: "2.0", id, result: this.initialized }));
       return;
     }
-    const loads = message.method === "session/load" || message.method === "session/resume";
-    if (loads && message.params?.sessionId === this.sessionId && this.opened) {
-      for (const update of this.history) view.send(update);
-      const { sessionId: _sessionId, ...opened } = this.opened;
-      view.send(JSON.stringify({ jsonrpc: "2.0", id, result: opened }));
-      for (const ask of this.asks.values()) view.send(ask);
+    if (this.loadsOwnSession(message) && this.opened) {
+      this.giveHistory(view);
+      this.answerLoad(view, id);
       return;
     }
     if (message.method === "session/prompt" && message.params?.sessionId === this.sessionId) {
