@@ -15,6 +15,7 @@ import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type
 import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOptions, withModels } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
+import { workFolders } from "./paths";
 import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
 import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, ResultStrip, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
@@ -2005,6 +2006,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
     inApp: OPEN_REVIEW_BESIDE,
     hostJson,
     rawURL: (path) => `${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token ?? "")}`,
+    near: nearFolders,
     open: (target, options) => openChip(target, options, (changes) => void openReviewRef.current(changes)),
   }), [info.cwd]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -2065,6 +2067,14 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
     </DetailContext.Provider>
     </ChipHostContext.Provider>
   );
+}
+
+/** The folders the agent worked in, worked out again only when its tool calls change. */
+let nearCache: { calls: SessionState["toolCalls"]; folders: string[] } | undefined;
+function nearFolders(): string[] {
+  const calls = useSession.getState().toolCalls;
+  if (nearCache?.calls !== calls) nearCache = { calls, folders: workFolders(Object.values(calls)) };
+  return nearCache.folders;
 }
 
 /** Each turn's changes as git sees them: a snapshot of the working tree when the agent starts

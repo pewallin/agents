@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { pathTokens, rehypePathRefs } from "./paths";
+import { pathTokens, rehypePathRefs, workFolders } from "./paths";
+import type { ToolCall } from "./session-state";
 
 const tokens = (text: string) => pathTokens(text).map((token) => token.token);
 
@@ -26,5 +27,31 @@ describe("paths in prose", () => {
     expect(p.children.map((child) => child.value ?? child.properties?.dataPathRef)).toEqual(["Open ", "README.md", " now"]);
     expect((tree.children[1] as { children: unknown[] }).children).toHaveLength(1);
     expect((tree.children[2] as { children: unknown[] }).children).toHaveLength(1);
+  });
+});
+
+describe("the folders the agent worked in", () => {
+  const call = (id: string, rawInput: unknown, paths: string[] = [], diff?: string): ToolCall => ({
+    id, title: id, status: "completed", rawInput,
+    locations: paths.map((path) => ({ path })),
+    content: diff ? [{ type: "diff", path: diff, oldText: "", newText: "x" }] : [],
+  });
+
+  it("are where its tools' files are and where its commands ran, the latest first", () => {
+    expect(workFolders([
+      call("read", {}, ["/code/agents/src/acp-peek.ts"]),
+      call("edit", {}, [], "/code/agents-app-wt/AgentsNext/UI/Links.swift"),
+      call("bash", { command: "cd /code/other && git status" }),
+      call("codex", { command: ["bash", "-lc", "ls"], cwd: "/code/fourth/" }),
+      call("again", {}, ["/code/agents/src/acp-host.ts"]),
+      call("relative", { command: "cd src && ls" }, ["notes.md"]),
+    ])).toEqual(["/code/agents/src", "/code/fourth", "/code/other", "/code/agents-app-wt/AgentsNext/UI"]);
+  });
+
+  it("keeps the latest twenty", () => {
+    const calls = Array.from({ length: 30 }, (_, index) => call(`c${index}`, {}, [`/code/r${index}/a.ts`]));
+    const folders = workFolders(calls);
+    expect(folders).toHaveLength(20);
+    expect(folders[0]).toBe("/code/r29");
   });
 });

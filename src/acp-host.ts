@@ -26,7 +26,7 @@ import type { StateUsage } from "./scanner-state-runtime.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { TerminalReader } from "./terminal-question.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
-import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween } from "./acp-peek.js";
+import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween, workRoots } from "./acp-peek.js";
 
 export interface AcpHostMetadata {
   url: string;
@@ -1219,7 +1219,9 @@ function handlePeek(
     readJson(request, 256 * 1024).then(async (body) => {
       const names = (body as { names?: unknown })?.names;
       if (!Array.isArray(names)) { sendJson(response, 400, { message: "names are needed" }); return; }
-      sendJson(response, 200, { resolved: await resolveNames(names.filter((name): name is string => typeof name === "string"), { cwd, files: () => projectFiles(cwd), bases: () => programDirectories() }) });
+      const near = (body as { near?: unknown })?.near;
+      const folders = Array.isArray(near) ? near.filter((folder): folder is string => typeof folder === "string") : [];
+      sendJson(response, 200, { resolved: await resolveNames(names.filter((name): name is string => typeof name === "string"), { cwd, files: () => projectFiles(cwd), bases: () => programDirectories(), near: () => workRoots(folders, cwd) }) });
     }).catch(fail(400));
     return true;
   }

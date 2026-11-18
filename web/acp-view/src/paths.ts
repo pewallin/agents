@@ -3,6 +3,7 @@
 // ends a sentence, that hold a letter and a slash or a file extension; a line after a colon
 // (`main.tsx:42`); a pane id (`%12`). Whether a token names anything is the host's to say: the
 // view asks it (/api/resolve) and only a name that exists becomes a chip.
+import type { ToolCall } from "./session-state";
 
 const PATH_CHARACTER = /[A-Za-z0-9._\-/~+]/;
 
@@ -13,6 +14,29 @@ export function looksLikePath(token: string): boolean {
   const dot = token.lastIndexOf(".");
   if (dot <= 0) return false;
   return /^[A-Za-z0-9]{1,8}$/.test(token.slice(dot + 1)) && /[A-Za-z]/.test(token.slice(dot + 1));
+}
+
+/** The folders the agent worked in, most recent first: where the files its tools read and wrote
+ *  are, where its commands ran (a command's own cwd, or the folder of a `cd` it starts with). The
+ *  host looks a relative name up in their repositories after the pane's own directory, so a path
+ *  the agent writes relative to another repository or worktree is a link too. */
+export function workFolders(calls: readonly ToolCall[], limit = 20): string[] {
+  const folders: string[] = [];
+  const add = (folder: string | undefined) => {
+    const path = folder?.replace(/\/+$/, "");
+    if (path && path.startsWith("/") && !folders.includes(path)) folders.push(path);
+  };
+  for (const call of [...calls].reverse()) {
+    if (folders.length >= limit) break;
+    const input = (call.rawInput ?? {}) as Record<string, unknown>;
+    for (const key of ["cwd", "workdir"]) if (typeof input[key] === "string") add(input[key] as string);
+    const command = Array.isArray(input.command) ? input.command.join(" ") : typeof input.command === "string" ? input.command : "";
+    add(command.match(/(?:^|[\s;&|(])cd\s+(["']?)(\/[^"'\s;&|)]+)\1/)?.[2]);
+    for (const path of [...call.locations.map((location) => location.path), ...call.content.flatMap((entry) => (entry.type === "diff" ? [entry.path] : []))]) {
+      if (typeof path === "string" && path.startsWith("/")) add(path.slice(0, path.lastIndexOf("/")) || "/");
+    }
+  }
+  return folders.slice(0, limit);
 }
 
 export interface TextToken { start: number; end: number; token: string }

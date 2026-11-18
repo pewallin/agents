@@ -77,6 +77,8 @@ interface ResolveContext {
   ignoredFiles?: () => Promise<string[]>;
   /** More directories a relative name is looked up in after the pane's: program folders. */
   bases?: () => Promise<string[]>;
+  /** Then these: the repositories the agent worked in (workRoots). */
+  near?: () => Promise<string[]>;
 }
 
 /** The real path of an absolute path that exists, else null. */
@@ -109,8 +111,33 @@ export function programDirectories(pane = process.env.TMUX_PANE): Promise<string
   return directories;
 }
 
+const topLevels = new Map<string, Promise<string | null>>();
+
+/** The repositories of folders the agent worked in (where its tools' files are, where its commands
+ *  ran), in their order: each folder's git top level, else the folder itself, without the pane's
+ *  own. A path the agent writes relative to another repository or worktree is found there. At most
+ *  20, each folder asked of git once. */
+export async function workRoots(folders: readonly string[], cwd: string): Promise<string[]> {
+  const rootOf = (folder: string) => {
+    let root = topLevels.get(folder);
+    if (!root) {
+      root = toplevel(folder).catch(() => null).then((top) => top ?? (statSync(folder, { throwIfNoEntry: false })?.isDirectory() ? folder : null));
+      topLevels.set(folder, root);
+    }
+    return root;
+  };
+  const own = await rootOf(cwd);
+  const roots: string[] = [];
+  for (const folder of folders.slice(0, 20)) {
+    if (typeof folder !== "string" || !isAbsolute(folder)) continue;
+    const root = await rootOf(folder);
+    if (root && root !== own && root !== cwd && !roots.includes(root)) roots.push(root);
+  }
+  return roots;
+}
+
 /** What each name stands for, or null. A relative path is looked up in the pane's directory, then
- *  in the coordinators' program folders; a bare file name also stands for the one project file of
+ *  in the coordinators' program folders, then in the repositories the agent worked in; a bare file name also stands for the one project file of
  *  that name, if there is exactly one, else the one in the folders git ignores (heavy ones aside). An absolute path or one under ~ stands for the file there,
  *  as in the terminal (reading it is another matter: see insideAllowed). */
 export async function resolveNames(names: string[], context: ResolveContext): Promise<Record<string, Resolved | null>> {
@@ -137,7 +164,7 @@ export async function resolveNames(names: string[], context: ResolveContext): Pr
     const expanded = written.startsWith("~/") ? join(homedir(), written.slice(2)) : written;
     let path = isAbsolute(expanded) ? existing(expanded) : inside(context.cwd, expanded);
     if (!path && !isAbsolute(expanded)) {
-      for (const base of await context.bases?.() ?? []) {
+      for (const base of [...await context.bases?.() ?? [], ...await context.near?.() ?? []]) {
         path = inside(base, expanded);
         if (path) break;
       }

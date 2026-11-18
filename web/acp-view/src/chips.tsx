@@ -27,6 +27,9 @@ export interface ChipHost {
   hostJson: <T>(path: string, body?: unknown) => Promise<T>;
   /** A URL of the host's own that a plain <img> may load (the token rides in the query). */
   rawURL: (path: string) => string;
+  /** The folders the agent worked in (workFolders): a relative name is looked up in their
+   *  repositories too. */
+  near?: () => string[];
   /** `alternate`: ⌥ was held (the editor, the default browser); `command`: ⌘ was, which does
    *  what a ⌘-click on the same link does in a terminal. */
   open: (target: ChipTarget, options: { alternate: boolean; command?: boolean; change?: FileChange }) => void;
@@ -40,6 +43,9 @@ export const TurnChangesContext = createContext<FileChange[]>([]);
 
 type Resolution = ChipTarget | null;
 const resolved = new Map<string, Resolution>();
+/** A name that named nothing, with the folders it was looked up in: asked again once the agent
+ *  has worked somewhere new. */
+const missed = new Map<string, string>();
 const waiting = new Map<string, Array<(value: Resolution) => void>>();
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let currentHost: ChipHost | null = null;
@@ -51,7 +57,8 @@ function flush() {
   if (!host || names.length === 0) return;
   const callbacks = new Map(names.map((name) => [name, waiting.get(name)!]));
   for (const name of names) waiting.delete(name);
-  host.hostJson<{ resolved: Record<string, Resolution> }>("/api/resolve", { names })
+  const near = host.near?.() ?? [];
+  host.hostJson<{ resolved: Record<string, Resolution> }>("/api/resolve", { names, near })
     .then((value) => value.resolved ?? {}, () => ({}) as Record<string, Resolution>)
     // What the host does not know (or a host too old to say) the app may: it resolves names by
     // the terminal's rules, the coordinators' program folders included.
@@ -66,7 +73,8 @@ function flush() {
     .then((found) => {
       for (const name of names) {
         const result = found[name] ?? null;
-        resolved.set(name, result);
+        if (result) resolved.set(name, result);
+        else missed.set(name, near.join("\n"));
         for (const callback of callbacks.get(name) ?? []) callback(result);
       }
     });
@@ -90,10 +98,10 @@ export async function askApp(names: string[]): Promise<Record<string, Resolution
 export function useResolved(name: string | null): Resolution | undefined {
   const host = useContext(ChipHostContext);
   const panes = usePanes(host, name !== null && /^%\d+$/.test(name));
-  const [value, setValue] = useState<Resolution | undefined>(() => (name === null ? null : immediate(name)));
+  const [value, setValue] = useState<Resolution | undefined>(() => (name === null ? null : immediate(name, host)));
   useEffect(() => {
     if (name === null || !host) { setValue(null); return; }
-    const now = immediate(name);
+    const now = immediate(name, host);
     if (now !== undefined) { setValue(now); return; }
     if (/^%\d+$/.test(name)) return;
     let live = true;
@@ -143,9 +151,11 @@ export function useResolvedNames(names: string[]): Map<string, Resolution> {
   return values;
 }
 
-function immediate(name: string): Resolution | undefined {
+function immediate(name: string, host: ChipHost | null): Resolution | undefined {
   if (/^https?:\/\/\S+$/i.test(name)) return { kind: "url", url: name };
-  return resolved.get(name);
+  const found = resolved.get(name);
+  if (found) return found;
+  return missed.has(name) && missed.get(name) === (host?.near?.() ?? []).join("\n") ? null : undefined;
 }
 
 interface PaneSummary { id: string; command: string; title: string; state?: string }
@@ -728,7 +738,7 @@ function ResolvedStrip({ names, made, host, version }: { names: string[]; made: 
     if (!host) return;
     let live = true;
     const ask = names.length > 0
-      ? host.hostJson<{ resolved: Record<string, ChipTarget | null> }>("/api/resolve", { names }).then((value) => value.resolved, () => ({}) as Record<string, ChipTarget | null>)
+      ? host.hostJson<{ resolved: Record<string, ChipTarget | null> }>("/api/resolve", { names, near: host.near?.() ?? [] }).then((value) => value.resolved, () => ({}) as Record<string, ChipTarget | null>)
       : Promise.resolve({} as Record<string, ChipTarget | null>);
     void ask.then((found) => {
       if (!live) return;

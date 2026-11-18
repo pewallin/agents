@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { changesSince, commitChanges, commitInfo, ignoredFiles, inside, looksLikePath, peekFile, readBeads, resolveNames, snapshotTree, splitLine, treeDiff } from "./acp-peek.js";
+import { changesSince, commitChanges, commitInfo, ignoredFiles, inside, looksLikePath, peekFile, readBeads, resolveNames, snapshotTree, splitLine, treeDiff, workRoots } from "./acp-peek.js";
 
 let root: string;
 const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "T", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "T", GIT_COMMITTER_EMAIL: "t@t" } });
@@ -77,6 +77,25 @@ describe("names", () => {
     } finally {
       process.env.HOME = previous;
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a path written relative to another repository the agent worked in", async () => {
+    const other = realpathSync(mkdtempSync(join(tmpdir(), "acp-other-")));
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: other });
+      mkdirSync(join(other, "src/deep"), { recursive: true });
+      writeFileSync(join(other, "src/acp-peek.ts"), "export {};\n");
+      // The agent read src/deep/x.ts there and ran a command in the pane's own directory.
+      const near = await workRoots([join(other, "src/deep"), join(root, "web/src"), "/no/such/folder", "relative"], root);
+      expect(near).toEqual([other]);
+      const resolved = await resolveNames(["src/acp-peek.ts:3", "README.md", "src/nothing.ts"], { cwd: root, files: async () => [], near: async () => near });
+      expect(resolved["src/acp-peek.ts:3"]).toEqual({ kind: "file", path: join(other, "src/acp-peek.ts"), rel: join(other, "src/acp-peek.ts").replace(homedir(), "~"), line: 3 });
+      // The pane's own directory comes first.
+      expect(resolved["README.md"]).toMatchObject({ path: join(root, "README.md") });
+      expect(resolved["src/nothing.ts"]).toBeNull();
+    } finally {
+      rmSync(other, { recursive: true, force: true });
     }
   });
 
