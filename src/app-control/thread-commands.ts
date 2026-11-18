@@ -1,5 +1,6 @@
 // @ts-nocheck
-// agent resolve and agent reopen: a thread is finished, or taken up again.
+// agent resolve, agent reopen and agent remove: a thread is finished, taken up again, or taken
+// out of the list.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -14,7 +15,7 @@ import { closeOpenQuestions } from "./questions.js";
 import { closedReportState } from "./report.js";
 import { runAgentSpawn } from "./spawn.js";
 import { isWorkerRecord } from "./spawn-support.js";
-import { markResolved, markUnresolved, readSessionLines, reopenStep, resumeTarget, sessionsFile, titleWarning, transcriptLookup, updateTaskMeta } from "./threads.js";
+import { markResolved, markUnresolved, readSessionLines, removeProgram, removeThread, reopenStep, resumeTarget, sessionsFile, threadRows, titleWarning, transcriptLookup, updateTaskMeta } from "./threads.js";
 import { agentResumeInvocation } from "../resume.js";
 
 // The program a thread command acts on: --program (the app names it), else the program of the
@@ -63,6 +64,36 @@ export async function runAgentResolve(command) {
   }
   writeStatusFile(program);
   return { id: requestID("cli"), ok: true, result: { program, resolved: command.tasks, closed: closed.length ? closed : undefined } };
+}
+
+// Takes threads, or with no task a whole program, out of the list: moved aside (removeProgram,
+// removeThread), never deleted. Nothing live is removed: a thread with a pane is resolved first, a
+// program is removed once no coordinator leads it and none of its threads has a pane. A whole
+// program is named only by --program, never by the pane that runs the command.
+export async function runAgentRemove(command) {
+  const params = command.params;
+  if (command.tasks.length === 0 && !params.program) fail(64, "usage", "agent remove needs task names, or --program <dir> to remove a whole program.");
+  const { program } = commandProgram(params, "agent remove");
+  if (!fs.existsSync(program)) fail(2, "programUnavailable", `No program ${program}.`);
+  for (const task of command.tasks) knownTask(program, task);
+  const records = coordinationPaneRecords().filter(record => record.program === program);
+  const workers = records.filter(isWorkerRecord);
+  const tasks = command.tasks.length ? command.tasks : threadRows(program).map(row => row.task);
+  const live = workers.filter(record => tasks.includes(record.task));
+  if (live.length) {
+    fail(2, "threadLive", `${live.map(record => `${record.task} (pane ${localPaneRef(record.paneID)})`).join(", ")} still ${live.length === 1 ? "has its pane" : "have their panes"}; resolve ${live.length === 1 ? "it" : "them"} first.`);
+  }
+  if (command.tasks.length === 0) {
+    const lead = records.find(coordinatorLeads);
+    if (lead) fail(2, "programLed", `The coordinator in pane ${localPaneRef(lead.paneID)} still leads ${programName(program)}; close its pane first.`);
+    const name = programName(program);
+    const movedTo = removeProgram(program);
+    return { id: requestID("cli"), ok: true, result: { program, name, removed: "program", threads: tasks.length, movedTo } };
+  }
+  const moved = command.tasks.map(task => ({ task, movedTo: removeThread(program, task) }));
+  writeStatusFile(program);
+  for (const record of records) notifyApp(record.sessionName);
+  return { id: requestID("cli"), ok: true, result: { program, removed: "threads", threads: moved } };
 }
 
 // Names a thread in the user's words: task.json's title, and the title its live pane shows. Any

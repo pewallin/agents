@@ -21,10 +21,13 @@ import { DELIVERY_MARKER } from "../delivery-marker.js";
 // only those words and the file the message waits in (deliveryLine).
 // Every queued line has an id, which names its delivery record (messageRecord); the queue file
 // starts with the time, so lines go out in the order they came.
-export function enqueueMessage(program, targetUUID, text, summary, id = newMessageID()) {
+// A message is one line, but for one written as Markdown (`lines`: a coordinator's start), whose
+// paragraphs and lists stay: the prompt only names the file that holds it.
+export function enqueueMessage(program, targetUUID, text, summary, id = newMessageID(), { lines = false } = {}) {
   const dir = path.join(program, ".queue", targetUUID);
   fs.mkdirSync(dir, { recursive: true });
-  const entry = { id, summary: oneLine(summary, SUMMARY_LIMIT), text: oneLine(text, 2000) };
+  const body = lines ? String(text || "").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim() : oneLine(text, 2000);
+  const entry = { id, summary: oneLine(summary, SUMMARY_LIMIT), text: body };
   writeFileAtomic(path.join(dir, `${Date.now()}-${id}.txt`), `${JSON.stringify(entry)}\n`);
   return id;
 }

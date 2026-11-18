@@ -13,7 +13,7 @@ import { runAgentAdopt, runAgentPromote, runAgentProtocol, runAgentRespawn } fro
 import { runAgentClose, runAgentReport, runAgentStatus, runAgentWait } from "./report.js";
 import { runAgentDelivery, runAgentSend } from "./send.js";
 import { runAgentSpawn } from "./spawn.js";
-import { runAgentName, runAgentReopen, runAgentResolve, runAgentTitle } from "./thread-commands.js";
+import { runAgentName, runAgentRemove, runAgentReopen, runAgentResolve, runAgentTitle } from "./thread-commands.js";
 import { runSupervisor } from "./supervisor.js";
 import { runAgentRemind, runAgentWatch } from "./watch.js";
 
@@ -68,6 +68,9 @@ export async function runAppControl(argv) {
   }
   if (command.kind === "agent-resolve") {
     outputResponse(await runAgentResolve(command));
+  }
+  if (command.kind === "agent-remove") {
+    outputResponse(await runAgentRemove(command));
   }
   if (command.kind === "agent-name") {
     outputResponse(await runAgentName(command));

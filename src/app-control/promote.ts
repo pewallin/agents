@@ -63,14 +63,15 @@ export async function runAgentPromote(command) {
   // The program's name in the user's words: given here, else the coordinator names it once.
   if (params.name !== undefined && params.name !== true && String(params.name).trim()) setProgramName(program, String(params.name).replace(/\s+/g, " ").trim().slice(0, 60));
   const unnamed = !programMeta(program)?.name;
-  const naming0 = unnamed
+  const nameProgram = unnamed
     ? ` Name this program once, from the user's goal in 2-4 words (it shows as "${programName(program)}" until then): \`${shellQuote(cli)} agent name "<name>"\`.`
     : "";
   // Threads from before titles (or a coordinator that left them out): the new one names them once.
   const untitled = threadRows(program).filter(row => !row.meta.title && !row.meta.resolved).map(row => row.task);
-  const naming = naming0 + (untitled.length
+  const nameThreads = untitled.length
     ? ` These open threads have no title yet: ${untitled.join(", ")}. Name each once with \`${shellQuote(cli)} agent title <task> "<title>"\` (verb first, 3-6 words, in the user's words).`
-    : "");
+    : "";
+  const naming = nameProgram + nameThreads;
   // Workers whose coordinator's pane is gone report to this one from now on.
   const adopted = old ? [] : goneCoordinators(program, record, records)
     .flatMap(gone => takeOver({ uuid: gone, program, live: false }, record, program).workers);
@@ -87,19 +88,16 @@ export async function runAgentPromote(command) {
     const memory = tookOver?.memoryRequested
       ? ` The coordinator before you writes ${tookOver.memory} and tells you when it is there; wait for that, read it, and do not write it yourself until then.`
       : "";
-    const instructions = userInstructions() ? ` The user's own instructions are in ${userInstructionsPath()}; follow them too.` : "";
-    // An agent promoted mid-conversation keeps what it knows; one started as coordinator, or put
-    // in a coordinator's pane in place of the agent before it, knows only what the program holds.
-    const lead = fresh
-      ? `You are the coordinator of this work. Read the coordinator protocol at ${protocol} and follow it; open ${overviewFile} beside you and keep it current.`
-      : notes.coordinatedBefore
-        ? `You are now also the coordinator of this work. Keep all you know and keep answering the user in the language you have been using. Read the coordinator protocol at ${protocol} and follow it from now on; open ${overviewFile} beside you, and add to ${path.join(program, "MEMORY.md")} and ${overviewFile} only what you know that they do not say yet.`
-        : `You are now also the coordinator of this work. Keep all you know and keep answering the user in the language you have been using. Read the coordinator protocol at ${protocol} and follow it from now on; first write what you know so far to ${contextFile} and ${overviewFile}, and open ${overviewFile} beside you.`;
-    const skill = skillFile() ? ` Everything else the CLI does in the app is in ${skillFile()}.` : "";
     const transcript = tookOver?.previousSession
       ? ` The coordinator before you ran as ${tookOver.previousSession.agent}; its transcript is ${tookOver.previousSession.file}. Read it only where MEMORY.md leaves a gap, and check what either says was done against the repository before you build on it.`
       : "";
-    enqueueMessage(program, uuid, `${lead} Program directory: ${program}; run the CLI as ${shellQuote(cli)}. ${asHint(coordinatorCLIName(uuid))}${skill}${instructions}${carryOn}${naming}${elsewhere}${memory}${transcript}`, "You are the coordinator now");
+    const text = coordinatorStartMessage({
+      name: programName(program), program, protocol, overview: overviewFile, context: contextFile, memoryFile: path.join(program, "MEMORY.md"),
+      cli: shellQuote(cli), hint: asHint(coordinatorCLIName(uuid)), skill: skillFile(), instructions: userInstructions() ? userInstructionsPath() : undefined,
+      start: fresh ? "fresh" : notes.coordinatedBefore ? "carry-on" : "promoted",
+      steps: [carryOn, memory, nameProgram, nameThreads, elsewhere, transcript],
+    });
+    enqueueMessage(program, uuid, text, `Coordinator of “${programName(program)}”`, undefined, { lines: true });
   }
   // The user who made a running agent coordinator is about to talk to it: the line goes in now
   // if the agent waits at its prompt, not a supervisor tick or two later. An agent that has just
@@ -136,6 +134,36 @@ export async function runAgentPromote(command) {
       cli,
     },
   };
+}
+
+// What an agent the app makes coordinator reads first (agent promote --tell), as Markdown: what
+// the role is, the steps before it answers the user, then where things are. Its prompt shows only
+// "Coordinator of “<name>”" and the file. `start`: "fresh" (started as coordinator, or in a
+// coordinator's pane in place of the agent before it: it knows only what the program holds),
+// "promoted" (mid-conversation: it keeps what it knows and writes it down first) or "carry-on"
+// (mid-conversation, in a program coordinated before).
+export function coordinatorStartMessage({ name, program, protocol, overview, context, memoryFile, cli, hint, skill, instructions, start, steps = [] }) {
+  const fresh = start === "fresh";
+  const first = [
+    `Read the coordinator protocol at ${protocol} and follow it${fresh ? "" : " from now on"}.`,
+    start === "promoted"
+      ? `Write what you know so far to ${context} and ${overview}, and open ${overview} beside you.`
+      : start === "carry-on"
+        ? `Open ${overview} beside you, and add to ${memoryFile} and ${overview} only what you know that they do not say yet.`
+        : `Open ${overview} beside you and keep it current.`,
+    ...steps.map(step => String(step || "").trim()).filter(Boolean),
+  ];
+  return [
+    `**You are ${fresh ? "" : "now also "}the coordinator of this work: “${name}”.** You hand the user's work to worker agents, one thread each, follow their reports and keep the user's overview current; the workers do the work, you do not.${fresh ? "" : " Keep all you know and keep answering the user in the language you have been using."}`,
+    "First:",
+    first.map((step, index) => `${index + 1}. ${step}`).join("\n"),
+    [
+      `- Program directory: ${program}`,
+      `- The CLI: ${cli}. ${hint}`,
+      skill ? `- Everything else the CLI does in the app: ${skill}` : "",
+      instructions ? `- The user's own instructions: ${instructions}; follow them too.` : "",
+    ].filter(Boolean).join("\n"),
+  ].join("\n\n");
 }
 
 // The protocol again, for a coordinator that lost it: a hook after a compaction prints it.

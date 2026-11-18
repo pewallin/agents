@@ -52,13 +52,40 @@ function SummaryWithWorkers({ summary }: { summary: string }) {
   return <>{parts}</>;
 }
 
-/** A wake-up or message from the coordination (⟢ agents · …): one quiet row, not your words. */
+/** A wake-up or message from the coordination (⟢ agents · …): one quiet row, not your words. A
+ *  click on it shows the message in place (a coordinator's start: its role and first steps); the
+ *  chip opens the file. Read only once opened: a coordinator's view holds many of these. */
 export function DeliveryRow({ summary, file, at }: { summary: string; file?: string; at?: number }) {
+  const [open, setOpen] = useState(false);
+  const text = useProgramText(open && file ? file : null);
+  const title = at ? new Date(at).toLocaleString() : undefined;
+  if (!file) {
+    return (
+      <div className="event delivery" title={title}>
+        <Spark />
+        <span className="what"><SummaryWithWorkers summary={summary} /></span>
+      </div>
+    );
+  }
+  const toggle = (event: React.MouseEvent | React.KeyboardEvent) => {
+    if ((event.target as HTMLElement).closest(".chip") || window.getSelection()?.toString()) return;
+    setOpen(!open);
+  };
   return (
-    <div className="event delivery" title={at ? new Date(at).toLocaleString() : undefined}>
-      <Spark />
-      <span className="what"><SummaryWithWorkers summary={summary} /></span>
-      {file && <NamedChip name={file} label="message" fallback={<span className="dim">{file.split("/").pop()}</span>} />}
+    <div className={`brief${open ? " open" : ""}`}>
+      <div className="event can-open" title={title} role="button" tabIndex={0} aria-expanded={open}
+        onClick={toggle} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(event); } }}>
+        <Spark />
+        <span className="what"><SummaryWithWorkers summary={summary} /></span>
+        <NamedChip name={file} label="message" fallback={<span className="dim">{file.split("/").pop()}</span>} />
+        <svg className="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+      </div>
+      {open && text && (
+        <div className="brief-body">
+          <Suspense fallback={<p className="plain">{text}</p>}><Markdown text={text} streaming={false} /></Suspense>
+        </div>
+      )}
+      {open && text === null && <p className="plain brief-body dim">The message is no longer there.</p>}
     </div>
   );
 }

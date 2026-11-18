@@ -9,7 +9,7 @@ import { writeTaskMeta } from "./briefs.js";
 import { permissionSummary } from "./delivery.js";
 import { taskPaths } from "./program.js";
 import {
-  appendSessionLine, derivedTitle, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
+  appendSessionLine, derivedTitle, removeProgram, removeThread, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
   resolvesOnClose, sessionsFile, threadState, transcriptRecords, userTexts,
 } from "./threads.js";
 
@@ -272,4 +272,23 @@ test("a thread that needs you says what it waits on: the question for the user, 
   assert.deepEqual(threadWaitingOn("progress", report, { status: "attention", detail: "git push origin main" }, ""), { kind: "permission", text: "Waiting for permission: git push origin main" });
   assert.deepEqual(threadWaitingOn("progress", report, { status: "attention" }, ""), { kind: "permission", text: "Waiting for permission" });
   assert.deepEqual(threadWaitingOn("progress", report, { status: "question", detail: "Which branch should I use?" }, ""), { kind: "question", text: "Which branch should I use?" });
+});
+
+test("a removed thread or program moves aside with where it was, and leaves the list", () => {
+  const program = newProgram();
+  const removed = fs.mkdtempSync(path.join(os.tmpdir(), "threads-removed-"));
+  newTask(program, "a");
+  newTask(program, "b");
+  const thread = removeThread(program, "a", removed);
+  assert.equal(path.basename(thread).startsWith(`${path.basename(program)}-a-`), true);
+  assert.equal(fs.existsSync(path.join(thread, "brief.md")), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(thread, ".removed.json"), "utf8")).from, taskPaths(program, "a").dir);
+  assert.deepEqual(programThreads(program, [], new Map(), () => null).threads.map(entry => entry.task), ["b"]);
+  // The same name twice in a second: each keeps its own directory.
+  newTask(program, "a");
+  assert.notEqual(removeThread(program, "a", removed), thread);
+  const moved = removeProgram(program, removed);
+  assert.equal(fs.existsSync(program), false);
+  assert.equal(fs.existsSync(path.join(moved, "tasks", "b", "task.json")), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(moved, ".removed.json"), "utf8")).from, program);
 });
