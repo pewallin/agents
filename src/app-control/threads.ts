@@ -18,7 +18,7 @@ import { readPlanFile } from "../acp-plan.js";
 import { programDirectories } from "./coordinator.js";
 import { agentNameFromLaunchCommand } from "./launch.js";
 import { fail } from "./output.js";
-import { coordinationPaneRecords, coordinatorLeads, programMeta, programName, programsRoot, readJSON, runGit, taskPaths, writeFileAtomic } from "./program.js";
+import { coordinationPaneRecords, coordinatorLeads, programMeta, programName, readJSON, runGit, taskPaths, writeFileAtomic } from "./program.js";
 import { briefSummary, isRoleLine, lastWorkerReport, workerStatus } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { agentStatuses } from "./supervisor-control.js";
@@ -117,32 +117,15 @@ export function markUnresolved(program, task) {
   });
 }
 
-// Removed: a program or a thread moved out of the list into <shared home>/removed/, never deleted.
-// Its briefs, reports and notes stay there to read or move back; the agents' own sessions are
-// not touched (they stay in each agent's history). `.removed.json` says where it was.
-export function removedRoot(programsDir = programsRoot()) {
-  return path.join(path.dirname(programsDir), "removed");
+// Removed: a program with its coordinator's notes and every thread, or one thread (its brief,
+// report and sessions list), deleted for good; the caller checks nothing of it is live. The agents'
+// own sessions are not touched: they stay in each agent's history.
+export function removeProgram(program) {
+  fs.rmSync(program, { recursive: true, force: true });
 }
 
-function moveAside(dir, name, root) {
-  fs.mkdirSync(root, { recursive: true });
-  const at = new Date().toISOString();
-  const stamp = at.replace(/[-:]/g, "").replace(/\..*$/, "");
-  let target = path.join(root, `${name}-${stamp}`);
-  for (let n = 2; fs.existsSync(target); n += 1) target = path.join(root, `${name}-${stamp}-${n}`);
-  fs.renameSync(dir, target);
-  writeFileAtomic(path.join(target, ".removed.json"), `${JSON.stringify({ from: dir, at }, null, 2)}\n`);
-  return target;
-}
-
-// A program with its coordinator's notes and every thread; the caller checks nothing of it is live.
-export function removeProgram(program, root = removedRoot()) {
-  return moveAside(program, path.basename(program), root);
-}
-
-// One thread: its task directory (brief, report, sessions).
-export function removeThread(program, task, root = removedRoot()) {
-  return moveAside(taskPaths(program, task).dir, `${path.basename(program)}-${task}`, root);
+export function removeThread(program, task) {
+  fs.rmSync(taskPaths(program, task).dir, { recursive: true, force: true });
 }
 
 // Closing the pane of a done thread resolves it: the user closes the tab of work they have looked

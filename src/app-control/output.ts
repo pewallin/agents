@@ -47,7 +47,7 @@ export function usage() {
     "  agents app agent delivery <message-id> [--cancel] --json",
     "  agents app agent close <task>... | --done --json   (a done thread closed is resolved; an unfinished one stays open, stopped)",
     "  agents app agent resolve <task>... [--program <dir>] --json   (nothing is left: closes its pane if it has one)",
-    "  agents app agent remove <task>... [--program <dir>] | --program <dir> --json   (out of the threads list, moved to ~/.agents/removed; a whole program without tasks)",
+    "  agents app agent remove <task>... [--program <dir>] | --program <dir> --json   (deletes threads without a pane, or without tasks a whole program nobody leads; agents' own sessions stay)",
     "  agents app agent reopen <task> [--title <title>] [--program <dir>] [--pane <pane-ref>] [--dry-run] --json   (resume its latest session, else respawn it, else read it)",
     "  agents app agent name <name> [--program <dir>] --json   (names the coordinator's program: 2-4 words from the user's goal)",
     "  agents app agent title <task> <title> [--program <dir>] --json   (names a thread in the user's words: verb first, 3-6 words)",
