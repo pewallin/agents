@@ -9,6 +9,7 @@
      data-agents-next="native"      the app draws the backdrop; the page is transparent
      data-theme="light|dark"        the backdrop's scheme
      data-wallpaper="true|false"    the backdrop shows the wallpaper through it
+     data-tinted="true|false"       the pane has a colour of its own (links are then text)
      --app-text, --app-accent       the app's text and accent colours
      --app-font-size                the "Agents and terminals" font size, in px
    Opened in a browser, the page has a background of its own and follows the system. */
@@ -57,6 +58,8 @@
   /* The pane's own colour, when it has one, tints the bubbles; else the accent does. */
   --hue: var(--app-tint, var(--acc));
   --you: color-mix(in srgb, var(--hue) 10%, transparent);
+  /* Link text: the accent toward the text colour, so it reads on any backdrop. */
+  --link: color-mix(in srgb, var(--acc) 70%, var(--fg));
   --blur: blur(22px) saturate(1.4);
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, monospace;
@@ -96,6 +99,7 @@
   --del-x: rgba(255, 123, 114, .30);
   --shadow: 0 8px 24px -10px rgba(0, 0, 0, .5);
   --you: color-mix(in srgb, var(--hue) 16%, transparent);
+  --link: color-mix(in srgb, var(--acc) 60%, var(--fg));
   color-scheme: dark;
 }
 /* Over the wallpaper: lighter text, clearer surfaces that blur what is behind them. */
@@ -113,6 +117,11 @@
   --field: rgba(30, 30, 38, .62);
   --pop: rgba(36, 36, 44, .82);
   --you: color-mix(in srgb, var(--hue) 20%, transparent);
+  --link: color-mix(in srgb, var(--acc) 55%, var(--fg));
+}
+/* A pane with its own colour (data-tinted): no blue reads on every one, so a link is text. */
+:root[data-theme][data-tinted="true"] {
+  --link: var(--fg);
 }
 /* END design tokens */
 * { box-sizing: border-box; }
@@ -160,7 +169,7 @@ button, summary, .status, .row, .edits, .when, .chev { -webkit-user-select: none
 .col { max-width: calc(var(--fs) * 70); margin: 0 auto; padding: 22px 26px var(--dock-space, 150px); display: flex; flex-direction: column; gap: 14px; }
 .col > * { flex-shrink: 0; }
 .empty, .notice { color: var(--dim); }
-.notice button.link { font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: pointer; }
+.notice button.link { font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
 .notice { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; }
 
 /* what you wrote */
@@ -214,7 +223,7 @@ th, td { overflow-wrap: break-word; }
 [data-streamdown="code-block-body"] code span span { color: var(--sdm-c, inherit); }
 :root[data-theme="dark"] [data-streamdown="code-block-body"] code span span { color: var(--shiki-dark, var(--sdm-c, inherit)); }
 .say .fl, .say a { color: inherit; text-decoration: underline dotted; text-decoration-color: var(--faint); text-underline-offset: 3px; }
-.say .fl:hover, .say a:hover { color: var(--acc); text-decoration-color: var(--acc); }
+.say .fl:hover, .say a:hover { color: var(--link); text-decoration-color: var(--link); }
 .say strong { font-weight: 600; }
 
 /* the agent's work: gray one-liners, depth on click */
@@ -264,7 +273,7 @@ th, td { overflow-wrap: break-word; }
 .edits .n { font-variant-numeric: tabular-nums; }
 .edits .files { display: flex; gap: 12px; flex-wrap: wrap; min-width: 0; }
 .edits .files span { font: var(--fs-mono) var(--mono); color: var(--fg2); }
-.tbtn { all: unset; cursor: pointer; color: var(--acc); font-size: calc(var(--fs) - 0.5px); font-weight: 500; border-radius: var(--radius-sm); padding: 0 4px; }
+.tbtn { all: unset; cursor: pointer; color: var(--link); font-size: calc(var(--fs) - 0.5px); font-weight: 500; border-radius: var(--radius-sm); padding: 0 4px; }
 .tbtn:hover { background: var(--tint); }
 
 /* working: the current step shimmers */
@@ -291,7 +300,7 @@ th, td { overflow-wrap: break-word; }
 /* a view host that runs an earlier agents CLI than the view, docked above the field */
 .outdated-host { display: flex; align-items: baseline; gap: 8px; padding: 2px 12px; font-size: var(--prose-small); color: var(--dim); }
 .outdated-host .oh-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.outdated-host button.link { flex: none; font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: pointer; }
+.outdated-host button.link { flex: none; font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
 .outdated-host button.link:disabled { color: var(--faint); cursor: default; }
 /* the agent's todo list, docked above the field: the step under way, opening to every step */
 .plan-line { display: flex; flex-direction: column; gap: 4px; padding: 0 6px; font-size: var(--prose-small); }
@@ -461,7 +470,7 @@ th, td { overflow-wrap: break-word; }
 .dv td.n { width: 5.2ch; box-sizing: content-box; text-align: right; color: var(--faint); user-select: none; padding: 0 6px 0 8px; font-variant-numeric: tabular-nums; }
 .dv td.n.old { opacity: .55; }
 .dv td.n.can { cursor: pointer; }
-.dv td.n.can:hover { color: var(--acc); opacity: 1; }
+.dv td.n.can:hover { color: var(--link); opacity: 1; }
 .dv td.s { width: 1.6ch; padding: 0 6px 0 0; text-align: center; user-select: none; }
 .dv tr.a td.s { color: var(--green); }
 .dv tr.d td.s { color: var(--red); }
@@ -488,7 +497,7 @@ th, td { overflow-wrap: break-word; }
 .cbox textarea { all: unset; display: block; width: 100%; white-space: pre-wrap; }
 .cbox .acts { display: flex; justify-content: flex-end; gap: 12px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); }
 .cbox .acts button { all: unset; cursor: pointer; }
-.cbox .acts .b { color: var(--acc); font-weight: 500; }
+.cbox .acts .b { color: var(--link); font-weight: 500; }
 .rfoot { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 18px 14px; font-size: calc(var(--fs) - 1.5px); color: var(--dim); border-top: 1px solid var(--hair); }
 .pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 13px; border-radius: var(--radius-lg); background: var(--fg); color: var(--field); font-size: calc(var(--fs) - 1.5px); font-weight: 500; border: 0; cursor: pointer; }
 .pill:disabled { background: var(--tint2); color: var(--faint); cursor: default; }
@@ -532,7 +541,7 @@ th, td { overflow-wrap: break-word; }
 .chip.split .st { gap: 3px; padding: 0 6px 0 5px; border-left: 1px solid var(--hair); border-radius: 0 var(--radius-xs) var(--radius-xs) 0; }
 .chip.split .pick:hover, .chip.split .st:hover { background: var(--tint2); }
 .chip.url .nm, .chip.bead .nm { font-family: inherit; font-size: inherit; }
-.chip.url .nm { color: var(--acc); }
+.chip.url .nm { color: var(--link); }
 .chip .live { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
 .chip .live.idle { background: var(--ok); }
 .chip .live.work { background: var(--acc); animation: pulse 1.4s ease-in-out infinite; }
@@ -606,7 +615,7 @@ th, td { overflow-wrap: break-word; }
 .code .ch { display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 11px; font-size: var(--prose-caption); color: var(--dim); border-bottom: 1px solid var(--hair); -webkit-user-select: none; user-select: none; }
 .code .ch .cf { font: calc(var(--fs-mono) - 1px) var(--mono); color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code .ch .cf.can { cursor: pointer; }
-.code .ch .cf.can:hover { color: var(--acc); }
+.code .ch .cf.can:hover { color: var(--link); }
 .code .ch .cl { color: var(--faint); }
 .code .ch .sp { flex: 1; }
 .code .ch button { all: unset; cursor: pointer; padding: 1px 6px; border-radius: var(--radius-xs); color: var(--dim); }
@@ -754,7 +763,7 @@ th, td { overflow-wrap: break-word; }
 /* A path in a code block that exists: a link as in the text, without changing the code's colours. */
 .cpath { cursor: pointer; text-decoration: underline dotted; text-decoration-color: var(--faint); text-underline-offset: 3px; }
 .cpath { border-radius: var(--radius-xs); transition: background var(--duration-fast), box-shadow var(--duration-fast); }
-.cpath:hover { color: var(--acc); text-decoration-style: solid; text-decoration-color: var(--acc); background: var(--tint2); box-shadow: 0 0 0 2px var(--tint2); }
+.cpath:hover { color: var(--link); text-decoration-style: solid; text-decoration-color: var(--link); background: var(--tint2); box-shadow: 0 0 0 2px var(--tint2); }
 .cpath:hover span { color: inherit; }
 
 /* In a turn under way, what the agent says between its steps reads as its writing does: the text
@@ -817,7 +826,7 @@ th, td { overflow-wrap: break-word; }
   color: var(--fg2); background: var(--codebg); border-radius: var(--radius-md); padding: 8px 10px;
 }
 .terminal-wait-foot { color: var(--dim); }
-.terminal-wait button.link { font: inherit; color: var(--acc); background: none; border: 0; padding: 0; cursor: pointer; }
+.terminal-wait button.link { font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
 /* Last, so it wins over every class above: a control that is off takes no click. */
 button:disabled, select:disabled { cursor: default; }
 
