@@ -1116,8 +1116,8 @@ function Usage({ usage }: { usage: SessionUsage }) {
 }
 
 
-function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
-  session: AcpSession; info: HostInfo; now: number; onHeight: (height: number) => void; level: DetailLevel; onCycleLevel: () => void;
+function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel }: {
+  session: AcpSession; info: HostInfo; now: number; onHeight: (height: number) => void; onSend: () => void; level: DetailLevel; onCycleLevel: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [flying, setFlying] = useState(false);
@@ -1362,6 +1362,7 @@ function Dock({ session, info, now, onHeight, level, onCycleLevel }: {
   };
 
   const sendText = (typed: string, how: "send" | "queue") => {
+    onSend();
     const attached = attachments;
     setAttachments([]);
     setField("");
@@ -2017,6 +2018,13 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
     const element = scroller.current;
     if (element && pinned.current) element.scrollTop = element.scrollHeight;
   }, []);
+  // Sending brings the conversation to its end, where the message and the reply to it show,
+  // however far up it was read.
+  const toEnd = useCallback(() => {
+    pinned.current = true;
+    const element = scroller.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, []);
 
   useEffect(() => {
     document.title = title ? `${title} – ${info.agent.name}` : info.agent.name;
@@ -2046,7 +2054,7 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
             {turns.map((turn, index) => (
               <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working} cwd={info.cwd}
                 onReview={(t) => void openReview(t.changes)}
-                onSend={(text) => void (working ? session.steer : session.prompt)([{ type: "text", text }])} />
+                onSend={(text) => { toEnd(); void (working ? session.steer : session.prompt)([{ type: "text", text }]); }} />
             ))}
             {working && permissions.length === 0 && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
             {permissions.map((request, index) => (
@@ -2055,12 +2063,12 @@ function Conversation({ session, info }: { session: AcpSession; info: HostInfo }
           </div>
         </div>
         </div>
-        <Dock session={session} info={info} now={now} onHeight={onDockHeight} level={level} onCycleLevel={cycleLevel} />
+        <Dock session={session} info={info} now={now} onHeight={onDockHeight} onSend={toEnd} level={level} onCycleLevel={cycleLevel} />
       </div>
       {review && (
         <ReviewPane changes={review} cwd={info.cwd} agentName={info.agent.name}
           onClose={() => setReview(null)}
-          onSend={(text) => { setReview(null); void (working ? session.steer : session.prompt)([{ type: "text", text }]); }} />
+          onSend={(text) => { setReview(null); toEnd(); void (working ? session.steer : session.prompt)([{ type: "text", text }]); }} />
       )}
     </div>
     </PeekLayer>
