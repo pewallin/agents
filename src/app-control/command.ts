@@ -70,6 +70,11 @@ export function parseCommand(argv) {
   const help = helpRequest(argv);
   if (help) return help;
 
+  if (command === "feedback") {
+    const { positional, params } = parseOptions([subcommand, ...rest].filter(token => token !== undefined));
+    return { kind: "feedback", happened: positional.join(" "), params };
+  }
+
   if (command === "ls") {
     rejectExtraArguments("ls", [subcommand, ...rest].filter(Boolean));
     return { kind: "ls" };

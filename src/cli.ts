@@ -83,6 +83,11 @@ if (firstArg === "app" || firstArg === "app-control") {
   await (await import("./app-control/main.js")).runAppControl(args.slice(1));
   process.exit(0);
 }
+// What was clumsy with these tools, while Agents Next's development setting collects it.
+if (firstArg === "feedback") {
+  await (await import("./app-control/main.js")).runAppControl(args);
+  process.exit(0);
+}
 
 // An agent pane's ACP web view: the host (`acp-session`, which codex-session starts for Codex)
 // and the bundled adapters (Codex, Claude) it starts per client. Neither needs the rest of the CLI, and an

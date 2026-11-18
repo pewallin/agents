@@ -7,6 +7,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { agentStateDirectory } from "./agent-state.js";
 import { ASK_TIMEOUT_STATUS } from "./ask.js";
+import { feedbackEnabled, recordFailure } from "./feedback.js";
 import { usage } from "./output.js";
 import { localPaneRef, runTMux, runsUnderDetachedCodex } from "./panes.js";
 import { processTable } from "./processes.js";
@@ -170,6 +171,25 @@ export const MCP_TOOLS = [
   },
 ];
 
+// Listed only while Agents Next's development setting collects feedback, so nobody else pays for it.
+export const MCP_FEEDBACK_TOOL = {
+  name: "report_feedback",
+  description: "Agents Next is in development and collects feedback on its own tools: these MCP tools, the agents and agents-app-control commands, and the skills' instructions. Use it when one of them failed, misled you or took several tries, once per problem; not to say that things went well. Name the exact tool or command and what happened; your recent failed calls are attached by themselves.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "The tool or command line it is about, e.g. \"agents app open notes.md --direction left\"." },
+      happened: { type: "string", description: "What you tried and what happened, concretely." },
+      suggestion: { type: "string", description: "What would have helped: a clearer message, an option, a fix to the instructions." },
+    },
+    required: ["command", "happened"],
+  },
+};
+
+export function mcpTools(env = process.env) {
+  return feedbackEnabled(env) ? [...MCP_TOOLS, MCP_FEEDBACK_TOOL] : MCP_TOOLS;
+}
+
 // The CLI arguments of a tool call, or a usage error.
 export function mcpArguments(name, input) {
   const args = input || {};
@@ -207,6 +227,11 @@ export function mcpArguments(name, input) {
     return { argv: ["agent", "status", ...(args.all ? ["--all"] : [])] };
   case "delivery":
     return { argv: ["agent", "delivery", text(args.message_id) || "", ...(args.cancel ? ["--cancel"] : [])] };
+  case "report_feedback": {
+    const argv = ["feedback", text(args.happened) || "", "--command", text(args.command) || ""];
+    if (args.suggestion !== undefined) argv.push("--suggestion", String(args.suggestion));
+    return { argv };
+  }
   default:
     return { error: `Unknown tool ${name}.` };
   }
@@ -229,17 +254,27 @@ export async function mcpToolCall(params, serverAs) {
   const input = params?.arguments || {};
   const { argv, error } = mcpArguments(name, input);
   const answer = (payload, isError) => ({ content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload) }], ...(isError ? { isError: true } : {}) });
-  if (error) return answer({ ok: false, error: { code: "usage", message: error } }, true);
+  // A call refused here fails like a command: kept for the agent's feedback while that is collected.
+  const refuse = (code, message) => {
+    let failure = { code, message };
+    try {
+      const invitation = recordFailure(failure, [`${name} (MCP tool)`, JSON.stringify(input)]);
+      if (invitation) failure = { ...failure, feedback: invitation };
+    } catch {}
+    return answer({ ok: false, error: failure }, true);
+  };
+  if (error) return refuse("usage", error);
   const as = input.as || serverAs;
   const identity = [];
-  if (as) {
+  // Feedback names its agent by the harness above it, so it needs no pane.
+  if (as && name !== "report_feedback") {
     identity.push("--as", String(as));
-  } else {
+  } else if (name !== "report_feedback") {
     const panes = mcpPanes();
     const table = processTable();
     const threadId = params?._meta?.threadId || params?._meta?.["x-codex-turn-metadata"]?.thread_id;
     const caller = identifyMCPCaller({ table, pid: process.pid, panes, threadId, threadPane: id => codexPaneOfThread(id, panes, table) });
-    if (caller.refused) return answer({ ok: false, error: { code: "identityUnavailable", message: caller.refused } }, true);
+    if (caller.refused) return refuse("identityUnavailable", caller.refused);
     if (caller.paneID) identity.push("--pane", localPaneRef(caller.paneID));
   }
   // The pane named above, never one an inherited environment names: the shared daemon's is
@@ -282,7 +317,7 @@ export async function runMCPServer(command) {
     case "ping":
       return send({ jsonrpc: "2.0", id: message.id, result: {} });
     case "tools/list":
-      return send({ jsonrpc: "2.0", id: message.id, result: { tools: MCP_TOOLS } });
+      return send({ jsonrpc: "2.0", id: message.id, result: { tools: mcpTools() } });
     case "tools/call":
       try {
         return send({ jsonrpc: "2.0", id: message.id, result: await mcpToolCall(message.params, serverAs) });

@@ -1,6 +1,7 @@
 // @ts-nocheck
 // Usage text and the JSON result every command prints.
 
+import { recordFailure } from "./feedback.js";
 
 export function usage() {
   return [
@@ -51,10 +52,28 @@ export function usage() {
     "  agents app agent reopen <task> [--title <title>] [--program <dir>] [--pane <pane-ref>] [--dry-run] --json   (resume its latest session, else respawn it, else read it)",
     "  agents app agent name <name> [--program <dir>] --json   (names the coordinator's program: 2-4 words from the user's goal)",
     "  agents app agent title <task> <title> [--program <dir>] --json   (names a thread in the user's words: verb first, 3-6 words)",
+    "  agents app feedback <what happened> --command <command or tool> [--suggestion <text>] --json   (also agents feedback; only while Agents Next's development setting collects feedback on its tools)",
     "  agents app mcp [--as <task|coordinator-<id>>]   (report, ask, send, status and delivery as MCP tools over stdio)",
     "  agents app mcp --install-wrapper --json   (writes the stable launcher ~/.agents/agents-app/bin/agents-app-control)",
     "  (agent commands find the agent that runs them by its process tree; --as <task|coordinator-<id>> names it where they cannot)",
   ].join("\n");
+}
+
+// The command line being run (after `app`), for the failure an agent may give feedback on.
+let commandArgv = [];
+export function setCommandArgv(argv) {
+  commandArgv = argv;
+}
+
+// A failed call of an agent, while the development setting collects feedback: kept for its
+// feedback, and its answer invites some. Nothing about it may keep the failure from its answer.
+function withFeedbackInvitation(error) {
+  try {
+    const invitation = recordFailure(error, commandArgv);
+    return invitation ? { ...error, feedback: invitation } : error;
+  } catch {
+    return error;
+  }
 }
 
 // Set once a spawn has a pane: every later failure names that pane and how to finish the spawn in it.
@@ -65,11 +84,12 @@ export function setFailureContext(value) {
 
 // Every result, success or failure, is one JSON line on stdout; the exit status tells them apart.
 export function fail(status, code, message, details) {
-  const payload = { ok: false, error: { code, message, ...failureContext, ...details } };
+  const payload = { ok: false, error: withFeedbackInvitation({ code, message, ...failureContext, ...details }) };
   process.stdout.write(`${JSON.stringify(payload)}\n`);
   process.exit(status);
 }
 export function outputResponse(response) {
+  if (response.ok === false && response.error) response = { ...response, error: withFeedbackInvitation(response.error) };
   process.stdout.write(`${JSON.stringify(response)}\n`);
   process.exit(response.ok === false ? 1 : 0);
 }

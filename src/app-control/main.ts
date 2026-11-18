@@ -7,7 +7,8 @@ import { runAgentAsk } from "./ask.js";
 import { ensureSharedCLI } from "./briefs.js";
 import { parseCommand } from "./command.js";
 import { runMCPServer } from "./mcp.js";
-import { outputResponse, usage } from "./output.js";
+import { writeFeedback } from "./feedback.js";
+import { outputResponse, setCommandArgv, usage } from "./output.js";
 import { runWorkspacePlacement } from "./placement.js";
 import { runAgentAdopt, runAgentPromote, runAgentProtocol, runAgentRespawn } from "./promote.js";
 import { runAgentClose, runAgentReport, runAgentStatus, runAgentWait } from "./report.js";
@@ -18,6 +19,7 @@ import { runSupervisor } from "./supervisor.js";
 import { runAgentRemind, runAgentWatch } from "./watch.js";
 
 export async function runAppControl(argv) {
+  setCommandArgv(argv);
   const command = parseCommand(argv);
   const currentSocketPath = socketPath();
   if (command.kind === "help") {
@@ -29,6 +31,10 @@ export async function runAppControl(argv) {
         ?? `No help for '${command.topic}'. Topics: ${helpTopics().join(", ")}, agent, or a control id (agents app controls list).`;
     process.stdout.write(`${text}\n`);
     process.exit(0);
+  }
+  if (command.kind === "feedback") {
+    const { result, error } = writeFeedback({ happened: command.happened, command: command.params.command, suggestion: command.params.suggestion });
+    outputResponse({ id: requestID("cli"), ok: !error, ...(error ? { error } : { result }) });
   }
   if (command.kind === "ls") {
     outputResponse(await listState(currentSocketPath));
