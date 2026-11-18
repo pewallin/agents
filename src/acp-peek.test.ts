@@ -222,11 +222,11 @@ describe("the coordination's files", () => {
 });
 
 describe("attachments", () => {
-  it("saves a pasted file under the temporary directory with a safe name", async () => {
+  it("saves a pasted file under the agents home with a safe name", async () => {
     const { saveAttachment } = await import("./acp-peek.js");
     const path = saveAttachment("../../screen shot?.png", Buffer.from("png"));
     try {
-      expect(path.startsWith(realpathSync(tmpdir()))).toBe(true);
+      expect(path.startsWith(`${realpathSync(process.env.AGENTS_HOME!)}/attachments/`)).toBe(true);
       expect(path.endsWith("/screen shot_.png")).toBe(true);
       expect(readFileSync(path, "utf8")).toBe("png");
     } finally {

@@ -85,6 +85,8 @@ export class HostedSession {
   private opened: Record<string, unknown> | undefined;
   /** The session's updates so far, replayed to a view that loads it. */
   private readonly history: string[] = [];
+  /** What a view steers with, by the agent's id of the request: history once the agent took it. */
+  private readonly steered = new Map<string, unknown[]>();
   /** The agent's requests no view has answered yet: sent again to the next view. */
   private readonly asks = new Map<string, string>();
   private view: AttachedView | undefined;
@@ -143,9 +145,10 @@ export class HostedSession {
   /** Prompts the agent with `text`, as typed into its TUI; resolves when its turn ends. */
   async prompt(text: string): Promise<string | undefined> {
     if (!this.sessionId) throw new Error("the session has not started");
+    const prompt = [{ type: "text", text }];
     // The agent does not repeat a prompt back: the view sees it from here.
-    this.userMessage(text, true);
-    const result = await this.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text }] });
+    this.userMessage(prompt, true);
+    const result = await this.request("session/prompt", { sessionId: this.sessionId, prompt });
     return typeof result.stopReason === "string" ? result.stopReason : undefined;
   }
 
@@ -160,11 +163,12 @@ export class HostedSession {
   async steer(text: string): Promise<"steered" | "idle" | "unsupported"> {
     if (!this.sessionId) throw new Error("the session has not started");
     if (!this.steers) return "unsupported";
+    const prompt = [{ type: "text", text }];
     const result = await this.request("_session/steering", {
-      sessionId: this.sessionId, prompt: [{ type: "text", text }], _meta: { steering: { idleBehavior: "promptRequired" } },
+      sessionId: this.sessionId, prompt, _meta: { steering: { idleBehavior: "promptRequired" } },
     }, 30_000);
     if (result.outcome === "promptRequired") return "idle";
-    this.userMessage(text, true);
+    this.userMessage(prompt, true);
     return "steered";
   }
 
@@ -219,15 +223,19 @@ export class HostedSession {
     this.child.stdin?.write(`${line}\n`);
   }
 
-  private userMessage(text: string, live: boolean): void {
+  /** A message of the user's, block by block as it was sent: a view that loads the session later
+   *  shows its images and files as well as its text. */
+  private userMessage(prompt: unknown[], live: boolean): void {
     if (!this.sessionId) return;
-    const line = JSON.stringify({
-      jsonrpc: "2.0",
-      method: "session/update",
-      params: { sessionId: this.sessionId, update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } } },
-    });
-    this.history.push(line);
-    if (live && this.view?.synced) this.view.send(line);
+    for (const content of prompt) {
+      const line = JSON.stringify({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionId: this.sessionId, update: { sessionUpdate: "user_message_chunk", content } },
+      });
+      this.history.push(line);
+      if (live && this.view?.synced) this.view.send(line);
+    }
   }
 
   private fromAgent(raw: string): void {
@@ -248,6 +256,13 @@ export class HostedSession {
         if (message.error) own.reject(new Error(message.error.message ?? "the agent refused"));
         else own.resolve(message.result ?? {});
         return;
+      }
+      // A view's steer the agent took is part of the conversation; one it did not take comes
+      // again as a prompt.
+      const steer = this.steered.get(key);
+      if (steer) {
+        this.steered.delete(key);
+        if (!message.error && message.result?.outcome !== "promptRequired") this.userMessage(steer, false);
       }
       const view = this.view;
       const viewId = view?.ids.get(key);
@@ -342,11 +357,10 @@ export class HostedSession {
       this.answerLoad(view, id);
       return;
     }
-    if (message.method === "session/prompt" && message.params?.sessionId === this.sessionId) {
-      const prompt = message.params?.prompt as Array<{ type?: string; text?: string }> | undefined;
-      this.userMessage((prompt ?? []).map((block) => block.type === "text" ? block.text ?? "" : "").join(""), false);
-    }
     const agentId = `view-${this.nextViewId++}`;
+    const prompt = message.params?.sessionId === this.sessionId && Array.isArray(message.params?.prompt) ? message.params.prompt as unknown[] : undefined;
+    if (prompt && message.method === "session/prompt") this.userMessage(prompt, false);
+    if (prompt && message.method === "_session/steering") this.steered.set(agentId, prompt);
     view.ids.set(agentId, id);
     this.toAgent(JSON.stringify({ ...message, id: agentId }));
   }

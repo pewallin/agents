@@ -7,7 +7,8 @@ import { startAcpHost } from "./acp-host.js";
 import { HostedSession } from "./acp-hosted-session.js";
 
 // A small ACP agent: one session; a prompt answers "echo: <text>", and a prompt "ask" first asks
-// for a permission and ends its turn with the answer it got. A load replays two messages, the
+// for a permission and ends its turn with the answer it got. It takes a steer, except one that
+// says "late". A load replays two messages, the
 // second a moment after the first, and answers a while later, as Claude does while Claude Code
 // starts; a load of "broken" fails.
 const FAKE_AGENT = `
@@ -26,8 +27,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     setTimeout(() => said("and then"), 50);
     setTimeout(() => send({ id: message.id, result: { modes: { currentModeId: "default", availableModes: [] } } }), 300);
   }
+  else if (message.method === "_session/steering") send({ id: message.id, result: { outcome: message.params.prompt[0].text === "late" ? "promptRequired" : "injected" } });
   else if (message.method === "session/prompt") {
-    const text = message.params.prompt.map((block) => block.text).join("");
+    const text = message.params.prompt.map((block) => block.text ?? "").join("");
     if (text === "ask") {
       asked = message.id;
       send({ id: "perm-1", method: "session/request_permission", params: { sessionId: "s1", options: [{ optionId: "ok" }] } });
@@ -112,6 +114,38 @@ describe("a session the host holds", () => {
     expect((await next((message) => message.id === 7)).result).toEqual({ stopReason: "end_turn" });
     // The host's own prompt meanwhile is answered to the host, not to the view.
     expect(await session.prompt("from the host")).toBe("end_turn");
+  });
+
+  it("gives a view that loads the session later the images and files of another view's messages", async () => {
+    const session = hosted();
+    await session.start("/tmp");
+    const first = viewOf(session);
+    first.view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "session/load", params: { sessionId: "s1", cwd: "/tmp" } }));
+    await first.next((message) => message.id === 0);
+    const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
+    const file = { type: "resource_link", uri: "file:///tmp/notes.pdf", name: "notes.pdf" };
+    first.view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/prompt", params: { sessionId: "s1", prompt: [{ type: "text", text: "look" }, image, file] } }));
+    await first.next((message) => message.id === 1);
+    first.view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "_session/steering", params: { sessionId: "s1", prompt: [{ type: "text", text: "and this" }, image] } }));
+    first.view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "_session/steering", params: { sessionId: "s1", prompt: [{ type: "text", text: "late" }] } }));
+    await first.next((message) => message.id === 3);
+    // The view's own messages are not sent back to it.
+    expect(first.received.filter((message) => message.method === "session/update").map((message) => (message.params as { update: { sessionUpdate: string } }).update.sessionUpdate)).toEqual(["agent_message_chunk"]);
+
+    const later = viewOf(session);
+    later.view.fromView(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/load", params: { sessionId: "s1", cwd: "/tmp" } }));
+    await later.next((message) => message.id === 1);
+    const updates = later.received
+      .filter((message) => message.method === "session/update")
+      .map((message) => (message.params as { update: { sessionUpdate: string; content: unknown } }).update);
+    expect(updates).toEqual([
+      { sessionUpdate: "user_message_chunk", content: { type: "text", text: "look" } },
+      { sessionUpdate: "user_message_chunk", content: image },
+      { sessionUpdate: "user_message_chunk", content: file },
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "echo: look" } },
+      { sessionUpdate: "user_message_chunk", content: { type: "text", text: "and this" } },
+      { sessionUpdate: "user_message_chunk", content: image },
+    ]);
   });
 
   it("keeps the agent's question for a view that attaches later", async () => {

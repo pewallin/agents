@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { type Dirent, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { getProgramsDir } from "./paths.js";
+import { getAgentsHome, getProgramsDir } from "./paths.js";
 
 export const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".heic", ".tif", ".tiff"]);
 
@@ -497,10 +497,12 @@ function decodeEntities(text: string): string {
 }
 
 /** Where a file pasted or dropped into the view's field goes, so the agent can read it by its
- *  path: a folder of its own under the system's temporary directory, the name kept. */
+ *  path: a folder of its own under the agents home, the name kept. Not the system's temporary
+ *  directory, which macOS empties of files unread for a few days: the conversation names the file
+ *  as long as the session lasts, and the view shows it from there. */
 export function saveAttachment(name: string, data: Buffer): string {
   const safe = basename(name).replace(/[^\w.\- ]+/g, "_").replace(/^\.+/, "").slice(0, 120) || "pasted";
-  const root = join(tmpdir(), "agents-acp-attachments");
+  const root = join(getAgentsHome(), "attachments");
   mkdirSync(root, { recursive: true });
   const folder = mkdtempSync(join(root, "a-"));
   const path = join(folder, safe);
