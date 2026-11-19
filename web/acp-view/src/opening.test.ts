@@ -10,7 +10,9 @@ describe("which session the view opens", () => {
 
   it("starts one, waits for a running turn, starts with a first prompt, or opens it", () => {
     expect(gateFromHost({ sessionId: null })).toEqual({ kind: "starts-new" });
-    expect(gateFromHost({ sessionId: "s1", persisted: false, busy: true })).toEqual({ kind: "first-prompt", sessionId: "s1" });
+    expect(gateFromHost({ sessionId: "s1", persisted: false })).toEqual({ kind: "first-prompt", sessionId: "s1" });
+    // A first turn the TUI started (a worker's brief) is followed, not offered a first prompt.
+    expect(gateFromHost({ sessionId: "s1", persisted: false, busy: true })).toEqual({ kind: "waiting-for-idle", sessionId: "s1" });
     expect(gateFromHost({ sessionId: "s1", busy: true })).toEqual({ kind: "waiting-for-idle", sessionId: "s1" });
     expect(gateFromHost({ sessionId: "s1" })).toEqual({ kind: "open", sessionId: "s1" });
   });

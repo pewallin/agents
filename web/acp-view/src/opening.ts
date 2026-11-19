@@ -19,7 +19,8 @@ export type GatePhase =
   | { kind: "no-session"; problem?: string }
   /** A turn runs: the view loads the session when it ends. */
   | { kind: "waiting-for-idle"; sessionId: string }
-  /** Nothing written yet: the first prompt starts the session through the host. */
+  /** Nothing written yet and no turn running: the first prompt starts the session through the
+   *  host, unless the TUI starts a turn first. */
   | { kind: "first-prompt"; sessionId: string }
   | { kind: "open"; sessionId: string }
   /** The host stopped answering while the view waited for the session (it ended with its agent,
@@ -36,8 +37,10 @@ export function initialGate(sessionId: string | null): GatePhase {
 /** The gate once the host said which session the pane has. */
 export function gateFromHost(answer: HostSession): GatePhase {
   if (answer.sessionId === null) return { kind: "starts-new" };
-  if (answer.persisted === false) return { kind: "first-prompt", sessionId: answer.sessionId };
+  // A turn the TUI started (a worker's brief, a prompt typed in the terminal) runs before Codex
+  // has written the thread: the view follows it like any running turn.
   if (answer.busy === true) return { kind: "waiting-for-idle", sessionId: answer.sessionId };
+  if (answer.persisted === false) return { kind: "first-prompt", sessionId: answer.sessionId };
   return { kind: "open", sessionId: answer.sessionId };
 }
 

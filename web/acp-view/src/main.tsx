@@ -28,7 +28,7 @@ import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, opti
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
 import { announceBridge, APP_ACTIONS, APP_HANDLERS, appHandler, definePageEntry, PAGE_ENTRIES, PAGE_EVENTS, type AppHandler } from "./bridge";
-import { gateFromHost, historyArriving, HISTORY_SETTLED_MS, initialGate, nextViewPhase, SessionWait, type GatePhase, type ViewPhase } from "./opening";
+import { gateFromHost, historyArriving, HISTORY_SETTLED_MS, initialGate, nextViewPhase, SessionWait, type GatePhase, type HostSession, type ViewPhase } from "./opening";
 import { typedTicketTokens, useTicketRules } from "./tickets";
 import { contextPercent, usageText, usageTitle, type SessionUsage } from "./usage";
 import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
@@ -2218,8 +2218,9 @@ function SessionGate({ info }: { info: HostInfo }) {
       return <ErrorNotice title={`${info.agent.name}'s view stopped answering`}
         error={{ message: `The view's host in this pane does not answer (${gate.problem}). It ends when ${info.agent.name} ends: the pane's terminal shows what happened.` }}
         agentName={info.agent.name} showsTerminal onRetry={() => setGate({ kind: "finding" })} />;
-    case "waiting-for-idle": return <Opening text={`${info.agent.name} is working; the session shows when it is done`} />;
-    case "first-prompt": return <FirstPrompt info={info} sessionId={gate.sessionId} onStarted={() => setGate({ kind: "open", sessionId: gate.sessionId })} />;
+    // The TUI holds the turn meanwhile: a question it asks (an approval) is answered there.
+    case "waiting-for-idle": return <><Opening text={`${info.agent.name} is working; the session shows when it is done`} /><TerminalWatch agentName={info.agent.name} /></>;
+    case "first-prompt": return <><FirstPrompt info={info} sessionId={gate.sessionId} onStarted={() => setGate({ kind: "open", sessionId: gate.sessionId })} onMoved={setGate} /><TerminalWatch agentName={info.agent.name} /></>;
     case "open": return <SessionView info={info} sessionId={gate.sessionId} />;
   }
 }
@@ -2315,11 +2316,27 @@ async function untilIdle(sessionId: string, stopped: () => boolean): Promise<voi
 }
 
 /** A session with nothing in it yet (Codex writes a thread with its first turn): the first prompt
- *  starts the turn through the host, and then the view loads the session and follows it live. */
-function FirstPrompt({ info, sessionId, onStarted }: { info: HostInfo; sessionId: string; onStarted: () => void }) {
+ *  starts the turn through the host, and then the view loads the session and follows it live. A
+ *  turn started in the TUI meanwhile (the brief a worker is started with, a prompt typed in the
+ *  terminal) moves the view on as the host then has the session (`onMoved`). */
+function FirstPrompt({ info, sessionId, onStarted, onMoved }: { info: HostInfo; sessionId: string; onStarted: () => void; onMoved: (gate: GatePhase) => void }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    if (sending) return;
+    let stopped = false;
+    void (async () => {
+      while (!stopped) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const current = await hostJson<HostSession>("/api/session").catch(() => null);
+        if (stopped || !current) continue;
+        const next = gateFromHost(current);
+        if (next.kind !== "first-prompt" || next.sessionId !== sessionId) { onMoved(next); return; }
+      }
+    })();
+    return () => { stopped = true; };
+  }, [sending, sessionId]);
   const send = async () => {
     const text = draft.trim();
     if (!text || sending) return;

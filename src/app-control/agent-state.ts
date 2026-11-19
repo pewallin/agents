@@ -72,10 +72,25 @@ export function findSessionFile(agent, id) {
   }
 }
 
-// The agents CLI: AGENTS_APP_AGENTS_BIN when it is set, else the one the app installs
-// (~/.local/bin/agents links to it), else the first on PATH.
+// The agents CLI a worker runs under: AGENTS_APP_AGENTS_BIN when it is set, else the one the app
+// runs its own agent panes with (AgentsCommandResolver): AGENTS_CLI_PREFERRED_PATH, then the CLI
+// the app installs. A ~/.local/bin/agents of the user's own (an npm link) would give a worker
+// another CLI, and its ACP view another host, than an agent started from the app.
 export function agentsCLI() {
   if (process.env.AGENTS_APP_AGENTS_BIN) return process.env.AGENTS_APP_AGENTS_BIN;
-  const installed = path.join(os.homedir(), ".local", "bin", "agents");
-  return fs.existsSync(installed) ? installed : "agents";
+  const candidates = [
+    process.env.AGENTS_CLI_PREFERRED_PATH,
+    path.join(os.homedir(), ".agents", "agents-cli", "app", "agents"),
+    path.join(os.homedir(), ".local", "bin", "agents"),
+  ];
+  return candidates.find(candidate => candidate && isExecutable(candidate)) || "agents";
+}
+
+function isExecutable(file) {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
 }
