@@ -191,10 +191,52 @@ function profileArgvForAgent(agent: string, profile?: LaunchProfile): string[] |
   try {
     const argv = splitCommandArgv(profile.command);
     const executable = argv[0] || "";
-    return normalizeAgentName(executable) === normalizeAgentName(agent) ? argv : undefined;
+    return normalizeAgentName(executable) === normalizeAgentName(agent)
+      ? withoutSessionOptions(normalizeAgentName(agent), argv)
+      : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** The options that pick a session, per agent: a flag alone, an option with a value, or one whose
+ *  value may be left out. */
+const SESSION_OPTIONS: Record<string, { flags: string[]; withValue: string[]; optionalValue: string[] }> = {
+  claude: { flags: ["--continue", "-c"], withValue: [], optionalValue: ["--resume", "-r"] },
+  copilot: { flags: ["--continue"], withValue: [], optionalValue: ["--resume"] },
+  pi: { flags: ["--continue", "-c", "--resume", "-r"], withValue: ["--session"], optionalValue: [] },
+  opencode: { flags: ["--continue", "-c", "--fork"], withValue: ["--session", "-s"], optionalValue: [] },
+  kiro: { flags: ["--resume"], withValue: ["--resume-id"], optionalValue: [] },
+};
+
+/** A launch command with the session it named taken out, so that a resume names only its own.
+ *  A task's launch command is its coordinator's, which may itself have been resumed: kept as it
+ *  was, `--resume-id <the coordinator's session>` stayed in front and Kiro opened that session
+ *  (or refused it, open in the coordinator's pane) instead of the worker's. */
+export function withoutSessionOptions(agent: string, argv: string[]): string[] {
+  if (agent === "codex") {
+    const resumeIndex = argv.indexOf("resume");
+    if (resumeIndex < 0) return argv.slice();
+    // `codex [options] resume [options] [<id>]`: the subcommand and its session go, its options stay.
+    const after = argv.slice(resumeIndex + 1).filter((arg, index, all) => arg.startsWith("-")
+      || (index > 0 && all[index - 1].startsWith("-") && !all[index - 1].includes("=") && all[index - 1] !== "--last"));
+    return [...argv.slice(0, resumeIndex), ...after.filter((arg) => arg !== "--last")];
+  }
+  const options = SESSION_OPTIONS[agent];
+  if (!options) return argv.slice();
+  const output: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const name = token.split("=")[0];
+    if (options.flags.includes(token)) continue;
+    if (options.withValue.includes(name) || options.optionalValue.includes(name)) {
+      const next = argv[index + 1];
+      if (!token.includes("=") && next !== undefined && (options.withValue.includes(name) || !next.startsWith("-"))) index += 1;
+      continue;
+    }
+    output.push(token);
+  }
+  return output;
 }
 
 function buildResumeArgv(baseArgv: string[], resumeArgs: string[]): string[] {

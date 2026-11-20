@@ -203,8 +203,9 @@ export async function runAgentSpawn(command, currentSocketPath) {
       : { id: controlID, pane: sourcePane, axis };
     // An agent with an ACP view: the app marks its pane when Settings › Agents › Open agents in
     // says ACP View, and the pane shows the view from the start. A Codex shares its session
-    // live with the view; another agent starts in the view, its brief the host's first prompt.
-    if (!respawn?.resume && (launch.via === "codex-session" || (launch.via === "acp-session" && acpPromptSupported()))
+    // live with the view; another agent starts in the view, its brief the host's first prompt,
+    // and a reopened thread's agent loads its session there.
+    if ((launch.via === "codex-session" || (launch.via === "acp-session" && acpPromptSupported()))
       && controlHasArgument(descriptors, controlID, "acpAgent")) {
       invokeParams.acpAgent = true;
     }

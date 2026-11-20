@@ -1059,6 +1059,36 @@ describe("resume helpers", () => {
     });
   });
 
+  // Peter's MacBook, 2026-11-20: a worker's launch command is its coordinator's, which had been
+  // resumed itself; reopening the worker ran `kiro-cli chat -a --resume-id <coordinator> <worker>`.
+  it("resumes the session asked for, not one the profile's command names", () => {
+    expect(agentResumeInvocation(
+      "kiro",
+      { target: "worker-1", targetKind: "session-id" },
+      { profile: { command: "kiro-cli chat -a --resume-id coordinator-1" } },
+    )?.argv).toEqual(["kiro-cli", "chat", "-a", "--resume-id", "worker-1"]);
+    expect(agentResumeInvocation(
+      "kiro",
+      { target: "worker-1", targetKind: "session-id" },
+      { profile: { command: "kiro-cli chat --resume-id=coordinator-1 -a --resume" } },
+    )?.argv).toEqual(["kiro-cli", "chat", "-a", "--resume-id", "worker-1"]);
+    expect(agentResumeInvocation(
+      "claude",
+      { target: "worker-1", targetKind: "session-id" },
+      { profile: { command: "claude --dangerously-skip-permissions --resume coordinator-1" } },
+    )?.argv).toEqual(["claude", "--dangerously-skip-permissions", "--resume", "worker-1"]);
+    expect(agentResumeInvocation(
+      "codex",
+      { target: "worker-1", targetKind: "session-id" },
+      { profile: { command: "codex --yolo resume coordinator-1" } },
+    )?.argv).toEqual(["codex", "--yolo", "resume", "worker-1"]);
+    expect(agentResumeInvocation(
+      "opencode",
+      { target: "worker-1", targetKind: "session-id" },
+      { profile: { command: "opencode -s coordinator-1" } },
+    )?.argv).toEqual(["opencode", "--session", "worker-1"]);
+  });
+
   it("builds new session invocations from the matching agent profile", () => {
     expect(agentResumeInvocation(
       "codex",
