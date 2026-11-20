@@ -645,6 +645,8 @@ th, td { overflow-wrap: break-word; }
 
 /* the work's rows */
 .trail .ln .t.files { display: inline-flex; gap: 5px; overflow: visible; }
+.trail .ln .t.page { display: inline-flex; overflow: visible; }
+.trail .ln .t.page .chip .nm { white-space: nowrap; min-width: 0; }
 /* A failed step is one quiet line, as in Claude and Codex: a small red dot and "failed · exit 1";
    its output opens on a click. Only a failure the turn ended on has a red title. */
 .trail .ln .fail-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--red); align-self: center; margin-right: -2px; opacity: .8; }

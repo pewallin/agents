@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import type { ToolCall } from "./session-state";
 import { parseAgentCommand } from "./coordination";
-import { describeCall, duration, isCompaction, toolOutput, type Turn } from "./turns";
+import { describeCall, duration, isCompaction, stepKind, toolOutput, type Turn } from "./turns";
 
 /** An agent's own coordination command: it has a row of its own, it is not one of "N commands". */
 function isCoordinationCommand(call: ToolCall): boolean {
@@ -71,12 +71,14 @@ export function turnSummary(turn: Turn): string {
   const parts: string[] = [];
   const timed = turn.startedAt !== undefined && turn.endedAt !== undefined && turn.endedAt - turn.startedAt >= 1000;
   parts.push(timed ? `Worked ${duration(turn.endedAt! - turn.startedAt!)}` : "Worked");
-  const read = new Set(calls.filter((call) => call.kind === "read").flatMap((call) => (call.locations.length ? call.locations.map((location) => location.path) : [call.id])));
+  const read = new Set(calls.filter((call) => stepKind(call) === "read").flatMap((call) => (call.locations.length ? call.locations.map((location) => location.path) : [call.id])));
   if (read.size) parts.push(`read ${read.size} ${read.size === 1 ? "file" : "files"}`);
   const edits = calls.filter((call) => call.kind === "edit" || call.kind === "delete" || call.kind === "move").length;
   if (edits) parts.push(`${edits} ${edits === 1 ? "edit" : "edits"}`);
-  const searches = calls.filter((call) => call.kind === "search").length;
+  const searches = calls.filter((call) => stepKind(call) === "search").length;
   if (searches) parts.push(`${searches} ${searches === 1 ? "search" : "searches"}`);
+  const pages = calls.filter((call) => stepKind(call) === "fetch").length;
+  if (pages) parts.push(`fetched ${pages} ${pages === 1 ? "page" : "pages"}`);
   const commands = calls.filter((call) => call.kind === "execute" && !isCoordinationCommand(call));
   let tests: { passed: number; failed: number } | null = null;
   for (const call of commands) tests = testResult(toolOutput(call)) ?? tests;

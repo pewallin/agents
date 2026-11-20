@@ -16,7 +16,7 @@ import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOp
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { workFolders } from "./paths";
-import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, shortPath, thoughtSummary, toolOutput, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
+import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, pageName, shortPath, thoughtSummary, toolOutput, webStep, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
 import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, ResultStrip, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
@@ -353,8 +353,10 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
   const line = oneLine(target.replace(/`([^`]*)`/g, "$1"));
   const whole = line !== target.trim() ? target : null;
   const canOpen = canExpand(call, output, whole !== null);
-  // The files a read or an edit acted on, as chips.
-  const files = call.kind && FILE_KINDS.has(call.kind)
+  // The page a web step read, as a link's chip; the files a read or an edit acted on, as chips.
+  const web = webStep(call);
+  const page = web?.kind === "page" ? web.url : null;
+  const files = !page && call.kind && FILE_KINDS.has(call.kind)
     ? [...new Set([...call.content.flatMap((entry) => (entry.type === "diff" ? [entry.path] : [])), ...call.locations.map((location) => location.path)])].slice(0, 3)
     : [];
   const title = call.kind === "execute" ? `${verb} ${line}` : line;
@@ -364,7 +366,9 @@ function PlainToolLine({ call, cwd, failure }: { call: ToolCall; cwd: string; fa
         onKeyDown={(event) => { if (canOpen && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setOpen(!open); } }}>
         {failed && <span className="fail-dot" aria-label="failed" />}
         {verb && <span className="v">{verb}</span>}
-        {files.length > 0
+        {page
+          ? <span className="t page"><Chip target={{ kind: "url", url: page }} label={pageName(page)} /></span>
+          : files.length > 0
           ? <span className="t files">{files.map((path) => <NamedChip key={path} name={path} counts={false} fallback={<span>{shortPath(path, cwd)}</span>} />)}</span>
           : <span className="t" title={whole ? undefined : line}>{line}</span>}
         {canOpen && <Chevron />}

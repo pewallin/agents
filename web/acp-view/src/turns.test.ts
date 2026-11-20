@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { emptySession, reduce, type SessionAction } from "./session-state";
-import { buildTurns, changesOf, withoutSteeringNotes, conversationChanges, countLines, describeCall, duration, groupSteps, groupSummary, oneLine, shortPath, thoughtSummary } from "./turns";
+import type { ToolKind } from "@agentclientprotocol/sdk";
+import { emptySession, reduce, type SessionAction, type ToolCall, type ToolStatus } from "./session-state";
+import { buildTurns, changesOf, withoutSteeringNotes, conversationChanges, countLines, describeCall, duration, groupSteps, groupSummary, oneLine, pageName, shortPath, thoughtSummary } from "./turns";
 import { changedWords, commentsMessage, diffRows, linePieces, splitPath } from "./review";
 
 const text = (t: string) => ({ type: "text" as const, text: t });
@@ -112,6 +113,45 @@ describe("turns", () => {
       .toEqual({ verb: "Ran", target: "bun test" });
     expect(describeCall({ id: "t", title: "Read file", kind: "read", status: "completed", content: [], locations: [{ path: "/repo/src/a.ts" }] }, "/repo"))
       .toEqual({ verb: "Read", target: "src/a.ts" });
+  });
+
+  it("names the page a web step read and what a web search looked for, for every agent", () => {
+    const call = (title: string, kind: ToolKind | undefined, rawInput: unknown, status: ToolStatus = "completed"): ToolCall => ({ id: "w", title, kind, status, content: [], locations: [], rawInput });
+    const page = { verb: "Fetched", target: "https://learn.microsoft.com/en-us/dotnet/api/system.string" };
+    const url = page.target;
+    // Kiro (a fetch is a read titled "Fetching web content"), Kiro 3, Claude, OpenCode (its
+    // title ends as the address and type), and a failed fetch.
+    expect(describeCall(call("Fetching web content", "read", { url, __tool_use_purpose: "Read the docs" }))).toEqual(page);
+    expect(describeCall(call("Fetch URL", "fetch", { url, mode: "truncated" }))).toEqual(page);
+    expect(describeCall(call(`Fetch ${url}`, "fetch", { url, prompt: "What does it say?" }))).toEqual(page);
+    expect(describeCall(call(`${url} (text/html; charset=utf-8)`, "fetch", { url, format: "markdown" }))).toEqual(page);
+    expect(describeCall(call("Fetching web content", "read", { url }, "failed"))).toEqual(page);
+    // Codex opens a page in a web search item.
+    expect(describeCall(call(`Open page: ${url}`, "search", { query: "", action: { type: "openPage", url } }))).toEqual(page);
+    // Web searches: Kiro, Kiro 3, Claude's (a fetch), OpenCode's, Codex's live and replayed.
+    const search = { verb: "Searched", target: "the web for tmux control mode" };
+    expect(describeCall(call("Searching the web", "search", { query: "tmux control mode" }))).toEqual(search);
+    expect(describeCall(call("web_search", "other", { query: "tmux control mode" }))).toEqual(search);
+    expect(describeCall(call('Search "tmux control mode"', "fetch", { query: "tmux control mode", mode: "standard" }))).toEqual(search);
+    expect(describeCall(call("Exa Web Search: tmux control mode", "other", { query: "tmux control mode", numResults: 1 }))).toEqual(search);
+    expect(describeCall(call("Web search: tmux control mode", "search", { type: "webSearch", id: "ws", query: "tmux control mode", action: { type: "search", query: "tmux control mode" } }))).toEqual(search);
+    expect(describeCall(call("Web search: tmux, control mode", "search", { query: "", action: { type: "search", queries: ["tmux", "control mode"] } }))).toEqual({ verb: "Searched", target: "the web for tmux, control mode" });
+    expect(describeCall(call("Web search", "fetch", {}, "pending"))).toEqual({ verb: "Searched", target: "the web" });
+    // What is not a web step keeps its title: Claude's tool search, a command that names a URL.
+    expect(describeCall(call("ToolSearch", "other", { query: "select:WebSearch" }))).toEqual({ verb: "", target: "ToolSearch" });
+    expect(describeCall(call("curl", "execute", { command: `curl ${url}`, url }))).toEqual({ verb: "Ran", target: `curl ${url}` });
+    // A group counts web pages and searches as such, not as files read.
+    expect(groupSummary([call("Fetching web content", "read", { url }), call("Fetch URL", "fetch", { url }), call("Searching the web", "search", { query: "q" }), call('Search "q"', "fetch", { query: "q" })]))
+      .toBe("Searched 2 times · fetched 2 pages");
+  });
+
+  it("writes a page's address as its site and path, cut in the middle where it is long", () => {
+    expect(pageName("https://www.example.com/")).toBe("example.com");
+    expect(pageName("https://example.com/docs/a?x=1#top")).toBe("example.com/docs/a?x=1");
+    expect(pageName("https://learn.microsoft.com/en-us/azure/app-service/configure-language-dotnetcore?pivots=platform-linux"))
+      .toBe("learn.microsoft.com/…/configure-language-dotnetcore?…");
+    expect(pageName("https://learn.microsoft.com/en-us/dotnet/api/system.string.format", 48)).toBe("learn.microsoft.com/…/api/system.string.format");
+    expect(pageName(`https://example.com/${"a".repeat(80)}`, 40)).toBe(`example.com/…${"a".repeat(27)}`);
   });
 
   it("names a compaction's step the same for every agent, with Claude's token counts", () => {

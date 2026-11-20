@@ -227,9 +227,9 @@ export function groupSteps(steps: Step[], groupable: (call: ToolCall) => boolean
 export function groupSummary(calls: ToolCall[]): string {
   const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const commands = calls.filter((call) => call.kind === "execute").length;
-  const reads = calls.filter((call) => call.kind === "read").length;
-  const searches = calls.filter((call) => call.kind === "search").length;
-  const fetches = calls.filter((call) => call.kind === "fetch").length;
+  const reads = calls.filter((call) => stepKind(call) === "read").length;
+  const searches = calls.filter((call) => stepKind(call) === "search").length;
+  const fetches = calls.filter((call) => stepKind(call) === "fetch").length;
   const other = calls.length - commands - reads - searches - fetches;
   const parts = [
     commands ? `ran ${count(commands, "command", "commands")}` : "",
@@ -273,8 +273,71 @@ export function isCompaction(call: ToolCall): boolean {
   return call.kind === "think" && call.title === COMPACTION_TITLE;
 }
 
+/** What a web step acted on: the page a fetch read, or what a web search looked for. Agents name
+ *  them only in the call's input, not always in its title (Kiro titles every fetch "Fetching web
+ *  content", Kiro 3 "Fetch URL"); Claude's web search comes as a fetch, Kiro's fetch as a read,
+ *  and a Codex search item names what it did in its action (searched, opened a page). */
+export type WebStep = { kind: "page"; url: string } | { kind: "search"; query?: string };
+
+export function webStep(call: ToolCall): WebStep | null {
+  if (call.kind === "execute" || call.kind === "edit" || call.kind === "delete" || call.kind === "move") return null;
+  const input = (call.rawInput ?? {}) as Record<string, unknown>;
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  const action = input.action && typeof input.action === "object" ? input.action as Record<string, unknown> : undefined;
+  if (call.kind === "search" && action && typeof action.type === "string") {
+    if (action.type === "openPage") return webURL(action.url) ? { kind: "page", url: webURL(action.url)! } : null;
+    if (action.type === "findInPage") return null;
+    const queries = Array.isArray(action.queries) ? action.queries.flatMap((query) => text(query) ?? []) : [];
+    return { kind: "search", query: text(action.query) ?? (queries.length > 0 ? queries.join(", ") : undefined) ?? text(input.query) };
+  }
+  if (/web[ _-]?search|searching the web/i.test(call.title) || (call.kind === "fetch" && /^search\b/i.test(call.title))) {
+    return { kind: "search", query: text(input.query) };
+  }
+  const url = webURL(input.url);
+  if (url && (call.kind === "fetch" || call.kind === "read" || /fetch/i.test(call.title))) return { kind: "page", url };
+  return null;
+}
+
+function webURL(value: unknown): string | undefined {
+  return typeof value === "string" && /^https?:\/\/\S+$/i.test(value.trim()) ? value.trim() : undefined;
+}
+
+/** What a step did, as its line and the summaries count it: a web page read is a fetch and a
+ *  web search a search, whatever kind the agent gave them. */
+export function stepKind(call: ToolCall): ToolCall["kind"] {
+  const web = webStep(call);
+  return web ? (web.kind === "page" ? "fetch" : "search") : call.kind;
+}
+
+/** A page's address in a step's line: its site and path without the scheme; where that is long
+ *  the query goes and the path is cut in the middle, so the end that tells a site's pages apart
+ *  stays. */
+export function pageName(url: string, limit = 64): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const host = parsed.host.replace(/^www\./, "");
+  const path = parsed.pathname === "/" ? "" : parsed.pathname;
+  if (host.length + path.length + parsed.search.length <= limit) return `${host}${path}${parsed.search}`;
+  const query = parsed.search ? "?…" : "";
+  if (host.length + path.length + query.length <= limit) return `${host}${path}${query}`;
+  const room = Math.max(12, limit - host.length - query.length - 2);
+  let tail = "";
+  for (const segment of path.split("/").filter(Boolean).reverse()) {
+    if (tail.length + segment.length + 1 > room) break;
+    tail = `/${segment}${tail}`;
+  }
+  return `${host}/…${tail || path.slice(-room)}${query}`;
+}
+
 /** A tool call as one line: a verb and what it acted on. */
 export function describeCall(call: ToolCall, cwd?: string): { verb: string; target: string } {
+  const web = webStep(call);
+  if (web?.kind === "page") return { verb: "Fetched", target: web.url };
+  if (web) return { verb: "Searched", target: web.query ? `the web for ${web.query}` : "the web" };
   if (isCompaction(call)) {
     // Claude says how far it got the context down.
     const output = (call.rawOutput ?? {}) as { preTokens?: unknown; postTokens?: unknown };
