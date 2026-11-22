@@ -2,7 +2,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, extractOpenCodexSessionIds, getDetector, hasActiveTmuxMetadataRuntimeEvidence, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, parseTmuxScanRecords, reconcileStaleCodexWorkingState, resolveAgentExternalSessionId, resolveAgentIntentTitle, resolveTmuxAgentProcess, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
-import { isKiroWorkingStateAfterTurnEnd } from "./scanner-detection.js";
+import { isKiroWorkingStateAfterTurnEnd, isWorkingStateAfterInterrupt } from "./scanner-detection.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { findAgentLeafInTree, findPrimaryAgentForReporterInTree } from "./scanner-discovery.js";
 import type { ProcessTree } from "./scanner-discovery.js";
@@ -1399,6 +1399,21 @@ describe("shouldTreatCodexWorkingAsIdle", () => {
     }
   });
 
+  it("treats a codex turn as idle once its rollout aborted the turn the working state belongs to", () => {
+    const session = `%vitest-codex-aborted-${Date.now()}`;
+    const thread = "019d4387-5c99-70d0-93a1-fb9196ffb068";
+    const statePath = join(getStateDir(), `codex-${session}.json`);
+    reportState("codex", session, "working", { externalSessionId: thread });
+    try {
+      const entry = getAgentStateEntry("codex", session)!;
+      const aborted = (id: string) => (id === thread ? { interrupted: true, at: (entry.ts + 2) * 1000 } : undefined);
+      expect(shouldTreatCodexWorkingAsIdle("", "agents-app", session, undefined, new Map(), aborted)).toBe(true);
+      expect(shouldTreatCodexWorkingAsIdle("", "agents-app", session, undefined, new Map(), () => ({ interrupted: false, at: (entry.ts + 2) * 1000 }))).toBe(false);
+    } finally {
+      try { unlinkSync(statePath); } catch {}
+    }
+  });
+
   it("treats interrupted codex turns as idle from the Codex op log", () => {
     const session = `%vitest-codex-interrupt-${Date.now()}`;
     const thread = "019d4387-5c99-70d0-93a1-fb9196ffb067";
@@ -1591,6 +1606,25 @@ describe("generic detector patterns", () => {
     it("does not match working content", () => {
       expect(detector.isIdle("⠋ Loading data from server", "")).toBe(false);
     });
+  });
+});
+
+describe("a Claude or Codex turn the user interrupted", () => {
+  const working = { agent: "claude", session: "%3", state: "working" as const, ts: 1_000, externalSessionId: "sess_1", workspace: { command: "claude", cwd: "/repo" } };
+
+  it("reads idle once the transcript's latest turn boundary is an interrupt after the working report", () => {
+    let asked: [string, string | undefined] | undefined;
+    expect(isWorkingStateAfterInterrupt(working, (id, cwd) => { asked = [id, cwd]; return { interrupted: true, at: 1_001_000 }; })).toBe(true);
+    expect(asked).toEqual(["sess_1", "/repo"]);
+  });
+
+  it("stays working while the turn runs, or when the marker may be older than the working report", () => {
+    expect(isWorkingStateAfterInterrupt(working, () => ({ interrupted: false, at: 1_005_000 }))).toBe(false);
+    // In the report's second: the user may have started a new turn right after the interrupt.
+    expect(isWorkingStateAfterInterrupt(working, () => ({ interrupted: true, at: 1_000_400 }))).toBe(false);
+    expect(isWorkingStateAfterInterrupt(working, () => ({ interrupted: true, at: 999_000 }))).toBe(false);
+    expect(isWorkingStateAfterInterrupt(working, () => undefined)).toBe(false);
+    expect(isWorkingStateAfterInterrupt({ ...working, state: "idle" }, () => ({ interrupted: true, at: 1_001_000 }))).toBe(false);
   });
 });
 

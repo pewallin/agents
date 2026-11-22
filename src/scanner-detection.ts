@@ -5,6 +5,9 @@ import { exec } from "./shell.js";
 import { getAgentState, getAgentStateEntry, reportState, upsertStateSnapshotEntry } from "./state.js";
 import { stateDuration, stateExternalSessionId } from "./scanner-state-runtime.js";
 import { kiroLastTurnBoundary, kiroSessionTranscript } from "./kiro-sessions.js";
+import { claudeLastTurnBoundary, claudeSessionTranscript, codexLastTurnBoundary } from "./interrupted-turns.js";
+import type { TurnBoundary } from "./interrupted-turns.js";
+import { sessionTranscriptPath } from "./scanner-history.js";
 import type { StateEntry, StateSnapshot } from "./state.js";
 import type { AgentStatus } from "./scanner-types.js";
 
@@ -236,11 +239,13 @@ export function shouldTreatCodexWorkingAsIdle(
   paneId?: string,
   snapshot?: StateSnapshot,
   codexOps: Map<string, CodexOpEntry> = latestCodexOpEntries(),
+  turnBoundaryOf: (sessionId: string) => TurnBoundary | undefined = codexTurnBoundaryOfSession,
 ): boolean {
   if (!paneId) return false;
   const entry = getAgentStateEntry("codex", paneId, snapshot);
   if (isCodexApprovalPending(paneId, snapshot, codexOps)) return false;
-  return isCodexInterruptedAfterState(entry, paneId, snapshot, codexOps);
+  return isCodexInterruptedAfterState(entry, paneId, snapshot, codexOps)
+    || isWorkingStateAfterInterrupt(entry, turnBoundaryOf);
 }
 
 export function reconcileStaleCodexWorkingState(
@@ -298,6 +303,38 @@ export function reconcileCancelledKiroTurn(paneId?: string, snapshot?: StateSnap
   if (snapshot) upsertStateSnapshotEntry(snapshot, updated);
 }
 
+/** A Claude or Codex turn the user interrupted (Esc) ends without a Stop hook, so its pane kept
+ *  "working" while the agent waited at its prompt: Claude's until its idle notification a minute
+ *  later, Codex's until the next prompt. The transcript's latest turn boundary then says the turn
+ *  was interrupted: a "working" reported before that boundary's second is idle. A boundary in the
+ *  same second as the report may belong to a turn the user started right after it, so it is left. */
+export function isWorkingStateAfterInterrupt(
+  entry: StateEntry | null,
+  boundaryOf: (sessionId: string, cwd?: string) => TurnBoundary | undefined,
+): boolean {
+  if (!entry || entry.state !== "working" || !entry.externalSessionId) return false;
+  const boundary = boundaryOf(entry.externalSessionId, entry.workspace?.cwd);
+  return Boolean(boundary?.interrupted && boundary.at >= (entry.ts + 1) * 1000);
+}
+
+function claudeTurnBoundaryOfSession(sessionId: string, cwd?: string): TurnBoundary | undefined {
+  const transcript = claudeSessionTranscript(sessionId, cwd);
+  return transcript ? claudeLastTurnBoundary(transcript) : undefined;
+}
+
+function codexTurnBoundaryOfSession(sessionId: string): TurnBoundary | undefined {
+  const transcript = sessionTranscriptPath("codex", sessionId);
+  return transcript ? codexLastTurnBoundary(transcript) : undefined;
+}
+
+export function reconcileInterruptedClaudeTurn(paneId?: string, snapshot?: StateSnapshot): void {
+  if (!paneId) return;
+  const entry = getAgentStateEntry("claude", paneId, snapshot);
+  if (!isWorkingStateAfterInterrupt(entry, claudeTurnBoundaryOfSession)) return;
+  const updated = reportState("claude", paneId, "idle", { activity: false, clearDetail: true });
+  if (snapshot) upsertStateSnapshotEntry(snapshot, updated);
+}
+
 export const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode", "kiro", "hermes"]);
 
 export function resolveStatusFromContent(
@@ -317,6 +354,7 @@ export function resolveStatusFromContent(
     const content = agentName === "codex" ? tailContent : "";
     if (agentName === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId, snapshot);
     if (agentName === "kiro") reconcileCancelledKiroTurn(tmuxPaneId, snapshot);
+    if (agentName === "claude") reconcileInterruptedClaudeTurn(tmuxPaneId, snapshot);
 
     if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
     const disconnected = agentName === "codex" ? codexStreamDisconnectStatus(tmuxPaneId, snapshot) : undefined;
