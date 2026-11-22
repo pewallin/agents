@@ -6,6 +6,8 @@ import { afterAll } from "vitest";
 const agentsHome = mkdtempSync(join(tmpdir(), "agents-test-home-"));
 process.env.AGENTS_HOME = agentsHome;
 process.env.AGENTS_NO_AUTO_SETUP = "1";
+// A command waits for an app that restarts; in tests a missing app answers at once.
+process.env.AGENTS_APP_SOCKET_WAIT_MS ??= "0";
 
 afterAll(() => {
   rmSync(agentsHome, { recursive: true, force: true });
