@@ -18,7 +18,7 @@ import { readPlanFile } from "../acp-plan.js";
 import { programDirectories } from "./coordinator.js";
 import { agentNameFromLaunchCommand } from "./launch.js";
 import { fail } from "./output.js";
-import { coordinationPaneRecords, coordinatorLeads, programMeta, programName, readJSON, runGit, taskPaths, writeFileAtomic } from "./program.js";
+import { coordinationPaneRecords, coordinatorLeads, programMeta, programName, readJSON, recordCoordinatorFolders, runGit, taskPaths, writeFileAtomic } from "./program.js";
 import { briefSummary, isRoleLine, lastWorkerReport, workerStatus } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { agentStatuses } from "./supervisor-control.js";
@@ -350,20 +350,11 @@ export function threadFolder(cwd) {
   }
 }
 
-function inside(child, parent) {
-  if (!child) return false;
-  const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-// The programs of a folder: those made for it, and those from before programs had folders whose
-// tasks ran in it.
+// The programs of a folder: those made for it. A program without a folder (from before programs
+// had folders) is in no folder's list until a coordinator of it gives it its own
+// (recordCoordinatorFolders); one whose workers ran in a folder is not that folder's.
 export function folderPrograms(folder) {
-  return programDirectories().sort().filter(program => {
-    const meta = programMeta(program);
-    if (meta?.folder) return meta.folder === folder;
-    return threadRows(program).some(row => inside(row.meta.cwd, folder));
-  });
+  return programDirectories().sort().filter(program => programMeta(program)?.folder === folder);
 }
 
 // A program's coordinator: the live one that leads it, and every session that led it.
@@ -415,9 +406,10 @@ export function programThreads(program, records, statuses, transcriptOf) {
 // here for the first time are repaired once first (repairProgram).
 export function listThreads(cwd, options = {}) {
   const folder = threadFolder(cwd);
-  const programs = folderPrograms(folder);
   const strict = coordinationPaneRecords({ strict: true });
   const records = strict || [];
+  recordCoordinatorFolders(records);
+  const programs = folderPrograms(folder);
   for (const program of programs) threadsEpoch(program);
   if (strict) {
     for (const program of programs) {

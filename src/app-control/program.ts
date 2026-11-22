@@ -190,6 +190,22 @@ export function paneFolder(record) {
   return { folder, ...(repo ? { repo } : {}) };
 }
 
+// A coordinator whose program has no folder (made before programs had folders) gives it the folder
+// it works in, as a new coordinator's program gets one: the program then lists in that folder's
+// Conversations and in no other. `folderOf` is paneFolder, replaced in tests.
+export function recordCoordinatorFolders(records, folderOf = paneFolder) {
+  for (const record of records) {
+    if (record.role !== "coordinator") continue;
+    const program = record.program;
+    if (!program || !fs.existsSync(program)) continue;
+    const meta = programMeta(program);
+    if (meta?.folder) continue;
+    const where = folderOf(record);
+    if (!where) continue;
+    writeFileAtomic(path.join(program, "program.json"), `${JSON.stringify({ ...meta, ...where }, null, 2)}\n`);
+  }
+}
+
 // A coordinator leads while its agent runs. One whose agent has exited leaves its pane with a
 // shell and the pane's options: it leads nothing any more, so the next coordinator of its folder
 // carries on its program instead of starting an empty one beside it.

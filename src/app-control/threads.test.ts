@@ -7,9 +7,9 @@ import path from "node:path";
 import { test } from "vitest";
 import { writeTaskMeta } from "./briefs.js";
 import { permissionSummary } from "./delivery.js";
-import { taskPaths } from "./program.js";
+import { programMeta, recordCoordinatorFolders, taskPaths } from "./program.js";
 import {
-  appendSessionLine, derivedTitle, removeProgram, removeThread, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
+  appendSessionLine, derivedTitle, folderPrograms, removeProgram, removeThread, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
   resolvesOnClose, sessionsFile, threadState, transcriptRecords, userTexts,
 } from "./threads.js";
 
@@ -283,4 +283,42 @@ test("a removed thread or program is deleted and leaves the list", () => {
   assert.deepEqual(programThreads(program, [], new Map(), () => null).threads.map(entry => entry.task), ["b"]);
   removeProgram(program);
   assert.equal(fs.existsSync(program), false);
+});
+
+test("a folder lists only the programs made for it, never one whose workers ran in it or below it", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "threads-home-"));
+  const previous = process.env.AGENTS_SHARED_HOME;
+  process.env.AGENTS_SHARED_HOME = home;
+  try {
+    const programs = path.join(home, "programs");
+    const made = (name: string, folder?: string) => {
+      const program = path.join(programs, name);
+      fs.mkdirSync(program, { recursive: true });
+      if (folder) fs.writeFileSync(path.join(program, "program.json"), JSON.stringify({ folder }));
+      return program;
+    };
+    const agents = made("agents", "/code/agents");
+    const product = made("product-master", "/code/product");
+    // A worker of the product's coordinator ran in the agents repository.
+    newTask(product, "touch-agents", { cwd: "/code/agents" });
+    // A program from before programs had folders, whose workers ran in the agents repository.
+    const old = made("product-old");
+    newTask(old, "touch-agents", { cwd: "/code/agents/sub" });
+    assert.deepEqual(folderPrograms("/code/agents"), [agents]);
+    assert.deepEqual(folderPrograms("/code"), []);
+    assert.deepEqual(folderPrograms("/code/product"), [product]);
+
+    // Its coordinator gives the old program the folder it works in; then it lists there.
+    recordCoordinatorFolders(
+      [{ paneID: "%1", role: "coordinator", program: old }, { paneID: "%2", role: "worker", program: agents }],
+      record => (record.paneID === "%1" ? { folder: "/code/product" } : { folder: "/elsewhere" }),
+    );
+    assert.equal(programMeta(old).folder, "/code/product");
+    assert.equal(programMeta(agents).folder, "/code/agents");
+    assert.deepEqual(folderPrograms("/code/product"), [product, old]);
+    assert.deepEqual(folderPrograms("/code/agents"), [agents]);
+  } finally {
+    if (previous === undefined) delete process.env.AGENTS_SHARED_HOME;
+    else process.env.AGENTS_SHARED_HOME = previous;
+  }
 });
