@@ -6,7 +6,7 @@ import { requestID } from "./app-socket.js";
 import { sharedCLIPath, taskRows, writeStatusFile, writeTaskReport } from "./briefs.js";
 import { deliveryState } from "./delivery.js";
 import { shellQuote } from "./launch.js";
-import { coordinatorReminder, enqueueMessage, noteForCoordinator, noteLine, turnDriver, wakeLine, wakeSummary, whenText } from "./messages.js";
+import { coordinatorReminder, enqueueMessage, memoryBytes, noteForCoordinator, noteLine, turnDriver, wakeLine, wakeSummary, whenText } from "./messages.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, runTMuxRequired, setPaneOption } from "./panes.js";
 import { sleep } from "./placement.js";
@@ -253,8 +253,10 @@ export async function runAgentStatus(command) {
     id: requestID("cli"),
     ok: true,
     result: {
-      reminder: own.role === "coordinator" ? coordinatorReminder() : undefined,
+      reminder: own.role === "coordinator" ? coordinatorReminder(program) : undefined,
       program,
+      // MEMORY.md's size: a coordinator keeps it under 8 KB (MEMORY_CAP_BYTES).
+      memoryBytes: memoryBytes(program),
       reports: "tasks/<task>/report.md",
       tasks: statusRows(records, program, filter),
     },

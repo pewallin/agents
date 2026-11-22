@@ -339,7 +339,7 @@ export async function deliverQueuedNow(program, uuid, record) {
   } catch {
     return false;
   }
-  const typed = typeQueuedLines(program, uuid, record, names, coordinatorReminder());
+  const typed = typeQueuedLines(program, uuid, record, names, coordinatorReminder(program));
   if (typed) {
     try {
       fs.mkdirSync(path.join(program, ".run"), { recursive: true });

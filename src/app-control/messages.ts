@@ -106,10 +106,29 @@ export function pruneMessages(dir) {
 export const WAKE_DETAIL_LIMIT = 200;
 
 // What every delivery to a coordinator ends with, so the role outlasts a long or compacted
-// conversation.
-export function coordinatorReminder() {
+// conversation; while the program's MEMORY.md is over its cap, the reminder to shorten it.
+export function coordinatorReminder(program) {
   const protocol = protocolFile();
-  return `(Reminder: you coordinate. Delegate new work to workers, keep replies to the user to a sentence or two that lead with the outcome, name the worker whose pane has the details instead of retelling them, and leave solutions to the workers.${protocol ? ` Protocol: ${protocol}` : ""})`;
+  const memory = memoryReminder(program);
+  return `(Reminder: you coordinate. Delegate new work to workers, keep replies to the user to a sentence or two that lead with the outcome, name the worker whose pane has the details instead of retelling them, and leave solutions to the workers.${protocol ? ` Protocol: ${protocol}` : ""})${memory ? ` ${memory}` : ""}`;
+}
+
+// A coordinator's MEMORY.md is read whole by every coordinator that takes over: it stays short.
+export const MEMORY_CAP_BYTES = 8192;
+
+export function memoryBytes(program) {
+  if (!program) return undefined;
+  try {
+    return fs.statSync(path.join(program, "MEMORY.md")).size;
+  } catch {
+    return undefined;
+  }
+}
+
+export function memoryReminder(program) {
+  const bytes = memoryBytes(program);
+  if (!(bytes > MEMORY_CAP_BYTES)) return undefined;
+  return `MEMORY.md is ${Math.ceil(bytes / 1024)} KB; bring it under 8 KB: keep decisions and current state, move detail into the threads' report.md files.`;
 }
 
 // What every delivery to a worker ends with: a message from its coordinator is work to report
@@ -119,7 +138,7 @@ export function workerReminder(record) {
 }
 
 export function deliveryReminder(record) {
-  if (record.role === "coordinator") return coordinatorReminder();
+  if (record.role === "coordinator") return coordinatorReminder(record.program);
   if (record.role === "worker" && record.task) return workerReminder(record);
   return undefined;
 }

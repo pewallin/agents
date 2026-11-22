@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { agentSessionFile } from "./agent-state.js";
 import { requestID } from "./app-socket.js";
-import { LANGUAGE_OPTION, asHint, coordinatorCLIName, coordinatorLanguage, ensureSharedCLI, languageSentence, threadTitle, writeBrief, writeStatusFile, writeTaskMeta, writeTaskReport } from "./briefs.js";
+import { LANGUAGE_OPTION, asHint, coordinatorCLIName, coordinatorLanguage, ensureSharedCLI, languageSentence, threadTitle, writeBrief, writeStatusFile, writeTaskMeta, writeTaskReport, briefWarning, workerGuidePath } from "./briefs.js";
 import { coordinatorToTakeOver, giveCoordinatorBackground, goneCoordinators, inheritCoordinatorBackground, programNotes, protocolFile, protocolText, skillFile, starterContext, starterOverview, takeOver, userInstructions, userInstructionsPath, waitForSpawnedRecord } from "./coordinator.js";
 import { shellQuote } from "./launch.js";
 import { enqueueMessage } from "./messages.js";
@@ -243,13 +243,13 @@ export async function runAgentAdopt(command) {
   if (language) setPaneOption(pane, LANGUAGE_OPTION, language);
   noteSubWorker(program, sub, task, command.text);
   // Its pane stays where it is; the line reaches it once it is idle.
-  enqueueMessage(program, ensurePaneUUID(target), `ROLE: worker. The coordinator in pane ${own.paneID} takes you on for task "${task}". Read your brief at ${files.brief} and do the task. ${languageSentence(language)} Report with: ${shellQuote(files.cli)} agent report "<one-line status>" --done (or --blocked, --ask user); ask your coordinator with ${shellQuote(files.cli)} agent ask "<question>".`, `You are a worker on task "${task}"`);
+  enqueueMessage(program, ensurePaneUUID(target), `ROLE: worker. The coordinator in pane ${own.paneID} takes you on for task "${task}". Read your brief at ${files.brief} and do the task; read ${workerGuidePath(program)} once: how workers work here. ${languageSentence(language)} Report with: ${shellQuote(files.cli)} agent report "<one-line status>" --done (or --blocked); ask your coordinator with ${shellQuote(files.cli)} agent ask "<question>", the user with agent ask --user "<question>".`, `You are a worker on task "${task}"`);
   const background = await inheritCoordinatorBackground(own.paneID, pane);
   ensureSupervisor(program);
   notifyApp(own.sessionName);
   if (target.sessionName !== own.sessionName) notifyApp(target.sessionName);
   const from = previous ? { program: previous.program, task: previous.task, coordinator: previous.coordinator } : undefined;
-  return { id: requestID("cli"), ok: true, result: { task, pane, program, brief: files.brief, background, from, ...titleCheck } };
+  return { id: requestID("cli"), ok: true, result: { task, pane, program, brief: files.brief, background, from, ...titleCheck, ...briefWarning(command.text) } };
 }
 
 // The task a worker had under a coordinator that is gone ends where the next one adopts it: its

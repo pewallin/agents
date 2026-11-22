@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { readAgentStateForPane } from "./agent-state.js";
 import { readToken, requestAppControl, requestID } from "./app-socket.js";
-import { LANGUAGE_OPTION, coordinatorLanguage, ensureSharedCLI, threadTitle, workerPrompt, writeBrief, writeTaskMeta } from "./briefs.js";
+import { LANGUAGE_OPTION, coordinatorLanguage, ensureSharedCLI, threadTitle, workerPrompt, writeBrief, writeTaskMeta, briefWarning } from "./briefs.js";
 import { requireTitle } from "./threads.js";
 import { inheritCoordinatorBackground } from "./coordinator.js";
 import { agentLaunch, agentNameFromLaunchCommand, agentProfile, assertOK, buildNewAgentArgv, controlHasArgument, normalizeAgentName, renderLaunchCommand } from "./launch.js";
@@ -252,6 +252,7 @@ export async function runAgentSpawn(command, currentSocketPath) {
     ok: true,
     result: {
       ...spawnSummary(planned, task),
+      ...(task && !respawn ? briefWarning(command.prompt) : {}),
       newPane,
       spawnID,
       background,
