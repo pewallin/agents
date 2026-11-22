@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { kiroContinuedSession, kiroHistoryForCwd, kiroSessionTranscript, kiroSetting } from "./kiro-sessions.js";
+import { kiroContinuedSession, kiroHistoryForCwd, kiroLastTurnBoundary, kiroSessionTranscript, kiroSetting } from "./kiro-sessions.js";
 
 describe("Kiro sessions", () => {
   // The store in Peter's ~/code on 2026-11-09, after a restart whose Kiro refused
@@ -107,5 +107,31 @@ describe("Kiro sessions", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("kiroLastTurnBoundary", () => {
+  const record = (type: string, timestamp: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ id: type, timestamp, payload: { type, ...extra } });
+
+  it("reads whether the latest turn ended, also one the user cancelled", () => {
+    const root = mkdtempSync(join(tmpdir(), "kiro-turns-"));
+    const transcript = join(root, "messages.jsonl");
+    writeFileSync(transcript, [
+      record("user", "2026-11-22T11:56:55.653Z"),
+      record("turn_start", "2026-11-22T11:56:55.671Z"),
+      record("assistant", "2026-11-22T11:57:01.692Z"),
+      record("turn_end", "2026-11-22T11:57:01.691Z", { stopReason: "cancelled" }),
+      record("session_event", "2026-11-22T11:57:01.696Z"),
+      "",
+    ].join("\n"));
+    expect(kiroLastTurnBoundary(transcript)).toEqual({ ended: true, at: Date.parse("2026-11-22T11:57:01.691Z") });
+
+    appendFileSync(transcript, `${record("turn_start", "2026-11-22T12:00:00.000Z")}\n`);
+    expect(kiroLastTurnBoundary(transcript)).toEqual({ ended: false, at: Date.parse("2026-11-22T12:00:00.000Z") });
+  });
+
+  it("knows nothing of a Kiro 2 transcript", () => {
+    expect(kiroLastTurnBoundary("/tmp/cli/abc.jsonl")).toBeUndefined();
   });
 });

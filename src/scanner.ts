@@ -2,7 +2,7 @@ import { existsSync } from "fs";
 import { homedir } from "os";
 import { basename, join } from "path";
 import { exec, gitBranch } from "./shell.js";
-import { getAgentStateEntry, readStateSnapshot, rebindStateSnapshotToExternalSession } from "./state.js";
+import { forgetStateBeforeProcessStart, getAgentStateEntry, readStateSnapshot, rebindStateSnapshotToExternalSession } from "./state.js";
 import type { ModelMetadata, ModelSource, StateSnapshot } from "./state.js";
 import { inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, runtimeStateFromAgent } from "./scanner-runtime.js";
 import { mergedContextTokens, resolveModelInfo, stateContext, stateDetail, stateExternalSessionId, stateIntent, stateProvenance, stateResponsePreview, stateTokens, stateWorkspaceCwd } from "./scanner-state-runtime.js";
@@ -385,6 +385,7 @@ export function runtimeStates(paneIds?: string[]): AgentRuntimeState[] {
     if (observedExternalSessionId) {
       rebindStateSnapshotToExternalSession(stateSnapshot, agentName, tmuxPaneId, observedExternalSessionId);
     }
+    forgetStateBeforeProcessStart(stateSnapshot, agentName, tmuxPaneId, matchedProcess.process?.startedAt, observedExternalSessionId);
     // The session the agent runs now, as its hooks or its command line name it: the coordination
     // supervisor records each one a worker runs (tasks/<task>/sessions.jsonl).
     const externalSessionId = resolveAgentExternalSessionId({
@@ -454,6 +455,7 @@ function scanSync(options: { requireProcess?: boolean; excludeProcessIDs?: numbe
     agentName: string;
     processPid?: number;
     processArgs?: string;
+    processStartedAt?: number;
     cpuPercent: number;
     memoryMB: number;
   };
@@ -498,6 +500,7 @@ function scanSync(options: { requireProcess?: boolean; excludeProcessIDs?: numbe
       agentName,
       processPid: matchedProcess.process?.pid,
       processArgs: matchedProcess.process?.args ?? commandLaunch,
+      processStartedAt: matchedProcess.process?.startedAt,
       cpuPercent: matchedProcess.process?.cpuPercent ?? 0,
       memoryMB: matchedProcess.process?.memoryMB ?? 0,
     });
@@ -524,6 +527,7 @@ function scanSync(options: { requireProcess?: boolean; excludeProcessIDs?: numbe
     if (observedExternalSessionId) {
       rebindStateSnapshotToExternalSession(stateSnapshot, p.agentName, p.tmuxPaneId, observedExternalSessionId);
     }
+    forgetStateBeforeProcessStart(stateSnapshot, p.agentName, p.tmuxPaneId, p.processStartedAt, observedExternalSessionId);
     const { status, detail } = resolveStatusFromContent(p.title, wact, p.agentName, content, p.tmuxPaneId, stateSnapshot);
     const richDetail = stateDetail(p.agentName, p.tmuxPaneId, stateSnapshot);
     const finalDetail = richDetail || detail;

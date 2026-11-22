@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildProcessTree, findPrimaryAgentForReporterInTree } from "./scanner-discovery.js";
+import { buildProcessTree, elapsedSeconds, findPrimaryAgentForReporterInTree } from "./scanner-discovery.js";
 import { exec } from "./shell.js";
 
 vi.mock("./shell.js", () => ({ exec: vi.fn(), execAsync: vi.fn(), execFileCapture: vi.fn() }));
@@ -9,6 +9,22 @@ describe("live reporter process chains", () => {
     vi.mocked(exec).mockReturnValue("10 1 zsh ttys010 0.0 1024 zsh (kiro-cli-term)");
     expect(buildProcessTree().byPid.get(10)?.comm).toBe("zsh");
     expect(exec).toHaveBeenLastCalledWith(expect.stringContaining("ucomm="));
+  });
+
+  it("knows when each process started from ps's elapsed time", () => {
+    vi.mocked(exec).mockReturnValue([
+      "10 1 1-02:03:04 zsh (kiro-cli-term) ttys010 0.0 1024 zsh (kiro-cli-term)",
+      "11 10 04:02 kiro-cli ttys011 0.0 1024 kiro-cli chat",
+    ].join("\n"));
+    const now = Math.floor(Date.now() / 1000);
+    const tree = buildProcessTree();
+    expect(tree.byPid.get(10)).toMatchObject({ comm: "zsh (kiro-cli-term)", tty: "ttys010" });
+    expect(Math.abs((tree.byPid.get(10)?.startedAt ?? 0) - (now - 93_784))).toBeLessThanOrEqual(1);
+    expect(tree.byPid.get(11)).toMatchObject({ comm: "kiro-cli", args: "kiro-cli chat" });
+    expect(Math.abs((tree.byPid.get(11)?.startedAt ?? 0) - (now - 242))).toBeLessThanOrEqual(1);
+    expect(exec).toHaveBeenLastCalledWith(expect.stringContaining("etime="));
+    expect(elapsedSeconds("03:04:05")).toBe(11_045);
+    expect(elapsedSeconds("zsh")).toBeUndefined();
   });
 
   it("keeps a row whose executable name holds spaces", () => {

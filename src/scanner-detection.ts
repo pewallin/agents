@@ -4,6 +4,7 @@ import { join } from "path";
 import { exec } from "./shell.js";
 import { getAgentState, getAgentStateEntry, reportState, upsertStateSnapshotEntry } from "./state.js";
 import { stateDuration, stateExternalSessionId } from "./scanner-state-runtime.js";
+import { kiroLastTurnBoundary, kiroSessionTranscript } from "./kiro-sessions.js";
 import type { StateEntry, StateSnapshot } from "./state.js";
 import type { AgentStatus } from "./scanner-types.js";
 
@@ -271,6 +272,32 @@ export function reconcileStaleCodexWorkingState(
   if (snapshot) upsertStateSnapshotEntry(snapshot, updated);
 }
 
+/** A Kiro turn the user cancelled ends without a Stop hook, so its pane kept "working" while Kiro
+ *  waited at its prompt, and lines queued for it waited until the next prompt. Its transcript's
+ *  turn_end says the turn is over: a "working" reported no later than that end is idle. */
+export function isKiroWorkingStateAfterTurnEnd(
+  entry: StateEntry | null,
+  boundaryOf: (sessionId: string) => { ended: boolean; at: number } | undefined = kiroTurnBoundaryOfSession,
+): boolean {
+  if (!entry || entry.state !== "working" || !entry.externalSessionId) return false;
+  const boundary = boundaryOf(entry.externalSessionId);
+  // A hook's timestamp is floored to the second; a turn_end in that second or later ends its turn.
+  return Boolean(boundary?.ended && boundary.at >= entry.ts * 1000);
+}
+
+function kiroTurnBoundaryOfSession(sessionId: string): { ended: boolean; at: number } | undefined {
+  const transcript = kiroSessionTranscript(sessionId);
+  return transcript ? kiroLastTurnBoundary(transcript) : undefined;
+}
+
+export function reconcileCancelledKiroTurn(paneId?: string, snapshot?: StateSnapshot): void {
+  if (!paneId) return;
+  const entry = getAgentStateEntry("kiro", paneId, snapshot);
+  if (!isKiroWorkingStateAfterTurnEnd(entry)) return;
+  const updated = reportState("kiro", paneId, "idle", { activity: false, clearDetail: true });
+  if (snapshot) upsertStateSnapshotEntry(snapshot, updated);
+}
+
 export const HOOK_AGENTS = new Set(["claude", "codex", "copilot", "pi", "opencode", "kiro", "hermes"]);
 
 export function resolveStatusFromContent(
@@ -289,6 +316,7 @@ export function resolveStatusFromContent(
   if (HOOK_AGENTS.has(agentName)) {
     const content = agentName === "codex" ? tailContent : "";
     if (agentName === "codex") reconcileStaleCodexWorkingState(content, title, tmuxPaneId, snapshot);
+    if (agentName === "kiro") reconcileCancelledKiroTurn(tmuxPaneId, snapshot);
 
     if (detector.isApproval(content, tmuxPaneId)) return { status: "attention", detail: dur };
     const disconnected = agentName === "codex" ? codexStreamDisconnectStatus(tmuxPaneId, snapshot) : undefined;

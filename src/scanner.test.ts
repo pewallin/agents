@@ -2,6 +2,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { codexStreamDisconnectStatus, detectAgentProcess, externalSessionIdFromProcessArgs, extractClaudeRenameTitleFromTranscript, extractLatestCodexOpEntriesFromLogLines, extractLatestCodexOpsFromLogLines, extractLatestCodexSessionTitlesFromIndexLines, extractLatestCodexStreamDisconnectEntriesFromLogLines, extractLatestCodexTokenUsageFromSessionLines, extractLatestCodexTokenUsageSampleFromSessionLines, extractOpenCodexSessionIds, getDetector, hasActiveTmuxMetadataRuntimeEvidence, inferContextFromContent, inferModelFromContent, inferModelMetadataFromContent, matchesHistoryPaneFilter, parseTmuxScanRecords, reconcileStaleCodexWorkingState, resolveAgentExternalSessionId, resolveAgentIntentTitle, resolveTmuxAgentProcess, shouldTreatCodexWorkingAsIdle } from "./scanner.js";
+import { isKiroWorkingStateAfterTurnEnd } from "./scanner-detection.js";
 import { extractFirstCopilotUserMessageTitleFromEventLines, extractLatestClaudeConversationActivityAt, extractLatestCodexConversationActivityAt, extractLatestCodexReasoningEffortFromSessionLines, extractLatestCopilotConversationActivityAt, extractLatestOpenCodeConversationActivityAt, extractLatestPiConversationActivityAt, extractLatestPiThinkingLevelFromSessionLines, getHistoryResumeInfo, historyTitleMatchesPaneTitle, resolveCodexFallbackTitleFromHistory, resolveCopilotHistoryTitle, shortTitleForHistoryTitle } from "./scanner-history.js";
 import { findAgentLeafInTree, findPrimaryAgentForReporterInTree } from "./scanner-discovery.js";
 import type { ProcessTree } from "./scanner-discovery.js";
@@ -1590,5 +1591,20 @@ describe("generic detector patterns", () => {
     it("does not match working content", () => {
       expect(detector.isIdle("⠋ Loading data from server", "")).toBe(false);
     });
+  });
+});
+
+describe("a Kiro turn the user cancelled", () => {
+  const working = { agent: "kiro", session: "%3", state: "working" as const, ts: 1_000, externalSessionId: "sess_1" };
+
+  it("reads idle once the transcript ended the turn the working state belongs to", () => {
+    expect(isKiroWorkingStateAfterTurnEnd(working, () => ({ ended: true, at: 1_000_400 }))).toBe(true);
+  });
+
+  it("stays working while the turn runs, or when the state is newer than the last turn's end", () => {
+    expect(isKiroWorkingStateAfterTurnEnd(working, () => ({ ended: false, at: 999_000 }))).toBe(false);
+    expect(isKiroWorkingStateAfterTurnEnd(working, () => ({ ended: true, at: 999_000 }))).toBe(false);
+    expect(isKiroWorkingStateAfterTurnEnd(working, () => undefined)).toBe(false);
+    expect(isKiroWorkingStateAfterTurnEnd({ ...working, state: "idle" }, () => ({ ended: true, at: 1_000_400 }))).toBe(false);
   });
 });

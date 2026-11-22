@@ -85,6 +85,10 @@ export function recordTaskSession(program, task, { agent, session, uuid, cwd }) 
   if (!program || !task) return false;
   const files = taskPaths(program, task);
   if (!fs.existsSync(files.dir)) return false;
+  // A session that leads the program is never a worker's: a worker's pane can show its
+  // coordinator's session for a moment (a resume that opened the coordinator's conversation, a
+  // state the pane kept from an earlier agent), and a reopened thread would then resume it.
+  if (session && readSessionLines(coordinatorsFile(program)).some(line => line.session === session)) return false;
   const file = sessionsFile(program, task);
   const last = readSessionLines(file).at(-1);
   const meta = readJSON(files.meta, {});

@@ -9,7 +9,7 @@ import { writeTaskMeta } from "./briefs.js";
 import { permissionSummary } from "./delivery.js";
 import { programMeta, recordCoordinatorFolders, taskPaths } from "./program.js";
 import {
-  appendSessionLine, derivedTitle, folderPrograms, removeProgram, removeThread, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
+  appendSessionLine, derivedTitle, folderPrograms, recordCoordinatorSession, removeProgram, removeThread, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
   resolvesOnClose, sessionsFile, threadState, transcriptRecords, userTexts,
   isFinished, proposeClose, reopenedAfterDone, threadOutcome, threadRounds,
 } from "./threads.js";
@@ -73,6 +73,15 @@ test("a thread's sessions: spawn, a new session in the same pane, a respawn in a
   assert.equal(lines[0].cwd, "/repo");
   assert.equal(appendSessionLine(sessionsFile(program, "t"), { agent: "x", session: "bad id with spaces" }), false);
   assert.equal(recordTaskSession(program, "missing", { agent: "codex", session: "019a-one" }), false);
+});
+
+test("a session that leads the program is never recorded as a worker's", () => {
+  const program = newProgram();
+  newTask(program, "t", { cwd: "/repo" });
+  recordCoordinatorSession(program, { via: "promote", agent: "kiro", session: "sess_lead", uuid: "lead" });
+  assert.equal(recordTaskSession(program, "t", { agent: "kiro", session: "sess_lead", uuid: "pane-1" }), false);
+  assert.equal(recordTaskSession(program, "t", { agent: "kiro", session: "sess_worker", uuid: "pane-1" }), true);
+  assert.deepEqual(readSessionLines(sessionsFile(program, "t")).map(line => line.session), ["sess_worker"]);
 });
 
 test("states: working, needs you, done (ready for review), stopped, resolved", () => {

@@ -8,7 +8,7 @@ import { readFileSync } from "fs";
 // Since state.ts uses a hardcoded STATE_DIR, we test the exported
 // priority/filtering logic by constructing StateEntry arrays directly.
 
-import { clearContributorState, createStateSnapshot, deriveModelDisplay, getAgentState, getAgentStateEntry, getAgentStateProvenance, rebindStateSnapshotToExternalSession, reportContext, reportContributorState, reportState, upsertStateSnapshotEntry } from "./state.js";
+import { clearContributorState, createStateSnapshot, deriveModelDisplay, forgetStateBeforeProcessStart, getAgentState, getAgentStateEntry, getAgentStateProvenance, rebindStateSnapshotToExternalSession, reportContext, reportContributorState, reportState, upsertStateSnapshotEntry } from "./state.js";
 import type { StateEntry, ReportedState } from "./state.js";
 import { getRuntimeStateEventsPath } from "./paths.js";
 import type { RuntimeStateEvent } from "./runtime-events.js";
@@ -491,5 +491,49 @@ describe("state snapshots", () => {
 
     expect(getAgentStateEntry("codex", "%4", snapshot)).toBeNull();
     expect(getAgentStateProvenance("codex", "%4", snapshot)).toBeNull();
+  });
+
+  it("leaves out what a pane reported before the agent that runs there now started", () => {
+    // Kiro 3 reports nothing until its first prompt: a new Kiro in the pane of one that was
+    // stopped mid-turn (or in a pane of that number after a tmux restart) is not working, and
+    // the session in that state is not its own.
+    const snapshot = createStateSnapshot(
+      [{ agent: "kiro", session: "%7", externalSessionId: "sess_old", state: "working", ts: 1_000 }],
+      [{ agent: "kiro", session: "%7", reporter: "sandbox", state: "approval", ts: 1_001 }],
+    );
+
+    forgetStateBeforeProcessStart(snapshot, "kiro", "%7", 5_000);
+
+    expect(getAgentStateEntry("kiro", "%7", snapshot)).toBeNull();
+    expect(getAgentState("kiro", "%7", snapshot)).toBeNull();
+  });
+
+  it("keeps a resumed session's state, idle, and the state the running agent reported", () => {
+    const snapshot = createStateSnapshot(
+      [
+        { agent: "kiro", session: "%7", externalSessionId: "sess_same", state: "working", ts: 1_000, detail: "shell" },
+        { agent: "claude", session: "%8", externalSessionId: "c1", state: "working", ts: 5_001 },
+      ],
+      [],
+    );
+
+    forgetStateBeforeProcessStart(snapshot, "kiro", "%7", 5_000, "sess_same");
+    forgetStateBeforeProcessStart(snapshot, "claude", "%8", 5_002);
+
+    expect(getAgentStateEntry("kiro", "%7", snapshot)).toMatchObject({ state: "idle", externalSessionId: "sess_same" });
+    expect(getAgentStateEntry("kiro", "%7", snapshot)?.detail).toBeUndefined();
+    // Reported within the slack of a start ps gives to the second: the running agent's own.
+    expect(getAgentStateEntry("claude", "%8", snapshot)?.state).toBe("working");
+  });
+
+  it("leaves Codex alone, whose turns outlive its TUI in the app server", () => {
+    const snapshot = createStateSnapshot(
+      [{ agent: "codex", session: "%9", externalSessionId: "t1", state: "working", ts: 1_000 }],
+      [],
+    );
+
+    forgetStateBeforeProcessStart(snapshot, "codex", "%9", 5_000);
+
+    expect(getAgentStateEntry("codex", "%9", snapshot)?.state).toBe("working");
   });
 });

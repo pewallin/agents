@@ -351,6 +351,53 @@ export function rebindStateSnapshotToExternalSession(
   }
 }
 
+/** Seconds a state entry may predate its agent's process and still be the process's own: ps
+ *  gives the start to the second and a hook's timestamp is floored. */
+const PROCESS_START_SLACK_SECONDS = 2;
+
+/**
+ * Leave out of the snapshot what a pane's hooks reported before the agent that runs there now
+ * started: it is an earlier agent's (one that ran in this pane, or in a pane of the same number
+ * before a mux restart) until the new one reports. Kiro 3 reports nothing before its first prompt,
+ * so a restarted or newly started agent took the earlier one's "working" and session id: queued
+ * lines waited on it and a worker's thread recorded that session. An entry of the same session
+ * (the agent resumed it) keeps what it knows, but no turn of an earlier process goes on in a new
+ * one, so it reads idle. Codex is left alone: its turns run in an app server that outlives the TUI.
+ */
+export function forgetStateBeforeProcessStart(
+  snapshot: StateSnapshot,
+  agent: string,
+  session: string,
+  processStartedAt: number | undefined,
+  processExternalSessionId?: string,
+): void {
+  if (!processStartedAt || agent === "codex") return;
+  const key = stateSnapshotKey(agent, session);
+  const current = snapshot.primaryByKey.get(key);
+  const contributors = snapshot.contributorsByKey.get(key);
+  const before = (ts: number) => ts < processStartedAt - PROCESS_START_SLACK_SECONDS;
+  let changed = false;
+  if (current && before(current.ts)) {
+    if (processExternalSessionId && current.externalSessionId === processExternalSessionId) {
+      if (current.state !== "idle") {
+        const { detail: _detail, ...rest } = current;
+        snapshot.primaryByKey.set(key, { ...rest, state: "idle" });
+        changed = true;
+      }
+    } else {
+      snapshot.primaryByKey.delete(key);
+      changed = true;
+    }
+  }
+  if (contributors?.some((entry) => before(entry.ts))) {
+    const kept = contributors.filter((entry) => !before(entry.ts));
+    if (kept.length) snapshot.contributorsByKey.set(key, kept);
+    else snapshot.contributorsByKey.delete(key);
+    changed = true;
+  }
+  if (changed) rebuildStateSnapshot(snapshot);
+}
+
 export function clearStateExternalSessionId(agent: string, session: string): StateEntry | null {
   const existing = readStateFile(agent, session);
   if (!existing) return null;

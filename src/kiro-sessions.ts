@@ -15,7 +15,7 @@
 // So a UUID goes on as the newest copy Kiro 3 made of it, when there is one. The copies are read
 // from Kiro's files, as `agents history` reads them, so the list and a resume agree; asking
 // `kiro-cli chat --list-sessions` instead took seconds and blocked the ACP host while it ran.
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -239,4 +239,55 @@ export function kiroHistoryForCwd(cwd: string, root: string = kiroSessionsRoot()
     }),
     ...v2.filter((session) => !copied(session.sessionId)),
   ].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** How a Kiro 3 transcript's latest turn stands: `turn_start` opens a turn and `turn_end` closes
+ *  it, also when the user cancelled it (stopReason "cancelled"), where Kiro runs no Stop hook.
+ *  Read from the end of messages.jsonl; nothing for a Kiro 2 transcript, which marks no turns. */
+export type KiroTurnBoundary = { ended: boolean; at: number };
+
+const TURN_TAIL_BYTES = 256 * 1024;
+const turnBoundaryCache = new Map<string, { size: number; mtimeMs: number; boundary?: KiroTurnBoundary }>();
+
+export function kiroLastTurnBoundary(transcript: string): KiroTurnBoundary | undefined {
+  if (!transcript.endsWith("messages.jsonl")) return undefined;
+  let size: number;
+  let mtimeMs: number;
+  try {
+    ({ size, mtimeMs } = statSync(transcript));
+  } catch {
+    return undefined;
+  }
+  const cached = turnBoundaryCache.get(transcript);
+  if (cached && cached.size === size && cached.mtimeMs === mtimeMs) return cached.boundary;
+  let text = "";
+  try {
+    const length = Math.min(size, TURN_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    const fd = openSync(transcript, "r");
+    try {
+      readSync(fd, buffer, 0, length, size - length);
+    } finally {
+      closeSync(fd);
+    }
+    text = buffer.toString("utf8");
+  } catch {
+    return undefined;
+  }
+  let boundary: KiroTurnBoundary | undefined;
+  const lines = text.split("\n");
+  for (let index = lines.length - 1; index >= 0 && !boundary; index -= 1) {
+    const line = lines[index];
+    if (!line.includes('"turn_start"') && !line.includes('"turn_end"')) continue;
+    try {
+      const record = JSON.parse(line);
+      const type = record?.payload?.type;
+      const at = Date.parse(record?.timestamp ?? "");
+      if ((type === "turn_start" || type === "turn_end") && Number.isFinite(at)) boundary = { ended: type === "turn_end", at };
+    } catch {
+      // A line cut by the start of the tail, or one being written.
+    }
+  }
+  turnBoundaryCache.set(transcript, { size, mtimeMs, boundary });
+  return boundary;
 }

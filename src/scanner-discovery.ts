@@ -5,7 +5,7 @@ import { exec, execFileCapture, gitBranch } from "./shell.js";
 
 // macOS `comm` is a truncated path (and can contain spaces). `ucomm` is the
 // executable name; keep full args separately for Node wrappers and session IDs.
-const PROCESS_TREE_PS_COMMAND = "ps -eo pid=,ppid=,ucomm=,tty=,%cpu=,rss=,args= 2>/dev/null";
+const PROCESS_TREE_PS_COMMAND = "ps -eo pid=,ppid=,etime=,ucomm=,tty=,%cpu=,rss=,args= 2>/dev/null";
 
 export interface ProcEntry {
   pid: number;
@@ -15,6 +15,8 @@ export interface ProcEntry {
   cpuPercent: number;
   memoryMB: number;
   args: string;
+  /** When the process started, in epoch seconds (from ps's elapsed time, to the second). */
+  startedAt?: number;
 }
 
 export interface AgentLeafProcess {
@@ -152,7 +154,15 @@ function findBestAgentProcessInTree(
   return best;
 }
 
-function parseProcessTree(raw: string): ProcessTree {
+/** ps's elapsed time, [[dd-]hh:]mm:ss, in seconds. */
+export function elapsedSeconds(etime: string): number | undefined {
+  const match = etime.match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!match) return undefined;
+  const [, days, hours, minutes, seconds] = match;
+  return (Number(days || 0) * 24 + Number(hours || 0)) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
+function parseProcessTree(raw: string, now: number = Math.floor(Date.now() / 1000)): ProcessTree {
   const byPid = new Map<number, ProcEntry>();
   const children = new Map<number, number[]>();
   const byTty = new Map<string, ProcEntry[]>();
@@ -162,18 +172,21 @@ function parseProcessTree(raw: string): ProcessTree {
     if (!trimmed) continue;
     // A ucomm may hold spaces (Kiro's terminal proxy is "zsh (kiro-cli-term)"): it takes the
     // fewest words that leave a tty, %cpu and rss behind it.
-    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(.+?)\s+(\S+)\s+([-\d.,]+)\s+(\d+)(?:\s+(.*))?$/);
+    // The elapsed time ([[dd-]hh:]mm:ss) follows the ppid.
+    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(?:((?:\d+-)?(?:\d+:)?\d+:\d+)\s+)?(.+?)\s+(\S+)\s+([-\d.,]+)\s+(\d+)(?:\s+(.*))?$/);
     if (!match) continue;
 
-    const rssKB = parseInt(match[6], 10) || 0;
+    const rssKB = parseInt(match[7], 10) || 0;
+    const elapsed = match[3] ? elapsedSeconds(match[3]) : undefined;
     const entry: ProcEntry = {
       pid: parseInt(match[1], 10),
       ppid: parseInt(match[2], 10),
-      comm: match[3].replace(/.*\//, ""),
-      tty: match[4],
-      cpuPercent: parseFloat(match[5].replace(",", ".")) || 0,
+      comm: match[4].replace(/.*\//, ""),
+      tty: match[5],
+      cpuPercent: parseFloat(match[6].replace(",", ".")) || 0,
       memoryMB: Math.round(rssKB / 1024),
-      args: match[7] || "",
+      args: match[8] || "",
+      ...(elapsed !== undefined ? { startedAt: now - elapsed } : {}),
     };
 
     byPid.set(entry.pid, entry);
