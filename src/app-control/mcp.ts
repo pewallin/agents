@@ -115,12 +115,12 @@ export const MCP_AS = { type: "string", description: "Only when a call is refuse
 export const MCP_TOOLS = [
   {
     name: "report",
-    description: "Report your status as a worker to your coordinator: one short line that stands on its own. done, blocked and a question for the user change your row in the app; done and blocked wake your coordinator. Progress (no state) wakes nobody.",
+    description: "Report your status as a worker to your coordinator: one short line that stands on its own. done and blocked change your row in the app and wake your coordinator. Progress (no state) wakes nobody. Ask the user with the ask tool (to_user).",
     inputSchema: {
       type: "object",
       properties: {
         status: { type: "string", description: "One short line, e.g. \"Fixed the token refresh; MR !123 is open\"." },
-        state: { type: "string", enum: ["progress", "done", "blocked", "ask-user"], description: "progress (the default), done, blocked, or ask-user for a question to the person you work for." },
+        state: { type: "string", enum: ["progress", "done", "blocked"], description: "progress (the default), done or blocked." },
         outputs: { type: "array", items: { type: "string" }, description: "URLs or files you produced." },
         details: { type: "string", description: "A longer write-up that goes into your report." },
         as: MCP_AS,
@@ -130,11 +130,12 @@ export const MCP_TOOLS = [
   },
   {
     name: "ask",
-    description: "Ask your coordinator a question and wait for its answer, so you go on in the same turn. When no answer comes in time (answered: false), the question stays open and the answer arrives in your prompt later as a line that starts with ⟢ agents.",
+    description: "Ask your coordinator a question and wait for its answer, so you go on in the same turn. When no answer comes in time (answered: false), the question stays open and the answer arrives in your prompt later as a line that starts with ⟢ agents. With to_user, the question is for the person you work for: it does not wait; end your turn, they answer in your pane.",
     inputSchema: {
       type: "object",
       properties: {
         question: { type: "string" },
+        to_user: { type: "boolean", description: "A question for the person you work for instead of your coordinator." },
         timeout_seconds: { type: "number", description: "How long to wait, 1-600 seconds; 50 by default." },
         as: MCP_AS,
       },
@@ -143,7 +144,7 @@ export const MCP_TOOLS = [
   },
   {
     name: "send",
-    description: "Send a message to another agent: to your coordinator (to: \"parent\") or, as a coordinator, to a worker by its task name. It waits for the agent's prompt unless mode is steer. reply_to answers a worker's question (a worker with one open question for you is answered by itself); no_wake is information that rides along with the next message instead of waking the agent; supersedes replaces your earlier message.",
+    description: "Send a message to another agent: to your coordinator (to: \"parent\") or, as a coordinator, to a worker by its task name. It always wakes the agent, at its prompt unless mode is steer. reply_to answers a worker's question (a worker with one open question for you is answered by itself); supersedes replaces your earlier message. Information that need not wake anyone is a progress report.",
     inputSchema: {
       type: "object",
       properties: {
@@ -151,7 +152,6 @@ export const MCP_TOOLS = [
         to: { type: "string", description: "parent, a task name, a pane (%12) or an agent uuid." },
         mode: { type: "string", enum: ["queue", "steer"], description: "queue (the default) or steer, into the agent's current turn." },
         reply_to: { type: "string", description: "The id of the question this answers." },
-        no_wake: { type: "boolean" },
         supersedes: { type: "string", description: "The id of your earlier message this replaces." },
         id: { type: "string", description: "A message id of your own, which makes the send safe to repeat." },
         as: MCP_AS,
@@ -200,13 +200,15 @@ export function mcpArguments(name, input) {
     const state = args.state || "progress";
     if (state === "done") argv.push("--done");
     else if (state === "blocked") argv.push("--blocked");
-    else if (state === "ask-user") argv.push("--ask", "user");
-    else if (state !== "progress") return { error: "state is progress, done, blocked or ask-user; ask your coordinator with the ask tool." };
+    // ask-user, from before the ask tool's to_user.
+    else if (state === "ask-user") return { argv: ["agent", "ask", "--user", text(args.status) || ""] };
+    else if (state !== "progress") return { error: "state is progress, done or blocked; ask with the ask tool (to_user for the person you work for)." };
     for (const output of [].concat(args.outputs || [])) argv.push("--output", String(output));
     if (args.details !== undefined) argv.push("--details", String(args.details));
     return { argv };
   }
   case "ask": {
+    if (args.to_user) return { argv: ["agent", "ask", "--user", text(args.question) || ""] };
     const argv = ["agent", "ask", text(args.question) || "", "--to", "parent"];
     if (args.timeout_seconds !== undefined) {
       const seconds = Math.round(Number(args.timeout_seconds));

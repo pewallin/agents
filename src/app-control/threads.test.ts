@@ -85,6 +85,10 @@ test("states: working, needs you, done (ready for review), stopped, resolved", (
   assert.equal(threadState({ live: false, reportState: "done" }), "done");
   assert.equal(threadState({ live: false, reportState: "blocked" }), "stopped");
   assert.equal(threadState({ live: false, reportState: "done", resolved: "2026-11-02T10:00:00Z" }), "resolved");
+  // A question for the user outlasts its pane: the thread still needs them.
+  assert.equal(threadState({ live: false, reportState: "closed", askingUser: true }), "needs-you");
+  assert.equal(threadState({ live: true, agent: "idle", reportState: "closed", askingUser: true }), "needs-you");
+  assert.equal(threadState({ live: false, reportState: "closed", askingUser: true, resolved: "2026-11-02T10:00:00Z" }), "resolved");
   // A pane shows what the thread does there, resolved or not.
   assert.equal(threadState({ live: true, agent: "working", reportState: "progress", resolved: "x" }), "working");
 });
@@ -264,7 +268,13 @@ test("a thread that needs you says what it waits on: the question for the user, 
     { at: "1", state: "ask-user", line: "Ship to TestFlight now or after the review?" },
     { at: "2", state: "progress", line: "Working again.", by: "supervisor" },
   ] };
-  assert.deepEqual(threadWaitingOn("ask-user", report, undefined, ""), { kind: "question", text: "Ship to TestFlight now or after the review?" });
+  assert.deepEqual(threadWaitingOn("ask-user", report, undefined, ""), { kind: "question", text: "Ship to TestFlight now or after the review?", since: "1" });
+  // The question's record names it, and when it was asked.
+  const question = { id: "q1", text: "Which bucket?", askedAt: "2026-11-22T10:00:00.000Z", to: "user", state: "open" };
+  assert.deepEqual(threadWaitingOn("ask-user", report, undefined, "", question), { kind: "question", id: "q1", text: "Which bucket?", since: "2026-11-22T10:00:00.000Z" });
+  // A permission waits since its agent's hooks said so.
+  assert.equal(threadWaitingOn("progress", report, { status: "attention" }, "", undefined, { state: "approval", ts: 1700000000 }).since, "2023-11-14T22:13:20.000Z");
+  assert.equal(threadWaitingOn("progress", report, { status: "attention" }, "", undefined, { state: "working", ts: 1700000000 }).since, undefined);
   assert.deepEqual(threadWaitingOn("blocked", { line: "No access to the staging database." }, undefined, ""), { kind: "blocker", text: "No access to the staging database." });
   const screen = ["─────", "Bash command", "  git push origin main", "Do you want to proceed?", "❯ 1. Yes"].join("\n");
   assert.deepEqual(threadWaitingOn("progress", report, { status: "attention" }, screen), { kind: "permission", text: "Waiting for permission: Bash command: git push origin main" });

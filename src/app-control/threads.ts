@@ -22,6 +22,8 @@ import { coordinationPaneRecords, coordinatorLeads, programMeta, programName, re
 import { briefSummary, isRoleLine, lastWorkerReport, workerStatus } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { agentStatuses } from "./supervisor-control.js";
+import { readAgentStateForPane } from "./agent-state.js";
+import { openUserQuestion, questionsByTask } from "./questions.js";
 import { agentResumeInvocation } from "../resume.js";
 import { loadHistoryForAgent, sessionTranscriptPath } from "../scanner-history.js";
 
@@ -136,17 +138,19 @@ export function resolvesOnClose(report) {
 
 // What the user sees on a thread's row: working, needs-you (a question for them, a blocker, a
 // permission in its pane), done (reported done, not yet resolved: ready for review), stopped (not
-// done, and idle or without a pane) or resolved. A thread with a pane shows what it does there.
-export function threadState({ live, agent, reportState, resolved }) {
+// done, and idle or without a pane) or resolved. A thread with a pane shows what it does there; one
+// whose pane closed while its question for the user was open still needs them (`askingUser`).
+export function threadState({ live, agent, reportState, resolved, askingUser }) {
   if (live) {
     // A worker whose agent has not reported yet is starting.
     if ((!agent || agent === "unknown") && (!reportState || reportState === "started")) return "working";
     const status = workerStatus(agent || "unknown", reportState);
     if (status === "working") return "working";
-    if (status === "needs you") return "needs-you";
+    if (status === "needs you" || askingUser) return "needs-you";
     return reportState === "done" ? "done" : "stopped";
   }
   if (resolved) return "resolved";
+  if (askingUser) return "needs-you";
   return reportState === "done" ? "done" : "stopped";
 }
 
@@ -272,14 +276,26 @@ export function threadRows(program) {
 // What a thread that needs you waits on, for its row: the worker's question for the user, else
 // its blocker, else the question or permission waiting in its pane (from its screen, else from
 // what its agent or the ACP view's host said of it).
-export function threadWaitingOn(reportState, report, status, screen) {
+// `since` is when it began to wait: the question asked, the blocker reported, the pane's agent
+// entering its permission or question state (as its hooks reported it; left out when unknown). A
+// question for the user carries its id. `question` is the thread's open question for the user, also
+// for a thread without a pane; `paneState` the newest hook state of its pane.
+export function threadWaitingOn(reportState, report, status, screen, question, paneState) {
   const own = (report?.history || []).filter(entry => !entry.by && entry.state === reportState).at(-1);
-  if (reportState === "ask-user") return { kind: "question", text: own?.line || report?.line || "A question for you" };
-  if (reportState === "blocked") return { kind: "blocker", text: own?.line || report?.line || "Blocked" };
+  const at = (entry, since) => (since ? { ...entry, since } : entry);
+  if (question) return at({ kind: "question", id: question.id, text: question.text }, question.askedAt);
+  if (reportState === "ask-user") return at({ kind: "question", text: own?.line || report?.line || "A question for you" }, own?.at);
+  if (reportState === "blocked") return at({ kind: "blocker", text: own?.line || report?.line || "Blocked" }, own?.at);
   const asked = permissionSummary(screen) || status?.detail;
-  if (status?.status === "question") return { kind: "question", text: status?.detail || asked || "A question for you" };
-  return { kind: "permission", text: asked ? `Waiting for permission: ${asked}` : "Waiting for permission" };
+  const since = paneState && WAITING_HOOK_STATES.has(paneState.state) && Number(paneState.ts) > 0
+    ? new Date(Number(paneState.ts) * 1000).toISOString()
+    : undefined;
+  if (status?.status === "question") return at({ kind: "question", text: status?.detail || asked || "A question for you" }, since);
+  return at({ kind: "permission", text: asked ? `Waiting for permission: ${asked}` : "Waiting for permission" }, since);
 }
+
+// Hook states in which an agent waits on the person in its pane.
+export const WAITING_HOOK_STATES = new Set(["approval", "attention", "question"]);
 
 // The plan a worker's agent keeps, as its pane's ACP host last saw it: how many steps are done,
 // the step under way (else the next), and the whole checklist. Nothing for a pane without a host
@@ -299,14 +315,18 @@ export function threadPlan(paneID, read = readPlanFile) {
   };
 }
 
-export function threadEntry(program, row, record, status, transcriptOf) {
+export function threadEntry(program, row, record, status, transcriptOf, questions = questionsByTask(program).get(row.task)) {
   const { meta, report, files } = row;
   const sessions = readSessionLines(sessionsFile(program, row.task)).reverse()
     .map(session => ({ ...session, transcript: transcriptOf(session.agent, session.session, session.cwd) }));
   const reportState = record ? (record.reportState || report?.state) : report?.state;
-  const state = threadState({ live: Boolean(record), agent: status?.status, reportState, resolved: meta.resolved });
+  // A resolved thread asks nothing any more, whatever was left open.
+  const question = meta.resolved ? undefined : openUserQuestion(questions);
+  const state = threadState({ live: Boolean(record), agent: status?.status, reportState, resolved: meta.resolved, askingUser: Boolean(question) });
   const title = threadTitleOf(program, row);
-  const waitingOn = state === "needs-you" ? threadWaitingOn(reportState, report, status, paneContent(record.paneID).text) : undefined;
+  const waitingOn = state === "needs-you"
+    ? threadWaitingOn(reportState, report, status, record ? paneContent(record.paneID).text : "", question, record ? readAgentStateForPane(record.paneID) : undefined)
+    : undefined;
   return {
     task: row.task,
     program,
@@ -376,9 +396,10 @@ export function coordinatorEntry(program, records, statuses, transcriptOf, openT
 
 export function programThreads(program, records, statuses, transcriptOf) {
   const live = records.filter(record => record.program === program && isWorkerRecord(record));
+  const questions = questionsByTask(program);
   const threads = threadRows(program).map(row => {
     const record = live.find(candidate => candidate.task === row.task);
-    return threadEntry(program, row, record, record ? statuses.get(record.paneID) : undefined, transcriptOf);
+    return threadEntry(program, row, record, record ? statuses.get(record.paneID) : undefined, transcriptOf, questions.get(row.task));
   });
   // Open threads first, latest first; resolved ones by when they were resolved.
   threads.sort((a, b) => {

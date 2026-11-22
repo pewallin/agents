@@ -295,7 +295,7 @@ export function subWorkerLead(leader, params, records, verb, check = true) {
   }
   if (check && !params.approved) {
     const cli = shellQuote(sharedCLIPath());
-    fail(2, "needsApproval", `You are a worker (task ${leader.task}): ${verb} sub-workers only once the user agreed. Ask them first with ${cli} agent report "<how many sub-workers, what each does and which files it touches>" --ask user, then end your turn. When they say yes, run this again with --approved.`);
+    fail(2, "needsApproval", `You are a worker (task ${leader.task}): ${verb} sub-workers only once the user agreed. Ask them first with ${cli} agent ask --user "<how many sub-workers, what each does and which files it touches>", then end your turn. When they say yes, run this again with --approved.`);
   }
   return { parentTask: leader.task, coordinator: leader.parent };
 }

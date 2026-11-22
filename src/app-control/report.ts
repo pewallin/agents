@@ -12,7 +12,7 @@ import { localPaneRef, runTMuxRequired, setPaneOption } from "./panes.js";
 import { sleep } from "./placement.js";
 import { PARENT_WAKING_STATES, oneLine } from "./processes.js";
 import { coordinationPaneRecords, notifyApp, ownCoordinationRecord, readJSON, taskPaths } from "./program.js";
-import { closeOpenQuestions, questionView, questionsOf, recordQuestion } from "./questions.js";
+import { closeOpenQuestions, questionView, questionsOf, recordQuestion, recordUserQuestion } from "./questions.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { deliveredAt } from "./supervisor.js";
 import { agentStatuses, ensureSupervisor, readFileOr, reportStateFromParams, writeOwnReport } from "./supervisor-control.js";
@@ -37,9 +37,11 @@ export async function runAgentReport(command) {
   const { files, previous, rendered } = writeOwnReport(record, state, line, { outputs: [].concat(params.output || []), details });
   // A finished task has no questions left to answer: a late answer comes as a late reply.
   if (state === "done") closeOpenQuestions(record.program, record.uuid, "the worker reported done");
+  // `--ask user`, from before `agent ask --user`: the same question for the user.
+  let questionId = state === "ask-user" ? recordUserQuestion(record.program, record, line) : undefined;
+  if (questionId) ensureSupervisor(record.program);
 
   let queuedFor;
-  let questionId;
   if (PARENT_WAKING_STATES.has(state) && record.parent) {
     // A done again, or a blocker, in work the user drove in this pane is theirs already: the
     // coordinator gets a note with its next line. A first done and a question always wake it.
@@ -291,7 +293,8 @@ export async function runAgentClose(command) {
       report.history = [...(report.history || []), { at: report.updatedAt, state: report.state, line: "Closed by the coordinator.", by: "coordinator" }];
       writeTaskReport(files, report);
     }
-    closeOpenQuestions(program, record.uuid, "its pane was closed");
+    // A question for the user stays: the thread still waits on it.
+    closeOpenQuestions(program, record.uuid, "its pane was closed", { keepUser: true });
     runTMuxRequired(["kill-pane", "-t", record.paneID], "tmux kill-pane");
     if (resolved.includes(record.task)) markResolved(program, record.task);
   }

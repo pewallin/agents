@@ -13,7 +13,7 @@ import { runTMux } from "./panes.js";
 import { sleep } from "./placement.js";
 import { oneLine } from "./processes.js";
 import { coordinationPaneRecords, ownCoordinationRecord, writeFileAtomic } from "./program.js";
-import { readQuestion, recordQuestion, waitFile, writeQuestion } from "./questions.js";
+import { readQuestion, recordQuestion, recordUserQuestion, waitFile, writeQuestion } from "./questions.js";
 import { announceToView, hostsSession, promptHosted } from "./spawn-support.js";
 import { supervisorLog } from "./supervisor.js";
 import { ensureSupervisor, writeOwnReport } from "./supervisor-control.js";
@@ -29,6 +29,7 @@ export async function runAgentAsk(command) {
   const params = command.params;
   const line = oneLine(command.text);
   if (!line) fail(64, "usage", "agent ask requires the question.");
+  if (params.user) return askUser(params, line);
   const timeoutMs = params.timeout === undefined ? ASK_DEFAULT_TIMEOUT_MS : parseDuration(params.timeout, "agent ask --timeout");
   if (timeoutMs > ASK_MAX_TIMEOUT_MS) fail(64, "usage", "agent ask --timeout is at most 10m: wait longer by ending your turn; the answer comes in your prompt.");
   const record = ownCoordinationRecord(params, "agent ask");
@@ -102,6 +103,29 @@ export async function runAgentAsk(command) {
     id: requestID("cli"),
     ok: true,
     result: { questionId: id, answered: true, task: record.task, from: question.answer.from, answer: question.answer.text, file: question.answer.file, messageId: question.answer.messageId },
+  };
+}
+
+// `agent ask --user`: a question for the person the worker works for. The app shows it on the
+// worker's row and in Needs you; the worker ends its turn, and the question closes with the user's
+// next prompt in its pane or view.
+export function askUser(params, line) {
+  const record = ownCoordinationRecord(params, "agent ask --user");
+  if (!record.task || !record.program) {
+    fail(2, "notAWorker", `Pane ${record.paneID} has no task. Only workers started with 'agent spawn' ask with agent ask --user; ask the user in your reply.`);
+  }
+  writeOwnReport(record, "ask-user", line);
+  const id = recordUserQuestion(record.program, record, line);
+  ensureSupervisor(record.program);
+  return {
+    id: requestID("cli"),
+    ok: true,
+    result: {
+      questionId: id,
+      to: "user",
+      task: record.task,
+      next: "End your turn now, with the question as the last thing in your reply: the user answers in your pane, and the question closes when they do.",
+    },
   };
 }
 

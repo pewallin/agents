@@ -6,8 +6,9 @@ import path from "node:path";
 import { MESSAGE_ID_PATTERN } from "./delivery.js";
 import { fail, usage } from "./output.js";
 
-// Flags that never take a value, wherever they stand: `--approved "<brief>"` keeps its brief.
-export const VALUELESS_OPTIONS = new Set(["approved"]);
+// Flags that never take a value, wherever they stand: `--approved "<brief>"` keeps its brief, `--user
+// "<question>"` its question.
+export const VALUELESS_OPTIONS = new Set(["approved", "user"]);
 
 export function parseOptions(tokens, booleanOptions = new Set(), repeatableOptions = new Set()) {
   const positional = [];
@@ -277,10 +278,13 @@ export function parseCommand(argv) {
   }
 
   if (command === "agent" && subcommand === "ask") {
-    const { positional, params } = parseOptions(rest);
+    const { positional, params } = parseOptions(rest, new Set(["user"]));
     if (positional.length === 0) fail(64, "usage", "agent ask requires the question.");
     if (params.to !== undefined && params.to !== "parent") {
-      fail(64, "usage", "agent ask --to takes parent: a worker asks its coordinator.");
+      fail(64, "usage", "agent ask --to takes parent: a worker asks its coordinator, or the user with --user.");
+    }
+    if (params.user && (params.to !== undefined || params.timeout !== undefined)) {
+      fail(64, "usage", "agent ask --user asks the user and does not wait: it takes no --to or --timeout.");
     }
     return { kind: "agent-ask", text: positional.join(" "), params };
   }
@@ -348,8 +352,9 @@ export function parseCommand(argv) {
         fail(64, "usage", `agent send --${flag} takes a message id.`);
       }
     }
+    // --no-wake, from before every send woke: a line that rides along with the next one (send.ts).
     if (params["no-wake"] && params.mode === "steer") {
-      fail(64, "usage", "agent send --no-wake waits for the next line to the agent; it cannot steer.");
+      fail(64, "usage", "agent send --no-wake waits for the next line to the agent; it cannot steer. Information that need not wake anyone is a progress report.");
     }
     if (params["no-wake"] && params["reply-to"]) {
       fail(64, "usage", "An answer always wakes the agent: drop --no-wake to send it with --reply-to.");

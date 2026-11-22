@@ -1,5 +1,5 @@
 // Where a pane's ACP host keeps what others read of it: its metadata (url, token, process) and
-// its agent's latest plan (acp-plan.ts).
+// its agent's latest plan (acp-plan.ts), and when the user last prompted from its view.
 import { join } from "node:path";
 import { getRuntimeTempDir } from "./paths.js";
 
@@ -17,4 +17,10 @@ export function acpHostMetadataPath(runtimeTempDir: string, paneId: string): str
 
 export function acpHostPlanPath(metadataPath: string): string {
   return metadataPath.replace(/\.json$/, ".plan.json");
+}
+
+/** When the user last sent a prompt from the pane's ACP view: `{ "at": <ISO time> }`. A worker's
+ *  question for the user closes with their next prompt (app-control supervisor.ts). */
+export function acpHostPromptPath(metadataPath: string): string {
+  return metadataPath.replace(/\.json$/, ".prompt.json");
 }

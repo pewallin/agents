@@ -19,7 +19,7 @@ import { HostedSession, type HostedView } from "./acp-hosted-session.js";
 import { AcpLaunchSettingsApplier, type AcpLaunchSettings } from "./acp-launch-settings.js";
 import { AcpUsageFill } from "./acp-usage-fill.js";
 import { AcpPlanRecorder } from "./acp-plan.js";
-import { acpHostMetadataPath, acpHostPlanPath } from "./acp-host-paths.js";
+import { acpHostMetadataPath, acpHostPlanPath, acpHostPromptPath } from "./acp-host-paths.js";
 import { KiroSteering } from "./kiro-steering.js";
 import { AcpCompaction, compactionWay } from "./acp-compaction.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
@@ -254,6 +254,24 @@ function parseMessage(line: string): { id?: string; method?: string; permission?
   }
 }
 
+/** Whether a line a view sends is a prompt of the user's (`session/prompt`). */
+export function isPromptLine(line: string): boolean {
+  return parseMessage(line)?.method === "session/prompt";
+}
+
+/** Notes when the user sent a prompt from the pane's view, for the coordination supervisor: a
+ *  worker's question for the user closes with their next prompt. Lines the host sends itself (a
+ *  worker's brief, a coordinator's message) do not pass here. */
+export function recordViewPrompt(path: string, at: Date = new Date()): void {
+  try {
+    const temporary = `${path}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify({ at: at.toISOString() })}\n`, { mode: 0o600 });
+    renameSync(temporary, path);
+  } catch {
+    // Only a hint for the supervisor.
+  }
+}
+
 export interface AcpHost {
   readonly url: string;
   readonly token: string;
@@ -365,6 +383,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const children = new Set<ChildProcess>();
   const activity = new AcpActivity();
   const plan = new AcpPlanRecorder(acpHostPlanPath(metadataPath));
+  const promptPath = acpHostPromptPath(metadataPath);
   const reviews = new ReviewStore();
   /** The pane's screen, read only when it changed (the view asks every second or so). */
   const terminal = new TerminalReader(options.paneId);
@@ -619,7 +638,10 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
           if (isBinary) return;
           const own = hostRequest(data.toString());
           if (own) ws.send(own);
-          else attached.fromView(data.toString());
+          else {
+            if (isPromptLine(data.toString())) recordViewPrompt(promptPath);
+            attached.fromView(data.toString());
+          }
         });
         ws.on("close", (code) => {
           log(`view ${client} closed (${code})`);
@@ -695,6 +717,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
             }
             view.sessions.open(loading.sessionId);
           }
+          if (isPromptLine(line)) recordViewPrompt(promptPath);
           activity.clientLine(client, line);
           activityChanged();
           options.onClientLine?.(line);

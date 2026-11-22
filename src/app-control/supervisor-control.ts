@@ -12,6 +12,7 @@ import { fail, usage } from "./output.js";
 import { TMUX_TIMEOUT_MS, localPaneRef, setPaneOption } from "./panes.js";
 
 import { notifyApp, readJSON, taskPaths } from "./program.js";
+import { closeUserQuestions } from "./questions.js";
 import { markUnresolved, recordTaskSession } from "./threads.js";
 import { processIdentity } from "./watch.js";
 
@@ -186,6 +187,8 @@ export function writeOwnReport(record, state, line, { outputs = [], details } = 
   };
   const rendered = writeTaskReport(files, report);
   writeStatusFile(record.program);
+  // A worker that reports on (progress, done, blocked) has gone on past its question for the user.
+  if (!String(state).startsWith("ask-")) closeUserQuestions(record.program, record.task, `the worker reported ${state}`);
   // A worker that reports is at work on its thread again.
   markUnresolved(record.program, record.task);
   const pane = localPaneRef(record.paneID);

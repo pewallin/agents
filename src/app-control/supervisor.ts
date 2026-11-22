@@ -14,7 +14,9 @@ import { sleep } from "./placement.js";
 import { AT_PROMPT_STATES, COORDINATOR_ANSWER_PATIENCE_MS, SETTLED_REPORTS } from "./processes.js";
 import { coordinationPaneRecords, notifyApp, readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { isRespawning } from "./promote.js";
-import { closeOpenQuestions } from "./questions.js";
+import { answerUserQuestions, closeOpenQuestions, isUserQuestion, questionsByTask } from "./questions.js";
+import { readAgentStateForPane } from "./agent-state.js";
+import { acpHostMetadataPath, acpHostPromptPath, acpHostRuntimeTempDir } from "../acp-host-paths.js";
 import { closedReportState, lastWorkerReport, setWorkerReportState } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { followOffers } from "./steer.js";
@@ -69,12 +71,34 @@ export function deliveredAt(program, uuid) {
   return Date.parse(readJSON(deliveryFile(program, uuid), {}).deliveredAt || "") || 0;
 }
 
-// The latest input to a worker: a line typed in for it, or the user typing in its pane (as the
-// app saw it; without the app, lines only).
-export async function lastInputAt(program, record) {
+// When the user last sent a prompt from a pane's ACP view, as its host noted it.
+export function viewPromptAt(paneID) {
+  const file = acpHostPromptPath(acpHostMetadataPath(acpHostRuntimeTempDir(), paneID));
+  return Date.parse(readJSON(file, {}).at || "") || 0;
+}
+
+// When the user last gave a worker input: typing in its pane (as the app saw it) or a prompt from
+// its ACP view. Typing on iOS or in a tmux client of one's own is not seen. `submitted`: only input
+// that was sent (the last key sent the prompt), not a draft still being written.
+export async function userInputAt(record, { submitted = false } = {}) {
   const input = await appInputState(record.paneID);
-  const typed = typeof input?.secondsSinceInput === "number" ? Date.now() - input.secondsSinceInput * 1000 : 0;
-  return Math.max(deliveredAt(program, record.uuid), typed);
+  const sent = !submitted || input?.mayHaveDraft !== true;
+  const typed = sent && typeof input?.secondsSinceInput === "number" ? Date.now() - input.secondsSinceInput * 1000 : 0;
+  return Math.max(typed, viewPromptAt(record.paneID));
+}
+
+// The user answered their open questions of a worker when they sent it input after asking and its
+// agent took it: it works, or its hooks reported since (a turn too short for a tick to see).
+export async function userAnswerAt(record, status) {
+  const userAt = await userInputAt(record, { submitted: true });
+  if (!userAt) return 0;
+  const reportedAt = (Number(readAgentStateForPane(record.paneID)?.ts) || 0) * 1000;
+  return status === "working" || reportedAt >= userAt - 1000 ? userAt : 0;
+}
+
+// The latest input to a worker: a line typed in for it, or the user's own input (userInputAt).
+export async function lastInputAt(program, record) {
+  return Math.max(deliveredAt(program, record.uuid), await userInputAt(record));
 }
 
 export async function runSupervisor(command) {
@@ -171,6 +195,8 @@ export async function runSupervisor(command) {
     const notified = readJSON(notifiedFile, {});
     let notifiedChanged = false;
 
+    // Questions for the user, read once a tick.
+    const questions = programWorkers.length > 0 ? questionsByTask(program) : new Map();
     // Wake the parent when a worker stops without reporting, or its pane goes away unfinished.
     for (const record of programWorkers) {
       const status = statusOf(record.paneID);
@@ -200,14 +226,24 @@ export async function runSupervisor(command) {
       // drops the pane's @agents_report_at.
       const reportedAt = Math.max(Date.parse(own?.at || "") || 0, record.reportAt * 1000);
       const settled = SETTLED_REPORTS.has(own?.state);
+      // The user's prompt answers their open questions: each leaves their list, and the worker's
+      // row says progress again (by "user") once none is open. No report is needed for it.
+      let answered = [];
+      if ((questions.get(record.task) || []).some(question => question.state === "open" && isUserQuestion(question))) {
+        answered = answerUserQuestions(program, record, await userAnswerAt(record, status));
+        if (answered.length > 0) {
+          markUnresolved(program, record.task);
+          supervisorLog(`${record.task}: the user answered ${answered.length === 1 ? "its question" : `${answered.length} questions`}`);
+        }
+      }
       if (status === "working" && tracked.status !== "working") {
         tracked.workingSince = now;
-        // What set this turn going: a line typed in for the worker, or the user typing in its pane.
+        // What set this turn going: a line typed in for the worker, or the user's own input.
         tracked.inputAt = await lastInputAt(program, record);
         // An answered question, or new work after done or blocked: the worker works again, and its
         // row stops showing the state it left. Without input since that report it is the same work
         // running on (a turn that went on after its report, an agent restarted with its pane).
-        if (settled && SETTLED_REPORTS.has(record.reportState) && tracked.inputAt > reportedAt) {
+        if (answered.length === 0 && settled && SETTLED_REPORTS.has(record.reportState) && tracked.inputAt > reportedAt) {
           setWorkerReportState(program, record, "progress", "Working again.");
           markUnresolved(program, record.task);
           record.reportState = "progress";
@@ -281,7 +317,9 @@ export async function runSupervisor(command) {
     for (const [key, tracked] of workers) {
       if (programWorkers.some(record => (record.uuid || record.paneID) === key)) continue;
       workers.delete(key);
-      closeOpenQuestions(program, tracked.uuid, "its pane closed");
+      // A question for the user stays open: the thread waits on it until they answer it in the
+      // reopened thread, or close the thread.
+      closeOpenQuestions(program, tracked.uuid, "its pane closed", { keepUser: true });
       // A respawned task already runs in a new pane, or is about to.
       if (programWorkers.some(record => record.task === tracked.task) || isRespawning(program, tracked.task)) continue;
       const files = taskPaths(program, tracked.task);

@@ -11,7 +11,7 @@ import { fail } from "./output.js";
 import { localPaneRef, resolveLocalSourcePane, runTMuxRequired, setPaneOption } from "./panes.js";
 import { coordinationPaneRecords, coordinatorLeads, notifyApp, ownCoordinationRecord, programName, readJSON, setProgramName, taskPaths } from "./program.js";
 import { runAgentRespawn } from "./promote.js";
-import { closeOpenQuestions } from "./questions.js";
+import { closeOpenQuestions, closeUserQuestions } from "./questions.js";
 import { closedReportState } from "./report.js";
 import { runAgentSpawn } from "./spawn.js";
 import { isWorkerRecord } from "./spawn-support.js";
@@ -60,6 +60,7 @@ export async function runAgentResolve(command) {
       markResolved(program, pane.task);
       notifyApp(pane.sessionName);
     }
+    closeUserQuestions(program, task, "its thread was resolved");
     markResolved(program, task);
   }
   writeStatusFile(program);

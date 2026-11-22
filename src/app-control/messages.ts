@@ -32,8 +32,9 @@ export function enqueueMessage(program, targetUUID, text, summary, id = newMessa
   return id;
 }
 
-// A line sent with --no-wake waits beside the queued lines as a rider: it wakes nobody, and goes
-// out with the next line typed into that agent's prompt (typeQueuedLines).
+// A line sent with --no-wake (from before every send woke) waits beside the queued lines as a
+// rider: it wakes nobody, and goes out with the next line typed into that agent's prompt
+// (typeQueuedLines).
 export const RIDER_SUFFIX = ".info";
 
 export function enqueueRider(program, targetUUID, text, summary, id) {
@@ -114,7 +115,7 @@ export function coordinatorReminder() {
 // What every delivery to a worker ends with: a message from its coordinator is work to report
 // on, also after an earlier done, since the coordinator does not read the worker's pane.
 export function workerReminder(record) {
-  return `(Reminder: you are worker ${record.task}. Your coordinator does not read your pane: when you have finished what this asks, report with ${shellQuote(sharedCLIPath())} agent report "<one-line status>" --done (or --blocked, --ask user), or the agents MCP report tool, also after an earlier done.)`;
+  return `(Reminder: you are worker ${record.task}. Your coordinator does not read your pane: when you have finished what this asks, report with ${shellQuote(sharedCLIPath())} agent report "<one-line status>" --done (or --blocked; a question for the user is agent ask --user), or the agents MCP report tool, also after an earlier done.)`;
 }
 
 export function deliveryReminder(record) {
