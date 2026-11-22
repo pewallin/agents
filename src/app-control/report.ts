@@ -6,7 +6,7 @@ import { requestID } from "./app-socket.js";
 import { sharedCLIPath, taskRows, writeStatusFile, writeTaskReport } from "./briefs.js";
 import { deliveryState } from "./delivery.js";
 import { shellQuote } from "./launch.js";
-import { coordinatorReminder, enqueueMessage, noteForCoordinator, noteLine, turnDriver, wakeLine, wakeSummary } from "./messages.js";
+import { coordinatorReminder, enqueueMessage, noteForCoordinator, noteLine, turnDriver, wakeLine, wakeSummary, whenText } from "./messages.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, runTMuxRequired, setPaneOption } from "./panes.js";
 import { sleep } from "./placement.js";
@@ -14,9 +14,9 @@ import { PARENT_WAKING_STATES, oneLine } from "./processes.js";
 import { coordinationPaneRecords, notifyApp, ownCoordinationRecord, readJSON, taskPaths } from "./program.js";
 import { closeOpenQuestions, questionView, questionsOf, recordQuestion, recordUserQuestion } from "./questions.js";
 import { isWorkerRecord } from "./spawn-support.js";
-import { deliveredAt } from "./supervisor.js";
+import { deliveredAt, userInputAt } from "./supervisor.js";
 import { agentStatuses, ensureSupervisor, readFileOr, reportStateFromParams, writeOwnReport } from "./supervisor-control.js";
-import { markResolved, resolvesOnClose } from "./threads.js";
+import { markResolved, reopenedAfterDone, resolvesOnClose } from "./threads.js";
 
 export async function runAgentReport(command) {
   const params = command.params;
@@ -27,6 +27,7 @@ export async function runAgentReport(command) {
   if (!record.task || !record.program) {
     fail(2, "notAWorker", `Pane ${record.paneID} has no task. Only workers started with 'agent spawn' report.`);
   }
+  await requireReopenAfterDone(record);
   let details;
   if (params["details-file"]) {
     details = readFileOr(path.resolve(params["details-file"]), undefined);
@@ -68,6 +69,29 @@ export async function runAgentReport(command) {
   return { id: requestID("cli"), ok: true, result: { task: record.task, state, line, report: files.report, summary: rendered === files.summary ? rendered : undefined, queuedFor, questionId, next } };
 }
 
+// A report after the worker's own done needs a reopen: work after done is visible. New input since
+// the done (a line typed in for it, the user's prompt) reopens it here, when the supervisor has not
+// yet; without any, the report is refused (doneAlready).
+export async function requireReopenAfterDone(record) {
+  const files = taskPaths(record.program, record.task);
+  const report = readJSON(files.reportJSON, undefined);
+  const own = lastWorkerReport(report);
+  if (own?.state !== "done" || reopenedAfterDone(report)) return;
+  const doneAt = Date.parse(own.at) || 0;
+  const userAt = await userInputAt(record);
+  const lineAt = deliveredAt(record.program, record.uuid);
+  if (userAt > doneAt && userAt >= lineAt) {
+    recordReopen(record.program, record.task, "user", "Reopened: the user wrote in its pane.");
+    return;
+  }
+  if (lineAt > doneAt) {
+    recordReopen(record.program, record.task, "supervisor", "Reopened: a message came after its done.");
+    return;
+  }
+  const cli = shellQuote(sharedCLIPath());
+  fail(2, "doneAlready", `You reported ${record.task} done at ${whenText(doneAt)}, and nothing has come in since. Say why you work on it again with ${cli} agent reopen ${record.task} "<why>", then report as usual; or leave the done as it is.`, { task: record.task, doneAt: own.at });
+}
+
 // A worker's status in a word, from what its agent does now and what it last reported: working
 // while its agent is busy, "needs you" while it waits on the user (a question for them, a
 // blocker, or a permission or choice in its pane), idle otherwise, finished or not.
@@ -97,18 +121,34 @@ export function closedReportState(report) {
 
 // Changes what a live worker's report says it is (report.json, report.md, STATUS.md and the pane
 // option the app shows) without waking anyone.
-export function setWorkerReportState(program, record, state, note, by = "supervisor") {
+// `entryState`: the history entry's own state where it says more than the report's ("reopened");
+// `history: false` adds none (a reopen already says why).
+export function setWorkerReportState(program, record, state, note, by = "supervisor", { entryState = state, history = true } = {}) {
   const files = taskPaths(program, record.task);
   const report = readJSON(files.reportJSON, undefined);
   if (report) {
     report.state = state;
     report.updatedAt = new Date().toISOString();
-    report.history = [...(report.history || []), { at: report.updatedAt, state, line: note, by }].slice(-50);
+    if (history) report.history = [...(report.history || []), { at: report.updatedAt, state: entryState, line: note, by }].slice(-50);
     writeTaskReport(files, report);
     writeStatusFile(program);
   }
   setPaneOption(localPaneRef(record.paneID), "@agents_report_state", state);
   notifyApp(record.sessionName);
+}
+
+// Work after done is a visible reopen: an entry in the report's history ({ state: "reopened",
+// by, line }) that keeps the done before it as an earlier round. `by` is who reopened it (user,
+// coordinator, worker); `line` why. Nothing else changes: the worker's next turn or report does.
+export function recordReopen(program, task, by, line) {
+  const files = taskPaths(program, task);
+  const report = readJSON(files.reportJSON, undefined);
+  if (!report) return undefined;
+  const at = new Date().toISOString();
+  report.history = [...(report.history || []), { at, state: "reopened", line: oneLine(line, 300), by }].slice(-50);
+  writeTaskReport(files, report);
+  writeStatusFile(program);
+  return report;
 }
 
 export function statusRows(records, program, filter) {
@@ -261,6 +301,14 @@ export async function runAgentWait(command) {
   }
 }
 
+// Who closes or resolves a thread, for its outcome: the coordinator or a worker that runs the
+// command, else (the app, by --program) the user.
+export function closerOf(own) {
+  if (!own) return "user";
+  if (own.role === "coordinator") return "coordinator";
+  return own.task ? "worker" : "user";
+}
+
 // Closes worker panes the coordinator is finished with. Briefs and reports stay in the program
 // directory, so `agent status --all` still lists the tasks and `agent respawn` can bring one back.
 export async function runAgentClose(command) {
@@ -296,7 +344,7 @@ export async function runAgentClose(command) {
     // A question for the user stays: the thread still waits on it.
     closeOpenQuestions(program, record.uuid, "its pane was closed", { keepUser: true });
     runTMuxRequired(["kill-pane", "-t", record.paneID], "tmux kill-pane");
-    if (resolved.includes(record.task)) markResolved(program, record.task);
+    if (resolved.includes(record.task)) markResolved(program, record.task, undefined, { kind: "done", who: closerOf(own) });
   }
   if (targets.length > 0) {
     writeStatusFile(program);

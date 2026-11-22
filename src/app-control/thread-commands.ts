@@ -12,11 +12,12 @@ import { localPaneRef, resolveLocalSourcePane, runTMuxRequired, setPaneOption } 
 import { coordinationPaneRecords, coordinatorLeads, notifyApp, ownCoordinationRecord, programName, readJSON, setProgramName, taskPaths } from "./program.js";
 import { runAgentRespawn } from "./promote.js";
 import { closeOpenQuestions, closeUserQuestions } from "./questions.js";
-import { closedReportState } from "./report.js";
+import { closedReportState, closerOf, recordReopen } from "./report.js";
 import { runAgentSpawn } from "./spawn.js";
 import { isWorkerRecord } from "./spawn-support.js";
-import { markResolved, markUnresolved, readSessionLines, removeProgram, removeThread, reopenStep, resumeTarget, sessionsFile, threadRows, titleWarning, transcriptLookup, updateTaskMeta } from "./threads.js";
+import { isFinished, markResolved, markUnresolved, proposeClose, readSessionLines, removeProgram, removeThread, reopenStep, resumeTarget, sessionsFile, threadRows, titleWarning, transcriptLookup, updateTaskMeta } from "./threads.js";
 import { agentResumeInvocation } from "../resume.js";
+import { oneLine } from "./processes.js";
 
 // The program a thread command acts on: --program (the app names it), else the program of the
 // agent that runs the command.
@@ -33,11 +34,47 @@ function knownTask(program, task) {
   return files;
 }
 
-// Marks threads resolved; a thread that still has a pane is closed with it (and its sub-workers).
+// How a thread ends (B1): done, dropped with a line on why, or replaced by another thread. A done
+// thread resolves as done; an unfinished one only with --dropped or --replaced-by.
+function resolveOutcome(program, task, params, who) {
+  const report = readJSON(taskPaths(program, task).reportJSON, undefined);
+  if (params["replaced-by"] !== undefined) {
+    const by = String(params["replaced-by"]);
+    if (by === task) fail(64, "usage", "agent resolve --replaced-by names another thread.");
+    knownTask(program, by);
+    return { kind: "replaced", by, who };
+  }
+  if (params.dropped !== undefined) return { kind: "dropped", why: params.dropped === true ? undefined : String(params.dropped), who };
+  if (isFinished(report)) return { kind: "done", who };
+  fail(2, "outcomeRequired", `${task} is not done. Say how it ends: agent resolve ${task} --dropped "<why>", or --replaced-by <task>. Closing its pane (agent close) keeps it open instead.`, { task });
+}
+
+// A sub-worker ends with the thread it was part of: done with a done one, dropped otherwise.
+function subWorkerOutcome(outcome, task) {
+  return { kind: outcome.kind === "done" ? "done" : "dropped", why: `part of ${task}`, who: outcome.who };
+}
+
+// Marks threads resolved, each with its outcome; a thread that still has a pane is closed with it
+// (and its sub-workers). --propose only proposes closing a done thread, with why: the user closes.
 export async function runAgentResolve(command) {
   const params = command.params;
-  const { program } = commandProgram(params, "agent resolve");
+  const { program, own } = commandProgram(params, "agent resolve");
   for (const task of command.tasks) knownTask(program, task);
+  const who = closerOf(own);
+  if (params.propose !== undefined) {
+    const why = oneLine(params.propose === true ? "" : params.propose, 300);
+    if (!why) fail(64, "usage", "agent resolve --propose needs why, e.g. --propose \"The PR is merged and the build is out\".");
+    for (const task of command.tasks) {
+      if (!isFinished(readJSON(taskPaths(program, task).reportJSON, undefined))) {
+        fail(2, "notDone", `${task} is not done; only a done thread can be proposed for closing. An unfinished one stays open until the user drops it.`, { task });
+      }
+    }
+    for (const task of command.tasks) proposeClose(program, task, why);
+    writeStatusFile(program);
+    for (const record of coordinationPaneRecords().filter(candidate => candidate.program === program)) notifyApp(record.sessionName);
+    return { id: requestID("cli"), ok: true, result: { program, proposed: command.tasks, why, next: "The user sees it under Ready to close and closes the thread, or not. Nothing is resolved yet." } };
+  }
+  const outcomes = new Map(command.tasks.map(task => [task, resolveOutcome(program, task, params, who)]));
   const records = coordinationPaneRecords().filter(record => record.program === program && isWorkerRecord(record));
   const closed = [];
   for (const task of command.tasks) {
@@ -55,16 +92,27 @@ export async function runAgentResolve(command) {
         writeTaskReport(files, report);
       }
       closeOpenQuestions(program, pane.uuid, "its thread was resolved");
+      closeUserQuestions(program, pane.task, "its thread was resolved");
       runTMuxRequired(["kill-pane", "-t", pane.paneID], "tmux kill-pane");
       closed.push(pane.task);
-      markResolved(program, pane.task);
+      markResolved(program, pane.task, undefined, pane.task === task ? outcomes.get(task) : subWorkerOutcome(outcomes.get(task), task));
       notifyApp(pane.sessionName);
     }
     closeUserQuestions(program, task, "its thread was resolved");
-    markResolved(program, task);
+    markResolved(program, task, undefined, outcomes.get(task));
   }
   writeStatusFile(program);
-  return { id: requestID("cli"), ok: true, result: { program, resolved: command.tasks, closed: closed.length ? closed : undefined } };
+  return {
+    id: requestID("cli"),
+    ok: true,
+    result: {
+      program,
+      resolved: command.tasks,
+      outcomes: Object.fromEntries(outcomes),
+      closed: closed.length ? closed : undefined,
+      next: who === "coordinator" ? `Take ${command.tasks.join(", ")} out of Current state in MEMORY.md; ${command.tasks.length === 1 ? "its report.md keeps" : "their report.md files keep"} the detail.` : undefined,
+    },
+  };
 }
 
 // Deletes threads, or with no task a whole program (removeProgram, removeThread). Nothing live is
@@ -152,14 +200,20 @@ function reopenParent(program, params, records) {
 // thread open again.
 export async function runAgentReopen(command, currentSocketPath) {
   const params = command.params;
-  const { program } = commandProgram(params, "agent reopen");
+  const { program, own } = commandProgram(params, "agent reopen");
   const files = knownTask(program, command.task);
   // --title names the thread as it opens again.
   if (params.title !== undefined && !params["dry-run"]) setThreadTitle(program, command.task, threadTitle(params.title));
   const meta = readJSON(files.meta, {});
   const records = coordinationPaneRecords();
   const live = records.find(record => record.program === program && record.task === command.task && isWorkerRecord(record));
-  markUnresolved(program, command.task);
+  // A done thread taken up again says so, with who and why; its done stays as an earlier round.
+  if (!params["dry-run"] && (meta.resolved || isFinished(readJSON(files.reportJSON, undefined)))) {
+    const who = closerOf(own);
+    const why = oneLine(command.why || "", 300);
+    recordReopen(program, command.task, who, why ? `Reopened by ${who}: ${why}` : `Reopened by ${who}.`);
+  }
+  if (!params["dry-run"]) markUnresolved(program, command.task);
   if (live) {
     return { id: requestID("cli"), ok: true, result: { program, task: command.task, step: "pane", pane: localPaneRef(live.paneID) } };
   }

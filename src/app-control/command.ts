@@ -313,6 +313,8 @@ export function parseCommand(argv) {
   if (command === "agent" && subcommand === "resolve") {
     const { positional, params } = parseOptions(rest);
     if (positional.length === 0) fail(64, "usage", "agent resolve requires task names.");
+    const ways = ["dropped", "replaced-by", "propose"].filter(name => params[name] !== undefined);
+    if (ways.length > 1) fail(64, "usage", "agent resolve takes one of --dropped, --replaced-by or --propose.");
     return { kind: "agent-resolve", tasks: positional, params };
   }
 
@@ -335,8 +337,8 @@ export function parseCommand(argv) {
 
   if (command === "agent" && subcommand === "reopen") {
     const { positional, params } = parseOptions(rest, new Set(["dry-run"]));
-    if (positional.length !== 1) fail(64, "usage", "agent reopen requires exactly one task name.");
-    return { kind: "agent-reopen", task: positional[0], params };
+    if (positional.length === 0) fail(64, "usage", "agent reopen requires a task name, then why if you like: agent reopen <task> \"<why>\".");
+    return { kind: "agent-reopen", task: positional[0], why: positional.slice(1).join(" "), params };
   }
 
   if (command === "agent" && subcommand === "send") {

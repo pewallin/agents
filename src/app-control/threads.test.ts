@@ -11,6 +11,7 @@ import { programMeta, recordCoordinatorFolders, taskPaths } from "./program.js";
 import {
   appendSessionLine, derivedTitle, folderPrograms, removeProgram, removeThread, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
   resolvesOnClose, sessionsFile, threadState, transcriptRecords, userTexts,
+  isFinished, proposeClose, reopenedAfterDone, threadOutcome, threadRounds,
 } from "./threads.js";
 
 function newProgram() {
@@ -331,4 +332,64 @@ test("a folder lists only the programs made for it, never one whose workers ran 
     if (previous === undefined) delete process.env.AGENTS_SHARED_HOME;
     else process.env.AGENTS_SHARED_HOME = previous;
   }
+});
+
+test("a resolved thread keeps how it ended; reopening takes the outcome and any proposal away", () => {
+  const program = newProgram();
+  newTask(program, "a");
+  proposeClose(program, "a", "The PR is merged");
+  const meta = () => JSON.parse(fs.readFileSync(taskPaths(program, "a").meta, "utf8"));
+  assert.equal(meta().proposedClose.why, "The PR is merged");
+  markResolved(program, "a", "2026-11-22T10:00:00.000Z", { kind: "dropped", why: "  Not needed\n any more ", who: "user" });
+  assert.deepEqual(meta().outcome, { kind: "dropped", at: "2026-11-22T10:00:00.000Z", why: "Not needed any more", who: "user" });
+  assert.equal(meta().proposedClose, undefined);
+  // Resolving again keeps the first outcome.
+  markResolved(program, "a", "2026-11-23T10:00:00.000Z", { kind: "done", who: "coordinator" });
+  assert.equal(meta().outcome.kind, "dropped");
+  markUnresolved(program, "a");
+  assert.equal(meta().outcome, undefined);
+  assert.equal(meta().resolved, undefined);
+  assert.deepEqual(threadOutcome({ kind: "replaced", by: "b", who: "user" }, "t"), { kind: "replaced", at: "t", by: "b", who: "user" });
+  assert.throws(() => threadOutcome({ kind: "maybe" }));
+});
+
+test("work after done is a visible reopen, and the done before it an earlier round", () => {
+  const done = { at: "1", state: "done", line: "PR is up" };
+  const report = { state: "done", history: [{ at: "0", state: "progress", line: "Working" }, done] };
+  assert.equal(isFinished(report), true);
+  assert.equal(threadRounds(report), 1);
+  assert.equal(resolvesOnClose(report), true);
+  const reopened = { ...report, history: [...report.history, { at: "2", state: "reopened", line: "Reopened by coordinator: also iOS", by: "coordinator" }] };
+  assert.equal(reopenedAfterDone(reopened).by, "coordinator");
+  assert.equal(isFinished(reopened), false);
+  assert.equal(resolvesOnClose(reopened), false);
+  const again = { ...reopened, history: [...reopened.history, { at: "3", state: "done", line: "iOS too" }] };
+  assert.equal(reopenedAfterDone(again), undefined);
+  assert.equal(isFinished(again), true);
+  assert.equal(threadRounds(again), 2);
+});
+
+test("a thread lists its outcome, a proposal to close it, its rounds and its reopen", () => {
+  const program = newProgram();
+  const files = newTask(program, "a");
+  fs.writeFileSync(files.reportJSON, JSON.stringify({ task: "a", state: "done", line: "Done", history: [{ at: "2026-11-22T10:00:00.000Z", state: "done", line: "Done" }] }));
+  proposeClose(program, "a", "Merged and released");
+  let entry = programThreads(program, [], new Map(), () => null).threads[0];
+  assert.equal(entry.state, "done");
+  assert.equal(entry.proposedClose.why, "Merged and released");
+  assert.equal(entry.rounds, 1);
+  assert.equal(entry.outcome, undefined);
+  fs.writeFileSync(files.reportJSON, JSON.stringify({ task: "a", state: "done", line: "Done", history: [
+    { at: "2026-11-22T10:00:00.000Z", state: "done", line: "Done" },
+    { at: "2026-11-22T11:00:00.000Z", state: "reopened", line: "Reopened by coordinator: one more", by: "coordinator" },
+  ] }));
+  entry = programThreads(program, [], new Map(), () => null).threads[0];
+  // Reopened, not yet at work again: no longer done.
+  assert.equal(entry.state, "stopped");
+  assert.deepEqual(entry.reopened, { at: "2026-11-22T11:00:00.000Z", by: "coordinator", line: "Reopened by coordinator: one more" });
+  markResolved(program, "a", undefined, { kind: "done", who: "user" });
+  entry = programThreads(program, [], new Map(), () => null).threads[0];
+  assert.equal(entry.state, "resolved");
+  assert.equal(entry.outcome.kind, "done");
+  assert.equal(entry.proposedClose, undefined);
 });

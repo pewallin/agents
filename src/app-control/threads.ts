@@ -108,15 +108,64 @@ export function updateTaskMeta(program, task, change) {
 }
 
 // Resolved: nothing is left for anyone. Kept with when it happened; marking it again keeps that.
-export function markResolved(program, task, at = new Date().toISOString()) {
-  return updateTaskMeta(program, task, meta => (meta.resolved ? meta : { ...meta, resolved: at }));
+// `outcome` says how it ended, beside `resolved`: { kind: done | dropped | replaced, why?, by?
+// (the task that replaces it), at, who (user, coordinator, worker) }. A thread resolved before
+// outcomes (or by the first repair pass) has none: the app shows it as closed.
+export function markResolved(program, task, at = new Date().toISOString(), outcome) {
+  return updateTaskMeta(program, task, meta => {
+    if (meta.resolved) return meta;
+    const next = { ...meta, resolved: at };
+    if (outcome) next.outcome = threadOutcome(outcome, at);
+    delete next.proposedClose;
+    return next;
+  });
 }
 
+export const OUTCOME_KINDS = new Set(["done", "dropped", "replaced"]);
+
+export function threadOutcome({ kind, why, by, who }, at = new Date().toISOString()) {
+  if (!OUTCOME_KINDS.has(kind)) throw new Error(`unknown outcome ${kind}`);
+  const outcome = { kind, at };
+  const line = typeof why === "string" ? why.replace(/\s+/g, " ").trim().slice(0, 300) : "";
+  if (line) outcome.why = line;
+  if (kind === "replaced" && by) outcome.by = by;
+  if (who) outcome.who = who;
+  return outcome;
+}
+
+// Open again: its outcome and any proposal to close it go with `resolved`.
 export function markUnresolved(program, task) {
   return updateTaskMeta(program, task, meta => {
     delete meta.resolved;
+    delete meta.outcome;
+    delete meta.proposedClose;
     return meta;
   });
+}
+
+// The coordinator's proposal to close a done thread, with why: the user closes it, or not.
+export function proposeClose(program, task, why, at = new Date().toISOString()) {
+  return updateTaskMeta(program, task, meta => ({ ...meta, proposedClose: { why, at } }));
+}
+
+// The worker's own done that its report ends on (lastWorkerReport), unless the thread was reopened
+// after it: work after done is a visible reopen (`state: "reopened"` in the report's history, by
+// the coordinator's message, the user's prompt in the pane, or `agent reopen`).
+export function reopenedAfterDone(report) {
+  const history = report?.history || [];
+  const done = history.map((entry, index) => ({ entry, index })).filter(({ entry }) => !entry.by && entry.state === "done").at(-1);
+  if (!done) return undefined;
+  return history.slice(done.index + 1).filter(entry => entry.state === "reopened").at(-1);
+}
+
+// How many times the worker reported its thread done: each reopen starts another round.
+export function threadRounds(report) {
+  return (report?.history || []).filter(entry => !entry.by && entry.state === "done").length;
+}
+
+// A thread the worker finished and nobody reopened.
+export function isFinished(report) {
+  return lastWorkerReport(report)?.state === "done" && !reopenedAfterDone(report);
 }
 
 // Removed: a program with its coordinator's notes and every thread, or one thread (its brief,
@@ -133,7 +182,7 @@ export function removeThread(program, task) {
 // Closing the pane of a done thread resolves it: the user closes the tab of work they have looked
 // at. A worker that works again after its done (report state progress) is not done.
 export function resolvesOnClose(report) {
-  return report?.state === "done" && lastWorkerReport(report)?.state === "done";
+  return report?.state === "done" && isFinished(report);
 }
 
 // What the user sees on a thread's row: working, needs-you (a question for them, a blocker, a
@@ -319,7 +368,9 @@ export function threadEntry(program, row, record, status, transcriptOf, question
   const { meta, report, files } = row;
   const sessions = readSessionLines(sessionsFile(program, row.task)).reverse()
     .map(session => ({ ...session, transcript: transcriptOf(session.agent, session.session, session.cwd) }));
-  const reportState = record ? (record.reportState || report?.state) : report?.state;
+  // A done thread that was reopened is no longer done, though its worker has not reported since.
+  const reported = record ? (record.reportState || report?.state) : report?.state;
+  const reportState = reported === "done" && reopenedAfterDone(report) ? "progress" : reported;
   // A resolved thread asks nothing any more, whatever was left open.
   const question = meta.resolved ? undefined : openUserQuestion(questions);
   const state = threadState({ live: Boolean(record), agent: status?.status, reportState, resolved: meta.resolved, askingUser: Boolean(question) });
@@ -338,6 +389,12 @@ export function threadEntry(program, row, record, status, transcriptOf, question
     updatedAt: report?.updatedAt || meta.createdAt || folderTime(files.dir),
     line: report?.line || undefined,
     waitingOn,
+    // How a resolved thread ended; a coordinator's proposal to close a done one; how many times
+    // it was reported done; the reopen after its last done, with who and why.
+    outcome: meta.resolved && meta.outcome ? meta.outcome : undefined,
+    proposedClose: !meta.resolved && meta.proposedClose ? meta.proposedClose : undefined,
+    rounds: threadRounds(report) || undefined,
+    reopened: reopenView(reopenedAfterDone(report)),
     plan: record ? threadPlan(record.paneID) : undefined,
     reportState: report?.state || "started",
     outputs: report?.outputs?.length ? report.outputs : undefined,
@@ -356,6 +413,10 @@ export function threadEntry(program, row, record, status, transcriptOf, question
     report: fs.existsSync(files.report) ? files.report : undefined,
     summary: fs.existsSync(files.summary) ? files.summary : undefined,
   };
+}
+
+function reopenView(entry) {
+  return entry ? { at: entry.at, by: entry.by, line: entry.line } : undefined;
 }
 
 // The folder a path belongs to, as programs name it: its repository's top level, else itself.

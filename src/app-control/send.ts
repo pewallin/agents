@@ -13,12 +13,13 @@ import { enqueueMessage, enqueueRider } from "./messages.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, paneIDFromRef } from "./panes.js";
 import { oneLine, paneRunsAgent } from "./processes.js";
-import { coordinationPaneRecords, ensurePaneUUID, ownCoordinationRecord, slug, taskPaths, writeFileAtomic } from "./program.js";
+import { coordinationPaneRecords, ensurePaneUUID, ownCoordinationRecord, readJSON, slug, taskPaths, writeFileAtomic } from "./program.js";
 import { answerQuestion, claimWaitingAsk, openQuestionsFor, questionView, readQuestion, writeQuestion } from "./questions.js";
 import { hostsSession, promptHosted } from "./spawn-support.js";
 import { confirmSteer, findSteered, followOffer, settleOffer, steerCodex, steerThroughInbox } from "./steer.js";
 import { agentStatuses, ensureSupervisor, readFileOr } from "./supervisor-control.js";
-import { markUnresolved } from "./threads.js";
+import { isFinished, markUnresolved } from "./threads.js";
+import { closerOf, recordReopen } from "./report.js";
 
 // Longer than this, a message waits in a file and the line typed into the prompt points at it.
 export const INLINE_MESSAGE_LIMIT = 600;
@@ -59,10 +60,17 @@ export async function runAgentSend(command) {
   }
   const program = own.program || target.program;
   if (!program) fail(2, "noProgram", "Neither this pane nor the target belongs to a program.");
-  // A message to a resolved thread is work on it again.
-  if (target.task && target.program && !params["dry-run"]) markUnresolved(target.program, target.task);
   const mode = params.mode || "queue";
   const wake = !params["no-wake"];
+  // A message to a resolved thread is work on it again; one to a done thread reopens it, visibly,
+  // with the sender and what it asks.
+  if (target.task && target.program && !params["dry-run"]) {
+    const text = oneLine(raw || "", 160);
+    if (wake && text && isFinished(readJSON(taskPaths(target.program, target.task).reportJSON, undefined))) {
+      recordReopen(target.program, target.task, closerOf(own), `Reopened by ${senderName(own)}: ${text}`);
+    }
+    markUnresolved(target.program, target.task);
+  }
   const targetUUID = ensurePaneUUID(target);
   pruneMessageRecords(program);
 

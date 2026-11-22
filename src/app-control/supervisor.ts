@@ -20,7 +20,7 @@ import { acpHostMetadataPath, acpHostPromptPath, acpHostRuntimeTempDir } from ".
 import { closedReportState, lastWorkerReport, setWorkerReportState } from "./report.js";
 import { isWorkerRecord } from "./spawn-support.js";
 import { followOffers } from "./steer.js";
-import { markResolved, markUnresolved, recordCoordinatorSession, recordTaskSession, resolvesOnClose, threadsEpoch } from "./threads.js";
+import { markResolved, markUnresolved, recordCoordinatorSession, recordTaskSession, reopenedAfterDone, resolvesOnClose, threadsEpoch } from "./threads.js";
 import { agentStatuses, cliVersion, readFileOr, runningSupervisor, supervisorBeatFile } from "./supervisor-control.js";
 import { processWatches, readWatches } from "./watch.js";
 
@@ -239,12 +239,24 @@ export async function runSupervisor(command) {
       if (status === "working" && tracked.status !== "working") {
         tracked.workingSince = now;
         // What set this turn going: a line typed in for the worker, or the user's own input.
-        tracked.inputAt = await lastInputAt(program, record);
+        const userAt = await userInputAt(record);
+        const lineAt = deliveredAt(program, record.uuid);
+        tracked.inputAt = Math.max(lineAt, userAt);
         // An answered question, or new work after done or blocked: the worker works again, and its
         // row stops showing the state it left. Without input since that report it is the same work
         // running on (a turn that went on after its report, an agent restarted with its pane).
         if (answered.length === 0 && settled && SETTLED_REPORTS.has(record.reportState) && tracked.inputAt > reportedAt) {
-          setWorkerReportState(program, record, "progress", "Working again.");
+          // Work after done is a reopen, said once: the coordinator's message records its own
+          // (agent send); the user's prompt in the pane, or another line, is recorded here.
+          if (own?.state !== "done") {
+            setWorkerReportState(program, record, "progress", "Working again.");
+          } else if (reopenedAfterDone(report)) {
+            setWorkerReportState(program, record, "progress", undefined, "supervisor", { history: false });
+          } else if (userAt > reportedAt && userAt >= lineAt) {
+            setWorkerReportState(program, record, "progress", "Reopened: the user wrote in its pane.", "user", { entryState: "reopened" });
+          } else {
+            setWorkerReportState(program, record, "progress", "Reopened: a message came after its done.", "supervisor", { entryState: "reopened" });
+          }
           markUnresolved(program, record.task);
           record.reportState = "progress";
           supervisorLog(`${record.task} works again`);
@@ -344,7 +356,7 @@ export async function runSupervisor(command) {
       }
       // The user closed the tab of a done thread: they looked at the work, nothing is left. An
       // unfinished one stays open, stopped. (Panes gone with their tmux server never get here.)
-      if (resolvesOnClose(report) && !unfinished) markResolved(program, tracked.task);
+      if (resolvesOnClose(report) && !unfinished) markResolved(program, tracked.task, undefined, { kind: "done", who: "user" });
     }
     if (notifiedChanged) writeFileAtomic(notifiedFile, `${JSON.stringify(notified, null, 2)}\n`);
     const state = JSON.stringify({ server, workers: Object.fromEntries(workers) });
