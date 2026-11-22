@@ -5,11 +5,12 @@ import { appControlCommandText } from "./self.js";
 import fs from "node:fs";
 import path from "node:path";
 import { requestID } from "./app-socket.js";
-import { cancelMessage, deliveryView } from "./ask.js";
+import { cancelMessage, deliveryView, typeQueuedLines } from "./ask.js";
 import { programDirectories } from "./coordinator.js";
-import { deliveryState, messageRecordFile, newMessageID, pruneMessageRecords, readMessageRecord, writeMessageRecord } from "./delivery.js";
+import { deliveryState, messageRecordFile, newMessageID, noteDelivery, pruneMessageRecords, readMessageRecord, writeMessageRecord } from "./delivery.js";
 import { shellQuote } from "./launch.js";
-import { enqueueMessage, enqueueRider } from "./messages.js";
+import { deliveryReminder, enqueueMessage, enqueueRider, queueNames, readQueued } from "./messages.js";
+import { appInputState, userIsWriting } from "./supervisor.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, paneIDFromRef } from "./panes.js";
 import { oneLine, paneRunsAgent } from "./processes.js";
@@ -371,6 +372,11 @@ export async function runAgentDelivery(command) {
     let record = readMessageRecord(program, command.id);
     if (record?.state === "steered" && !record.inbox) record = await confirmSteer(program, record);
     if (record?.inbox && ["offered", "steered"].includes(record.state)) record = settleOffer(program, record, false).record;
+    if (record && command.params["deliver-now"]) {
+      const outcome = await deliverNow(program, record);
+      record = readMessageRecord(program, command.id) || record;
+      return { id: requestID("cli"), ok: true, result: { ...deliveryView(record), ...outcome, history: record.history } };
+    }
     if (record && command.params.cancel) {
       const outcome = cancelMessage(program, record, "cancelled by its sender");
       record = readMessageRecord(program, command.id) || record;
@@ -379,6 +385,25 @@ export async function runAgentDelivery(command) {
     if (record) return { id: requestID("cli"), ok: true, result: { ...deliveryView(record), history: record.history } };
   }
   fail(2, "messageUnavailable", `No message has id ${command.id}.`);
+}
+
+// Types a held message into its agent's prompt now, as the user would, busy or not: the user
+// asked for it (Needs you: Deliver now). Never into a prompt that holds a draft of the user's,
+// and only while it is still queued.
+export async function deliverNow(program, record) {
+  if (record.state !== "queued") fail(2, "notQueued", `Message ${record.id} is ${record.state}, not waiting in a queue; nothing was typed.`, { messageId: record.id, state: record.state });
+  const target = coordinationPaneRecords().find(candidate => candidate.uuid === record.target && !candidate.dead);
+  if (!target) fail(2, "paneUnavailable", `The pane of message ${record.id} is gone; nothing was typed.`, { messageId: record.id });
+  if (userIsWriting(await appInputState(target.paneID))) {
+    fail(3, "draftInPrompt", `The user is writing in pane ${target.paneID}; nothing was typed. Try again once the prompt is empty.`, { messageId: record.id });
+  }
+  const name = queueNames(program, record.target, ".txt").find(candidate => readQueued(path.join(program, ".queue", record.target, candidate))?.id === record.id);
+  if (!name) fail(2, "notQueued", `Message ${record.id} is no longer in the queue; nothing was typed.`, { messageId: record.id });
+  const typed = typeQueuedLines(program, record.target, target, [name], deliveryReminder(target));
+  if (!typed) fail(3, "notTyped", `tmux could not type into pane ${target.paneID}; the message waits again.`, { messageId: record.id });
+  noteDelivery(program, record.target, target.paneID, { queued: deliveryState(program, record.target).queued || 0, delivered: 1 }, Date.now());
+  supervisorLogTo(program, `delivered message ${record.id} now, as asked, into ${target.paneID}`);
+  return { deliveredNow: true };
 }
 
 // Coordinators. Any agent can become one (`agent promote`), take over another's workers

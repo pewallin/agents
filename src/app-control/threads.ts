@@ -12,7 +12,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { taskRows } from "./briefs.js";
-import { paneContent, permissionSummary } from "./delivery.js";
+import { deliveryState, paneContent, permissionSummary } from "./delivery.js";
+import { readQueued } from "./messages.js";
 import { acpHostMetadataPath, acpHostPlanPath, acpHostRuntimeTempDir } from "../acp-host-paths.js";
 import { readPlanFile } from "../acp-plan.js";
 import { programDirectories } from "./coordinator.js";
@@ -368,6 +369,33 @@ export function threadPlan(paneID, read = readPlanFile) {
   };
 }
 
+// The lines queued for a worker that have not reached its prompt (H1, H2): how many, since when
+// the oldest waits, why the supervisor holds them, their ids, and the oldest one's text. Nothing
+// while none waits.
+export function threadHeld(program, uuid) {
+  if (!uuid) return undefined;
+  const dir = path.join(program, ".queue", uuid);
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter(name => name.endsWith(".txt")).sort();
+  } catch {
+    return undefined;
+  }
+  if (names.length === 0) return undefined;
+  const entries = names.map(name => ({ name, entry: readQueued(path.join(dir, name)) })).filter(item => item.entry);
+  if (entries.length === 0) return undefined;
+  const queuedAt = Number(entries[0].name.split("-")[0]);
+  const state = deliveryState(program, uuid);
+  const first = entries[0].entry;
+  return {
+    count: entries.length,
+    since: Number.isFinite(queuedAt) && queuedAt > 0 ? new Date(queuedAt).toISOString() : state.waitingSince,
+    why: state.waiting,
+    messageIds: entries.map(item => item.entry.id).filter(Boolean),
+    text: String(first.text || first.summary || "").replace(/\s+/g, " ").trim().slice(0, 300),
+  };
+}
+
 export function threadEntry(program, row, record, status, transcriptOf, questions = questionsByTask(program).get(row.task)) {
   const { meta, report, files } = row;
   const sessions = readSessionLines(sessionsFile(program, row.task)).reverse()
@@ -399,6 +427,8 @@ export function threadEntry(program, row, record, status, transcriptOf, question
     proposedClose: !meta.resolved && meta.proposedClose ? meta.proposedClose : undefined,
     rounds: threadRounds(report) || undefined,
     reopened: reopenView(reopenedAfterDone(report)),
+    // Messages for its worker that wait to reach its prompt.
+    held: record ? threadHeld(program, record.uuid) : undefined,
     plan: record ? threadPlan(record.paneID) : undefined,
     reportState: report?.state || "started",
     outputs: report?.outputs?.length ? report.outputs : undefined,

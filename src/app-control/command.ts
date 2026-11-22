@@ -365,7 +365,8 @@ export function parseCommand(argv) {
   }
 
   if (command === "agent" && subcommand === "delivery") {
-    const { positional, params } = parseOptions(rest, new Set(["cancel"]));
+    const { positional, params } = parseOptions(rest, new Set(["cancel", "deliver-now"]));
+    if (params.cancel && params["deliver-now"]) fail(64, "usage", "agent delivery takes --cancel or --deliver-now, not both.");
     if (positional.length !== 1 || !MESSAGE_ID_PATTERN.test(positional[0])) {
       fail(64, "usage", "agent delivery requires one message id.");
     }

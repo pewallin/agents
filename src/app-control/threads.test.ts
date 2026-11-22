@@ -11,7 +11,7 @@ import { programMeta, recordCoordinatorFolders, taskPaths } from "./program.js";
 import {
   appendSessionLine, derivedTitle, folderPrograms, recordCoordinatorSession, removeProgram, removeThread, threadWaitingOn, markResolved, markUnresolved, programThreads, titleWarning, readSessionLines, recordTaskSession, reopenStep, repairProgram,
   resolvesOnClose, sessionsFile, threadState, transcriptRecords, userTexts,
-  isFinished, proposeClose, reopenedAfterDone, threadOutcome, threadRounds,
+  isFinished, proposeClose, reopenedAfterDone, threadHeld, threadOutcome, threadRounds,
 } from "./threads.js";
 
 function newProgram() {
@@ -401,4 +401,23 @@ test("a thread lists its outcome, a proposal to close it, its rounds and its reo
   assert.equal(entry.state, "resolved");
   assert.equal(entry.outcome.kind, "done");
   assert.equal(entry.proposedClose, undefined);
+});
+
+test("a thread lists the messages that wait for its worker's prompt, the oldest first", () => {
+  const program = newProgram();
+  const uuid = "11111111-1111-4111-8111-111111111111";
+  assert.equal(threadHeld(program, uuid), undefined);
+  const dir = path.join(program, ".queue", uuid);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "1700000000000-m-a.txt"), JSON.stringify({ id: "m-a", summary: "Message from coordinator", text: "From coordinator: Use the 8 KB cap, not 16 KB." }));
+  fs.writeFileSync(path.join(dir, "1700000060000-m-b.txt"), JSON.stringify({ id: "m-b", summary: "Message from coordinator", text: "From coordinator: and the tests." }));
+  fs.writeFileSync(path.join(dir, "1700000070000-m-c.info"), JSON.stringify({ id: "m-c", summary: "Note", text: "rides along" }));
+  fs.mkdirSync(path.join(program, ".run", "delivery"), { recursive: true });
+  fs.writeFileSync(path.join(program, ".run", "delivery", `${uuid}.json`), JSON.stringify({ waiting: "the agent in pane %4 is working", waitingSince: "2023-11-14T22:13:30.000Z" }));
+  const held = threadHeld(program, uuid);
+  assert.equal(held.count, 2);
+  assert.equal(held.since, "2023-11-14T22:13:20.000Z");
+  assert.equal(held.why, "the agent in pane %4 is working");
+  assert.deepEqual(held.messageIds, ["m-a", "m-b"]);
+  assert.equal(held.text, "From coordinator: Use the 8 KB cap, not 16 KB.");
 });

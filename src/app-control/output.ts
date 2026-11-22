@@ -46,7 +46,7 @@ export function usage() {
     "  agents app agent status [--all] --json",
     "  agents app agent wait [<task>...] [--until all|any] [--timeout 1800] --json",
     "  agents app agent send <text> | --file <file> --to parent|<task>|<pane-ref>|<agent uuid> [--mode queue|steer] [--id <message-id>] [--reply-to <message-id>] [--supersedes <message-id>] --json   (always wakes the agent)",
-    "  agents app agent delivery <message-id> [--cancel] --json",
+    "  agents app agent delivery <message-id> [--cancel | --deliver-now] --json   (--deliver-now types a held message in now, unless the user is writing there)",
     "  agents app agent close <task>... | --done --json   (a done thread closed is resolved; an unfinished one stays open, stopped)",
     "  agents app agent resolve <task>... [--dropped <why> | --replaced-by <task>] [--program <dir>] --json   (ends a thread: a done one as done, an unfinished one only dropped or replaced; closes its pane if it has one)",
     "  agents app agent resolve <task>... --propose <why> --json   (proposes closing a done thread; the user closes it)",
