@@ -116,13 +116,18 @@ there. Measured on the Mac mini with the adapters the CLI bundles or starts.
 | Compact | ✓ /compact | ✓ /compact | – | ✓ /compact | – | – |
 | Images in the prompt | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | @-files and panes | ✓ links and pane text | ✓ | ✓ | ~ no embedded context: pane text arrives as a link | ✓ | ✓ |
-| Plan / todo line | ✓ | ✓ | ? | ? | ? | ? |
+| Plan / todo line | ✓ its tasks, turned on with `CLAUDE_CODE_ENABLE_TODO_TOOLS` | ✓ `update_plan`, turned on with `tools.update_plan.enabled` | ✓ `todowrite` | – no todo tool | – Kiro 3 has no todo tool outside spec mode | ~ `update_todo`, not seen live (quota) |
 | MCP status | ✓ /mcp | ✓ /mcp | – | – | – | – |
 | The agents hooks and extensions | ✓ hooks run under ACP (the steer hook wrote its harness file) | n/a: the TUI's app-server | – | ✓ the extension runs (harness file written) | – | – |
 
 Gaps to pick from: steering for OpenCode (its server has no steer, so a queue is the honest
-answer), Copilot until it can load sessions, Kiro's context and model switch over ACP, and the
-plan line for the agents marked ?.
+answer), Copilot until it can load sessions, and Kiro's context and model switch over ACP.
+
+The plan line row was measured again 2026-11-22 (Claude Code 2.1.330, codex 0.169, OpenCode
+1.18.21, kiro-cli 3.5.0, pi-acp 0.0.34, Copilot 0.0.406). Claude Code offers its todo tools to
+current models only with `CLAUDE_CODE_ENABLE_TODO_TOOLS`, and Codex its `update_plan` only with
+`tools.update_plan.enabled`: the CLI sets both unless the user set them. OpenCode keeps its list in
+its own tool calls, which the view reads as the plan and shows no row for.
 
 ## One session opened twice (measured 2026-11-09, Peter's Mac mini)
 

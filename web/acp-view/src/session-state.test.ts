@@ -98,6 +98,28 @@ describe("session state", () => {
       { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t2", title: "ls", kind: "execute", status: "pending", rawInput: { command: "ls" } } },
     ]);
     expect(state.plan.map((entry) => [entry.content, entry.status])).toEqual([["Read", "completed"], ["Fix", "pending"]]);
+    // The todo call shows as the plan line only.
+    expect(state.items.map((item) => item.type === "tool" && item.id)).toEqual(["t2"]);
+  });
+
+  it("takes OpenCode's todowrite as the plan, its row left out from the first event on", () => {
+    const state = run([
+      { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "todowrite", kind: "other", status: "pending", rawInput: {} } },
+      { type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: "t1", title: "todowrite", status: "in_progress", rawInput: { todos: [
+        { content: "Read", status: "completed", priority: "medium" }, { content: "Fix", status: "in_progress", priority: "high" },
+      ] } } },
+      { type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: "t1", title: "2 todos", status: "completed" } },
+    ]);
+    expect(state.plan.map((entry) => [entry.content, entry.status])).toEqual([["Read", "completed"], ["Fix", "in_progress"]]);
+    expect(state.items).toEqual([]);
+  });
+
+  it("shows no row for Claude Code's ToolSearch, which only loads tools", () => {
+    const state = run([
+      { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "s1", title: "ToolSearch", kind: "other", status: "pending", rawInput: {} } },
+      { type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: "s1", status: "completed", rawInput: { query: "select:TaskCreate,TaskUpdate" } } },
+    ]);
+    expect(state.items).toEqual([]);
   });
 });
 

@@ -257,7 +257,13 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
       const claude = executableOf(tuiCommand, "claude");
       const resolved = claude.includes("/") ? claude : findOnPath(claude);
       if (!resolved) throw new Error("claude-acp needs Claude Code installed (`claude` on PATH)");
-      return bundledAdapter(CLAUDE_ACP_COMMAND, { CLAUDE_CODE_EXECUTABLE: resolved });
+      // Claude Code offers its todo tools (TaskCreate, TaskUpdate) to current models only with
+      // CLAUDE_CODE_ENABLE_TODO_TOOLS; the adapter sends them as the plan the view shows above
+      // the field. A value the user set themselves stands.
+      return bundledAdapter(CLAUDE_ACP_COMMAND, {
+        CLAUDE_CODE_EXECUTABLE: resolved,
+        CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? "1",
+      });
     },
     ...sessionOptions(["--resume", "-r", "--session-id"], ["--continue", "-c"], (id) => ["--resume", id]),
     launchSettings: claudeLaunchSettings,

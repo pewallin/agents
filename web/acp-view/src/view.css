@@ -308,7 +308,7 @@ th, td { overflow-wrap: break-word; }
   padding: 2px 8px 2px 6px; border-radius: var(--radius-sm); color: var(--fg2); -webkit-user-select: none; user-select: none; }
 .pl-head:hover { color: var(--fg); background: var(--tint); }
 .pl-head:focus-visible { outline: 1.5px solid var(--acc); outline-offset: 1px; }
-.pl-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-now { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-line.open .pl-now { color: var(--dim); }
 .pl-count { flex: none; color: var(--dim); font-variant-numeric: tabular-nums; }
 .pl-head .chev { flex: none; width: 9px; height: 9px; color: var(--dim); transition: transform .15s; }

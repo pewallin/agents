@@ -1,12 +1,35 @@
-// The agent's own todo list (an ACP `plan` update: Claude Code's TodoWrite and tasks, Codex's
-// update_plan) as the view shows it above the field: the step under way and how many are done.
+// The agent's own todo list as the view shows it above the field: the step under way and how
+// many are done. Agents send it as an ACP `plan` update (Claude Code's tasks, Codex's update_plan)
+// or keep it in a tool call of their own (Copilot's update_todo, OpenCode's todowrite), which the
+// view reads as the plan and leaves out of the conversation.
 import type { PlanEntry } from "@agentclientprotocol/sdk";
 
-/** A todo list an agent keeps as a Markdown checklist in a tool call's input instead of sending
- *  a plan: Copilot's update_todo (`{ todos: "- [x] Read\n- [ ] Fix" }`). */
+type PlanToolUpdate = { title?: string | null; rawInput?: unknown };
+
+const PLAN_TOOL_TITLES = new Set(["todowrite", "todoread", "update_todo"]);
+
+/** Whether a tool call keeps the agent's todo list: its row would only repeat the plan line. */
+export function isPlanTool(update: PlanToolUpdate): boolean {
+  if (update.title && PLAN_TOOL_TITLES.has(update.title.trim().toLowerCase())) return true;
+  return planFromToolInput(update.rawInput) !== undefined;
+}
+
+/** A todo list in a tool call's input: Copilot's update_todo keeps a Markdown checklist
+ *  (`{ todos: "- [x] Read\n- [ ] Fix" }`), OpenCode's todowrite a list
+ *  (`{ todos: [{ content, status }] }`, a cancelled step left out, empty once cleared). */
 export function planFromToolInput(rawInput: unknown): PlanEntry[] | undefined {
   if (!rawInput || typeof rawInput !== "object") return undefined;
   const todos = (rawInput as { todos?: unknown }).todos;
+  if (Array.isArray(todos)) {
+    const entries: PlanEntry[] = [];
+    for (const todo of todos as Array<{ content?: unknown; status?: unknown } | null>) {
+      if (!todo || typeof todo.content !== "string" || !todo.content.trim() || todo.status === "cancelled") continue;
+      const status = todo.status === "completed" || todo.status === "in_progress" ? todo.status : "pending";
+      entries.push({ content: todo.content.trim(), status, priority: "medium" });
+    }
+    // An empty list is the agent clearing it.
+    return entries;
+  }
   if (typeof todos !== "string") return undefined;
   const entries: PlanEntry[] = [];
   for (const line of todos.split("\n")) {

@@ -1898,9 +1898,13 @@ function PlanLine() {
   if (!planShown(summary, working)) return null;
   const toggle = () => setOpen((value) => { storePlanOpen(!value); return !value; });
   const { current, done, total } = summary;
+  // The next step's name may be shorter: under the pointer the line keeps its width, so the count
+  // and the chevron stay where they are.
+  const hold = (event: React.MouseEvent<HTMLButtonElement>) => { event.currentTarget.style.minWidth = `${event.currentTarget.offsetWidth}px`; };
+  const release = (event: React.MouseEvent<HTMLButtonElement>) => { event.currentTarget.style.minWidth = ""; };
   return (
     <div className={`plan-line${open ? " open" : ""}`} aria-label="Plan">
-      <button type="button" className="pl-head" onClick={toggle} aria-expanded={open} title={open ? "Hide the plan" : "Show the plan"}>
+      <button type="button" className="pl-head" onClick={toggle} onMouseEnter={hold} onMouseLeave={release} aria-expanded={open} title={open ? "Hide the plan" : "Show the plan"}>
         {open ? <span className="pl-now">Plan</span> : <>
           <PlanMark status={current?.status ?? "completed"} working={working} />
           <span className="pl-now">{current?.content ?? "All done"}</span>

@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
-import { codexPermissionOptions, createCodexSessionLaunchPlan, runPaneLocalCodexSession } from "./codex-session.js";
+import { codexPermissionOptions, codexPlanToolConfig, createCodexSessionLaunchPlan, runPaneLocalCodexSession } from "./codex-session.js";
 
 describe("createCodexSessionLaunchPlan", () => {
   it("routes the Codex TUI through a pane-local app server", () => {
@@ -12,6 +12,7 @@ describe("createCodexSessionLaunchPlan", () => {
       runtimeTempDir: "/tmp/agents-runtime",
       processId: 4242,
       supportsNoDaemon: true,
+      codexConfig: "",
     });
 
     expect(plan.endpointMetadataPath).toBe("/tmp/agents-runtime/codex-app-server/pane-346.json");
@@ -24,6 +25,7 @@ describe("createCodexSessionLaunchPlan", () => {
         "app-server",
         "-c", 'approval_policy="never"',
         "-c", 'sandbox_mode="danger-full-access"',
+        "-c", "tools.update_plan.enabled=true",
         "--listen",
         "ws://127.0.0.1:0",
       ],
@@ -34,16 +36,16 @@ describe("createCodexSessionLaunchPlan", () => {
     expect(plan.resumePermissions).toEqual({ threadId: "thread-123", approvalPolicy: "never", sandbox: "danger-full-access" });
     expect(plan.viewMode).toBe("agent-full-access");
     // Without an app-server Codex runs on its own, with the options as given.
-    expect(plan.plainTui.args).toEqual(["--no-daemon", "--dangerously-bypass-approvals-and-sandbox", "resume", "thread-123"]);
+    expect(plan.plainTui.args).toEqual(["--no-daemon", "-c", "tools.update_plan.enabled=true", "--dangerously-bypass-approvals-and-sandbox", "resume", "thread-123"]);
   });
 
   it("keeps the permission options of a new session in its TUI too, and gives them to the app-server", () => {
     const plan = createCodexSessionLaunchPlan({
       command: "codex -a on-request --sandbox=workspace-write -c approval_policy=untrusted -c model=o3 -m gpt-6 'Fix it -s'",
-      paneId: "%1", runtimeTempDir: "/tmp/agents-runtime", processId: 1, supportsNoDaemon: false,
+      paneId: "%1", runtimeTempDir: "/tmp/agents-runtime", processId: 1, supportsNoDaemon: false, codexConfig: "",
     });
     expect(plan.tui.args).toEqual(["-a", "on-request", "--sandbox=workspace-write", "-c", "approval_policy=untrusted", "-c", "model=o3", "-m", "gpt-6", "Fix it -s"]);
-    expect(plan.server.args).toEqual(["app-server", "-c", 'approval_policy="untrusted"', "-c", 'sandbox_mode="workspace-write"', "--listen", "ws://127.0.0.1:0"]);
+    expect(plan.server.args).toEqual(["app-server", "-c", 'approval_policy="untrusted"', "-c", 'sandbox_mode="workspace-write"', "-c", "tools.update_plan.enabled=true", "--listen", "ws://127.0.0.1:0"]);
   });
 
   it("tells permission options from the rest of a Codex command", () => {
@@ -80,18 +82,31 @@ describe("createCodexSessionLaunchPlan", () => {
       runtimeTempDir: "/tmp/agents-runtime",
       processId: 4242,
       supportsNoDaemon: true,
+      codexConfig: "",
     });
 
     expect(plan.tui.args).toEqual([
       "-c", "model_reasoning_effort=high", "resume", "--last", "--", "--remote stays in the prompt",
     ]);
-    expect(plan.plainTui.args).toEqual(["--no-daemon", ...plan.tui.args]);
+    expect(plan.plainTui.args).toEqual(["--no-daemon", "-c", "tools.update_plan.enabled=true", ...plan.tui.args]);
   });
 
   it("starts the TUI on its own with --no-daemon only where Codex has it", () => {
-    const input = { command: "codex -m gpt-test", paneId: "%25", runtimeTempDir: "/tmp/agents-runtime", processId: 1 };
+    const input = { command: "codex -m gpt-test", paneId: "%25", runtimeTempDir: "/tmp/agents-runtime", processId: 1, codexConfig: "[tools.update_plan]\nenabled = false\n" };
     expect(createCodexSessionLaunchPlan({ ...input, supportsNoDaemon: true }).plainTui.args).toEqual(["--no-daemon", "-m", "gpt-test"]);
     expect(createCodexSessionLaunchPlan({ ...input, supportsNoDaemon: false }).plainTui.args).toEqual(["-m", "gpt-test"]);
+  });
+
+  it("turns Codex's todo list on unless the user set it in the command or config.toml", () => {
+    const on = ["-c", "tools.update_plan.enabled=true"];
+    expect(codexPlanToolConfig(["-m", "gpt-test"], "")).toEqual(on);
+    expect(codexPlanToolConfig([], "model = \"gpt-6\"\n# update_plan is a comment\n")).toEqual(on);
+    expect(codexPlanToolConfig([], "[tools.update_plan]\nenabled = false\n")).toEqual([]);
+    expect(codexPlanToolConfig([], "[tools]\nupdate_plan = { enabled = false }\n")).toEqual([]);
+    expect(codexPlanToolConfig(["-c", "tools.update_plan.enabled=false"], "")).toEqual([]);
+    expect(codexPlanToolConfig(["--config=tools.update_plan.enabled=false"], "")).toEqual([]);
+    // A prompt that mentions it is not a setting.
+    expect(codexPlanToolConfig(["--", "-c tools.update_plan.enabled=false"], "")).toEqual(on);
   });
 
   it("keeps the pane identity in the app-server environment and cleans up", () => {
@@ -119,6 +134,7 @@ if (args[0] === "app-server") {
     try {
       const result = runPaneLocalCodexSession({
         acpHostArgv: null,
+        codexConfig: "",
         command: `${executable} --model gpt-test`,
         paneId: "%55",
         runtimeTempDir: runtimeDirectory,
@@ -178,6 +194,7 @@ if (args[0] === "app-server") {
     try {
       const result = runPaneLocalCodexSession({
         acpHostArgv: null,
+        codexConfig: "",
         command: `${executable} --no-daemon -m gpt-test 'ROLE: worker.'`,
         paneId: "%56",
         runtimeTempDir: runtimeDirectory,
@@ -189,7 +206,7 @@ if (args[0] === "app-server") {
 
       // Codex on its own, never on the shared daemon, and its own exit status.
       expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
-        args: ["--no-daemon", "-m", "gpt-test", "ROLE: worker."],
+        args: ["--no-daemon", "-c", "tools.update_plan.enabled=true", "-m", "gpt-test", "ROLE: worker."],
       });
       expect(result.status).toBe(7);
       expect(result.appServer).toBe(false);
@@ -219,6 +236,7 @@ if (args[0] === "app-server") {
     try {
       const result = runPaneLocalCodexSession({
         acpHostArgv: null,
+        codexConfig: "",
         command: `${executable}`,
         paneId: "%57",
         runtimeTempDir: runtimeDirectory,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PlanEntry } from "@agentclientprotocol/sdk";
-import { planFromToolInput, planShown, planSummary } from "./plan";
+import { isPlanTool, planFromToolInput, planShown, planSummary } from "./plan";
 
 const entry = (content: string, status: PlanEntry["status"]): PlanEntry => ({ content, status, priority: "medium" });
 
@@ -42,9 +42,26 @@ describe("planFromToolInput", () => {
     ]);
   });
 
+  it("reads OpenCode's todowrite list, leaving cancelled steps out", () => {
+    expect(planFromToolInput({ todos: [
+      { content: "Read", status: "completed", priority: "low" }, { content: "Skip", status: "cancelled", priority: "low" },
+      { content: "Fix", status: "in_progress", priority: "high" }, { content: " ", status: "pending" }, { content: "Test", status: "pending" },
+    ] })).toEqual([entry("Read", "completed"), entry("Fix", "in_progress"), entry("Test", "pending")]);
+    expect(planFromToolInput({ todos: [] })).toEqual([]);
+  });
+
   it("reads nothing from other input", () => {
     expect(planFromToolInput({ command: "ls" })).toBeUndefined();
     expect(planFromToolInput({ todos: "no checklist here" })).toBeUndefined();
     expect(planFromToolInput(undefined)).toBeUndefined();
+  });
+});
+
+describe("isPlanTool", () => {
+  it("knows the todo tools by name and by a checklist in the input", () => {
+    expect(isPlanTool({ title: "todowrite", rawInput: {} })).toBe(true);
+    expect(isPlanTool({ title: "Update todo", rawInput: { todos: "- [ ] Fix" } })).toBe(true);
+    expect(isPlanTool({ title: "Run tests", rawInput: { command: "npm test" } })).toBe(false);
+    expect(isPlanTool({ title: "Fix the todo list view" })).toBe(false);
   });
 });

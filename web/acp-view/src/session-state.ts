@@ -14,7 +14,7 @@ import type {
   ToolKind,
   UsageUpdate,
 } from "@agentclientprotocol/sdk";
-import { planFromToolInput } from "./plan";
+import { isPlanTool, planFromToolInput } from "./plan";
 import { modelStateOf, type ModelState } from "./session-options";
 
 export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
@@ -357,7 +357,10 @@ export function applyUpdate(state: SessionState, update: SessionUpdate, eventAt?
       state = delivered(state);
       const previous = state.toolCalls[update.toolCallId];
       const toolCalls = { ...state.toolCalls, [update.toolCallId]: mergeToolCall(previous, update, at) };
-      const items = previous ? state.items : [...state.items, { type: "tool" as const, id: update.toolCallId, at }];
+      // A todo tool call shows as the plan line, not as a row of the conversation, and Claude
+      // Code's ToolSearch only loads tools (its todo tools among them): neither is work to show.
+      const row = !previous && !isPlanTool(update) && update.title !== "ToolSearch";
+      const items = row ? [...state.items, { type: "tool" as const, id: update.toolCallId, at }] : state.items;
       const plan = planFromToolInput(update.rawInput) ?? state.plan;
       return { ...state, toolCalls, items, plan };
     }

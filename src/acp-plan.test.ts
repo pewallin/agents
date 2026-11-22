@@ -27,6 +27,13 @@ describe("the agent's plan as the ACP host keeps it", () => {
     expect(planFromAgentLine(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "plan" } } } }))).toBeUndefined();
   });
 
+  it("reads OpenCode's todowrite list", () => {
+    const tool = (update: object) => JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "t", ...update } } });
+    expect(planFromAgentLine(tool({ rawInput: { todos: [
+      { content: "Read", status: "completed", priority: "medium" }, { content: "Skip", status: "cancelled" }, { content: "Fix", status: "in_progress" },
+    ] } }))).toEqual([{ text: "Read", status: "completed" }, { text: "Fix", status: "in_progress" }]);
+  });
+
   it("keeps the latest plan in its file, which agents threads reads as the worker's step and checklist", () => {
     const dir = mkdtempSync(join(tmpdir(), "acp-plan-"));
     try {

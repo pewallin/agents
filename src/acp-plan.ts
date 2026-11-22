@@ -1,7 +1,7 @@
 // The pane agent's own todo list, as its ACP traffic carries it: a `plan` update (Claude Code's
-// TodoWrite, Codex's update_plan) or a Markdown checklist in a tool call's input (Copilot's
-// update_todo). The host keeps the latest beside its metadata, for `agents threads` to show a
-// worker's step ("Step 3 of 5 · Write the tests") and its checklist; the ACP view parses the same
+// tasks, Codex's update_plan) or a todo tool call of its own (Copilot's update_todo checklist,
+// OpenCode's todowrite list). The host keeps the latest beside its metadata, for `agents threads`
+// to show a worker's step ("Step 3 of 5 · Write the tests") and its checklist; the ACP view parses the same
 // traffic itself (web/acp-view/src/plan.ts).
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -39,6 +39,15 @@ export function planFromChecklist(todos: string): PlanStep[] | undefined {
   return steps.length > 0 ? steps : undefined;
 }
 
+/** OpenCode's todowrite list (`[{ content, status }]`), a cancelled step left out; an empty list
+ *  is the agent clearing it. */
+function planFromList(todos: unknown[]): PlanStep[] {
+  return todos
+    .filter((todo) => (todo as { status?: unknown } | null)?.status !== "cancelled")
+    .map((todo) => step((todo as { content?: unknown } | null)?.content, (todo as { status?: unknown } | null)?.status))
+    .filter((entry): entry is PlanStep => Boolean(entry));
+}
+
 /** The plan an agent's line carries, if it carries one. */
 export function planFromAgentLine(line: string): PlanStep[] | undefined {
   let message: { method?: unknown; params?: { update?: { sessionUpdate?: unknown; entries?: unknown; rawInput?: unknown } } };
@@ -58,6 +67,7 @@ export function planFromAgentLine(line: string): PlanStep[] | undefined {
   if (update?.sessionUpdate === "tool_call" || update?.sessionUpdate === "tool_call_update") {
     const todos = (update.rawInput as { todos?: unknown } | undefined)?.todos;
     if (typeof todos === "string") return planFromChecklist(todos)?.slice(0, MAX_STEPS);
+    if (Array.isArray(todos)) return planFromList(todos).slice(0, MAX_STEPS);
   }
   return undefined;
 }

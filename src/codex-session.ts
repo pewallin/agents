@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { basename, dirname, join } from "path";
 import { splitCommandArgv } from "./command-words.js";
 import { spawnSync } from "child_process";
@@ -34,6 +35,8 @@ export interface CodexSessionLaunchInput {
   processId: number;
   /** Whether this Codex has --no-daemon; asked of `codex --help` when it is not given. */
   supportsNoDaemon?: boolean;
+  /** The user's own Codex config.toml; read from CODEX_HOME (~/.codex) when it is not given. */
+  codexConfig?: string;
 }
 
 export interface PaneLocalCodexSessionInput extends CodexSessionLaunchInput {
@@ -80,21 +83,45 @@ export function createCodexSessionLaunchPlan(input: CodexSessionLaunchInput): Co
   // are not supported when resuming a remote task", codex 0.166): the pane's app-server takes them
   // as its config, so the session runs as the command asked, in the TUI and in the ACP view.
   const permissions = codexPermissionOptions(args);
+  const planTool = codexPlanToolConfig(args, input.codexConfig ?? readCodexConfig());
 
   return {
     endpointMetadataPath,
     logPath,
     server: {
       executable,
-      args: ["app-server", ...permissions.serverConfig, "--listen", "ws://127.0.0.1:0"],
+      args: ["app-server", ...permissions.serverConfig, ...planTool, "--listen", "ws://127.0.0.1:0"],
     },
     tui: { executable, args: isCodexResume(args) ? permissions.rest : args },
-    plainTui: { executable, args: supportsNoDaemon ? ["--no-daemon", ...args] : args },
+    plainTui: { executable, args: [...(supportsNoDaemon ? ["--no-daemon"] : []), ...planTool, ...args] },
     viewMode: codexAcpMode(permissions.approvalPolicy, permissions.sandboxMode),
     resumePermissions: permissions.serverConfig.length > 0 && resumedThreadId(args)
       ? { threadId: resumedThreadId(args)!, approvalPolicy: permissions.approvalPolicy, sandbox: permissions.sandboxMode }
       : undefined,
   };
+}
+
+/**
+ * Codex's todo list, update_plan, is off unless `tools.update_plan.enabled` is set (codex 0.169):
+ * the pane's Codex gets it, so the TUI and the ACP view show the agent's plan. A setting of the
+ * user's own, in the command or in config.toml, stands.
+ */
+export function codexPlanToolConfig(args: string[], config: string): string[] {
+  const end = args.indexOf("--");
+  const head = end < 0 ? args : args.slice(0, end);
+  const inCommand = head.some((arg, index) =>
+    ((arg === "-c" || arg === "--config") && /^\s*tools\.update_plan\b/.test(head[index + 1] ?? ""))
+    || /^--config=\s*tools\.update_plan\b/.test(arg));
+  const inConfig = config.split("\n").some((line) => !/^\s*#/.test(line) && /\bupdate_plan\b/.test(line));
+  return inCommand || inConfig ? [] : ["-c", "tools.update_plan.enabled=true"];
+}
+
+function readCodexConfig(): string {
+  try {
+    return readFileSync(join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"), "utf8");
+  } catch {
+    return "";
+  }
 }
 
 /** The ACP view's mode for a command's permissions (codex-acp's INITIAL_AGENT_MODE), so a turn
