@@ -180,17 +180,44 @@ function openingText(name: string | null = AGENT_NAME): string {
   return sessionId && sessionId !== "current" ? "Loading the session…" : `Starting ${name ?? "the agent"}…`;
 }
 
+/** How long an opening waits before its spinner and line fade in (view.css .opening-state), so a
+ *  quick open shows none; and one turn of the spinner (--duration-spin). */
+const OPENING_SHOWS_AFTER_MS = 300;
+const SPIN_MS = 900;
+/** When the opening on screen began. The view draws its opening again as it learns more (the
+ *  host's info, the pane's session, the connection), each time as a new element: the next one goes
+ *  on from there, its line not hidden and faded in again, its spinner not turned back. */
+let openingSince: number | null = null;
+let openingsShown = 0;
+function useOpeningSince(): number {
+  const [since] = useState(() => (openingSince ??= performance.now()));
+  useEffect(() => {
+    openingsShown += 1;
+    return () => {
+      openingsShown -= 1;
+      // The opening that replaces this one has counted itself by then.
+      setTimeout(() => { if (openingsShown === 0) openingSince = null; }, 0);
+    };
+  }, []);
+  return since;
+}
+
 /**
- * The view while it opens: the field where it will be, empty, and one quiet line in it saying
- * what the view waits for. The conversation then comes in above the field and nothing moves.
- * Agents Next shows the same frame before the host is up (acpViewStartingHTML in
- * WorkspaceWebSurfaceView.swift), so its page and this one meet without a jump.
+ * The view while it opens: the field where it will be, empty, and above it, centred where the
+ * conversation will be, the working spinner with one quiet line saying what the view waits for
+ * (the design system's loading state). The conversation then comes in above the field and the
+ * field does not move. Agents Next shows the same frame before the host is up
+ * (WorkspaceACPViewOpening.swift), so its page and this one meet without a jump.
  */
 function Opening({ text = openingText() }: { text?: string }) {
+  const elapsed = performance.now() - useOpeningSince();
   return (
     <div className="view opening" data-acp-opening="true">
       <div className="main">
         <div className="scroll-wrap"><div className="scroll" /></div>
+        <div className="opening-state" role="status" style={{ animationDelay: `${OPENING_SHOWS_AFTER_MS - elapsed}ms` }}>
+          <i className="opening-spin" aria-hidden="true" style={{ animationDelay: `${-(elapsed % SPIN_MS)}ms` }} /><span>{text}</span>
+        </div>
         <div className="dock"><div className="inner">
           <div className="box">
             <textarea className="input" rows={1} disabled tabIndex={-1}
@@ -199,7 +226,6 @@ function Opening({ text = openingText() }: { text?: string }) {
               <span className="icon" aria-hidden="true">
                 <svg viewBox="0 0 14 14"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
               </span>
-              <span className="opening-line" role="status"><i className="pulse" />{text}</span>
               <span className="sp" />
               <span className="go off" aria-hidden="true">
                 <svg viewBox="0 0 14 14"><path d="M7 11.5v-9M3 6.5l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -1650,7 +1676,7 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
             </button>
             {/* While the agent still opens the session its history shows above, and the row says
                 so where the session's choices come once it is open. */}
-            {opening ? <span className="opening-line shown" role="status"><i className="pulse" />{opening}</span> : <>
+            {opening ? <span className="opening-line" role="status"><i className="pulse" />{opening}</span> : <>
               {showModes && (
                 <label className="opt" title={modesLabel(info.agent.id)}>
                   <span className="lb">{modesLabel(info.agent.id)}</span>

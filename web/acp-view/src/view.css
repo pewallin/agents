@@ -796,15 +796,20 @@ th, td { overflow-wrap: break-word; }
 .trail.current-out { margin-top: -8px; }
 
 /* While the view opens (Opening in main.tsx, and the app's own frame before the host is up,
-   acpViewStartingHTML in Agents Next): the field in its place, empty, with one quiet line that
-   says what the view waits for. It fades in only after a moment, so a quick open shows none. */
+   WorkspaceACPViewOpening.swift in Agents Next): the field in its place, empty, and above it,
+   centred where the conversation will be, the working spinner and one quiet line that says what
+   the view waits for. It fades in only after a moment, so a quick open shows none; once the app
+   showed its frame (data-waited) it is there at once. */
 .opening .input { cursor: default; }
 .opening .icon:hover { background: none; }
-.opening-line { display: inline-flex; align-items: center; gap: 7px; padding: 0 3px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
-  opacity: 0; animation: opening-in .3s ease .3s forwards; }
-:root[data-waited="true"] .opening-line { animation: none; opacity: 1; }
-/* the line in the field's row while the session's history shows: it goes on from the opening's */
-.opening-line.shown { animation: none; opacity: 1; }
+.opening-state { position: absolute; left: 0; right: 0; top: 0; bottom: 84px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--space-4); padding: var(--space-7); color: var(--dim); font-size: var(--prose-small); line-height: 1.45; text-align: center;
+  opacity: 0; animation: opening-in var(--duration-slow) ease-out .3s forwards; }
+.opening-state > span { max-width: calc(var(--fs) * 36); }
+:root[data-waited="true"] .opening-state { animation: none; opacity: 1; }
+.opening-spin { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--fg2); border-left-color: var(--tint2); animation: spin var(--duration-spin) linear infinite; }
+/* the line in the field's row while the session's history shows above it */
+.opening-line { display: inline-flex; align-items: center; gap: 7px; padding: 0 3px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .opening-line .pulse { flex: none; width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: opening-pulse 1.6s ease-in-out infinite; }
 @keyframes opening-in { to { opacity: 1; } }
 @keyframes opening-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
@@ -812,7 +817,7 @@ th, td { overflow-wrap: break-word; }
 .col.arrive { animation: arrive .22s ease-out both; }
 @keyframes arrive { from { opacity: 0; transform: translateY(4px); } }
 @media (prefers-reduced-motion: reduce) {
-  .opening-line, .opening-line .pulse, .col.arrive { animation: none; opacity: 1; transform: none; }
+  .opening-state, .opening-spin, .opening-line .pulse, .col.arrive { animation: none; opacity: 1; transform: none; }
 }
 .trail .remark:has(> .ln) { max-width: none; }
 
