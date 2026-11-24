@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "agents runtime state event",
+  "description": "One line of $AGENTS_HOME/runtime/state-events.jsonl (src/runtime-events.ts). Agents Next tails the file and decodes each line (AgentsRuntimeWatchEventLineDecoder); a line it cannot decode is skipped.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "ts", "entity", "op", "agent", "surfaceId"],
+  "properties": {
+    "v": { "const": 1 },
+    "ts": { "type": "integer", "description": "Unix seconds." },
+    "entity": { "enum": ["primary_state", "contributor_state", "focus"] },
+    "op": { "enum": ["upsert", "remove", "request"] },
+    "agent": { "type": "string" },
+    "surfaceId": { "type": "string", "description": "The tmux pane id (%N)." },
+    "mux": { "enum": ["tmux"] },
+    "reporter": { "type": "string" },
+    "state": { "$ref": "#/$defs/reportedState" },
+    "intent": { "type": "string" },
+    "clearIntent": { "type": "boolean" },
+    "responsePreview": { "type": "string" },
+    "clearResponsePreview": { "type": "boolean" },
+    "detail": { "type": "string" },
+    "externalSessionId": { "type": "string" },
+    "stateSource": { "enum": ["primary", "contributor"] },
+    "primaryState": { "$ref": "#/$defs/reportedState" },
+    "auxiliaryReporters": { "type": "array", "items": { "type": "string" } },
+    "activity": { "type": "boolean" }
+  },
+  "$defs": {
+    "reportedState": { "enum": ["working", "idle", "approval", "question"] }
+  }
+}

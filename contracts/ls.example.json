@@ -1,0 +1,42 @@
+[
+  {
+    "pane": "work:agents",
+    "paneId": "work:1",
+    "tmuxPaneId": "%3",
+    "title": "Fix the login flow",
+    "intent": "Run focused tests",
+    "responsePreview": "Implemented the fix.",
+    "agent": "codex",
+    "status": "working",
+    "cpuPercent": 12.5,
+    "memoryMB": 412,
+    "detail": "npm test",
+    "provider": "openai",
+    "modelId": "gpt-5.5",
+    "modelLabel": "GPT-5.5",
+    "modelSource": "session-log",
+    "model": "gpt-5.5",
+    "externalSessionId": "thread-1",
+    "windowId": "work:1",
+    "cwd": "~/code/app",
+    "branch": "main",
+    "context": "compacting",
+    "contextTokens": 81234,
+    "contextMax": 272000,
+    "spend": 1.25,
+    "spendUnit": "USD",
+    "stateSource": "contributor",
+    "primaryState": "idle",
+    "auxiliaryReporters": ["acp"]
+  },
+  {
+    "pane": "work:shell",
+    "paneId": "work:2",
+    "tmuxPaneId": "%4",
+    "title": "Pi",
+    "agent": "pi",
+    "status": "idle",
+    "cpuPercent": 0,
+    "memoryMB": 96
+  }
+]

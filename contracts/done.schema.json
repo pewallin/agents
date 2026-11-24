@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "agents done list --json",
+  "description": "The Done projection `agents done list|record|update --json` print (src/done.ts). Agents Next decodes it whole (AgentRecentDoneProjection, ISO 8601 dates without fractions): one field it cannot decode loses the whole list.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "records", "pinnedSessions"],
+  "properties": {
+    "contractVersion": { "const": 1 },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["doneEventID", "sessionIdentity", "hostID", "tmux", "agentKind", "title", "statusSnapshot", "createdAt", "acknowledged", "cleared"],
+        "properties": {
+          "doneEventID": { "type": "string" },
+          "sessionIdentity": { "type": "string" },
+          "hostID": { "type": "string" },
+          "tmux": { "$ref": "#/$defs/tmux" },
+          "agentKind": { "type": "string" },
+          "externalSessionID": { "type": ["string", "null"] },
+          "title": { "type": "string" },
+          "detail": { "type": ["string", "null"] },
+          "statusSnapshot": { "enum": ["attention", "question", "done", "working", "compacting", "stalled", "idle", "pending"] },
+          "createdAt": { "$ref": "#/$defs/timestamp" },
+          "acknowledged": { "type": "boolean" },
+          "cleared": { "type": "boolean" }
+        }
+      }
+    },
+    "pinnedSessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sessionIdentity", "hostID", "tmux", "pinnedAt"],
+        "properties": {
+          "sessionIdentity": { "type": "string" },
+          "hostID": { "type": "string" },
+          "tmux": { "$ref": "#/$defs/tmux" },
+          "agentKind": { "type": ["string", "null"] },
+          "externalSessionID": { "type": ["string", "null"] },
+          "title": { "type": ["string", "null"] },
+          "detail": { "type": ["string", "null"] },
+          "latestDoneEventID": { "type": ["string", "null"] },
+          "pinnedAt": { "$ref": "#/$defs/timestamp" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "tmux": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": { "type": ["string", "null"] },
+        "window": { "type": ["string", "null"] },
+        "pane": { "type": ["string", "null"] }
+      }
+    },
+    "timestamp": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$" }
+  }
+}

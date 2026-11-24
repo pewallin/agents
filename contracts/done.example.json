@@ -1,0 +1,46 @@
+{
+  "contractVersion": 1,
+  "records": [
+    {
+      "doneEventID": "done-20260622T000000Z-external-session-1",
+      "sessionIdentity": "external-session-1",
+      "hostID": "local",
+      "tmux": { "session": "work", "window": "@2", "pane": "%3" },
+      "agentKind": "codex",
+      "externalSessionID": "external-session-1",
+      "title": "Fix the login flow",
+      "detail": "Tests pass",
+      "statusSnapshot": "idle",
+      "createdAt": "2026-06-22T00:00:00Z",
+      "acknowledged": false,
+      "cleared": false
+    },
+    {
+      "doneEventID": "done-20260622T000100Z-pane-4",
+      "sessionIdentity": "pane-4",
+      "hostID": "local",
+      "tmux": { "session": null, "window": null, "pane": "%4" },
+      "agentKind": "pi",
+      "externalSessionID": null,
+      "title": "Pi",
+      "detail": null,
+      "statusSnapshot": "attention",
+      "createdAt": "2026-06-22T00:01:00Z",
+      "acknowledged": true,
+      "cleared": true
+    }
+  ],
+  "pinnedSessions": [
+    {
+      "sessionIdentity": "external-session-1",
+      "hostID": "local",
+      "tmux": { "session": "work", "window": "@2", "pane": "%3" },
+      "agentKind": "codex",
+      "externalSessionID": "external-session-1",
+      "title": "Fix the login flow",
+      "detail": "Tests pass",
+      "latestDoneEventID": "done-20260622T000000Z-external-session-1",
+      "pinnedAt": "2026-06-22T00:02:00Z"
+    }
+  ]
+}

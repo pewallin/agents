@@ -1,0 +1,35 @@
+[
+  {
+    "agent": "codex",
+    "cwd": "/Users/operator/code/app",
+    "pane": "work:agents",
+    "tmuxPaneId": "%3",
+    "currentSessionId": "thread-1",
+    "limit": 5,
+    "hasMore": true,
+    "sessions": [
+      {
+        "sessionId": "thread-1",
+        "title": "Fix the login flow and add a test",
+        "shortTitle": "Fix the login flow",
+        "titleSource": "first_prompt",
+        "model": "gpt-5.5",
+        "reasoningEffort": "high",
+        "updatedAt": 1779118660,
+        "current": true,
+        "resumeStrategy": "switch-in-place",
+        "resumeTarget": "thread-1",
+        "resumeTargetKind": "session-id",
+        "resumeCommand": "codex resume thread-1",
+        "resumeArgv": ["codex", "resume", "thread-1"],
+        "startedByAgent": true,
+        "openIn": { "pane": "%9", "session": "work", "window": "review", "pid": 4242 }
+      },
+      {
+        "sessionId": "thread-0",
+        "title": "thread-0",
+        "updatedAt": 1779110000
+      }
+    ]
+  }
+]

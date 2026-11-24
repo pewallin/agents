@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "agents ls --json",
+  "description": "The agent panes `agents ls --json --no-interactive` prints (scan() in src/scanner.ts). Agents Next decodes it per pane (AgentsListInventoryParser) and drops a pane it cannot decode, so a field the app reads must keep its name and type.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["pane", "paneId", "tmuxPaneId", "title", "agent", "status", "cpuPercent", "memoryMB"],
+    "properties": {
+      "pane": { "type": "string", "description": "session:window, as tmux names them." },
+      "paneId": { "type": "string" },
+      "tmuxPaneId": { "type": "string", "description": "The tmux pane id (%N)." },
+      "title": { "type": "string" },
+      "intent": { "type": "string" },
+      "responsePreview": { "type": "string" },
+      "agent": { "type": "string" },
+      "status": { "enum": ["attention", "question", "working", "stalled", "idle"] },
+      "cpuPercent": { "type": "number" },
+      "memoryMB": { "type": "integer" },
+      "detail": { "type": "string" },
+      "provider": { "type": "string" },
+      "modelId": { "type": "string" },
+      "modelLabel": { "type": "string" },
+      "modelSource": { "enum": ["hook", "sdk", "transcript", "session-log", "inferred"] },
+      "model": { "type": "string" },
+      "externalSessionId": { "type": "string" },
+      "windowId": { "type": "string" },
+      "cwd": { "type": "string" },
+      "branch": { "type": "string" },
+      "context": { "type": "string" },
+      "contextTokens": { "type": "integer" },
+      "contextMax": { "type": "integer" },
+      "spend": { "type": "number" },
+      "spendUnit": { "type": "string" },
+      "stateSource": { "enum": ["primary", "contributor"] },
+      "primaryState": { "enum": ["working", "idle", "approval", "question"] },
+      "auxiliaryReporters": { "type": "array", "items": { "type": "string" } }
+    }
+  }
+}

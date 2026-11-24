@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "agents history --json",
+  "description": "The conversations `agents history --json` prints, one group per agent and folder or pane (getSessionHistory() in src/scanner.ts). Agents Next decodes the whole array (AgentSessionHistoryParser): one field it cannot decode loses every group.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["agent", "cwd", "limit", "hasMore", "sessions"],
+    "properties": {
+      "agent": { "type": "string" },
+      "cwd": { "type": "string" },
+      "pane": { "type": "string" },
+      "tmuxPaneId": { "type": "string" },
+      "currentSessionId": { "type": "string" },
+      "limit": { "type": "integer" },
+      "hasMore": { "type": "boolean" },
+      "sessions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sessionId", "title", "updatedAt"],
+          "properties": {
+            "sessionId": { "type": "string" },
+            "title": { "type": "string" },
+            "shortTitle": { "type": "string" },
+            "titleSource": { "enum": ["rename", "summary", "stored_title", "session_info", "first_prompt", "fallback"] },
+            "model": { "type": "string" },
+            "reasoningEffort": { "type": "string" },
+            "updatedAt": { "type": "integer", "description": "Unix seconds." },
+            "current": { "type": "boolean" },
+            "resumeStrategy": { "enum": ["restart", "switch-in-place"] },
+            "resumeTarget": { "type": "string" },
+            "resumeTargetKind": { "enum": ["session-id", "session-path", "new-session"] },
+            "resumeCommand": { "type": "string" },
+            "resumeArgv": { "type": "array", "items": { "type": "string" } },
+            "startedByAgent": { "type": "boolean" },
+            "openIn": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "pane": { "type": "string" },
+                "session": { "type": "string" },
+                "window": { "type": "string" },
+                "pid": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
