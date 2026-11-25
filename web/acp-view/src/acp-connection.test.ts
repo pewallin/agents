@@ -42,6 +42,32 @@ describe("connectSession", () => {
     expect(actions).toEqual(["loading", "loaded"]);
   });
 
+  it("says a steer the agent refuses (Kiro, a message with an image) was not sent, and shows nothing of it", async () => {
+    server = new WebSocketServer({ port: 0 });
+    server.on("connection", (ws) => ws.on("message", (raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.method === "initialize") {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true }, _meta: { steering: { supported: true } } } }));
+      } else if (message.method === "session/load") {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
+      } else if (message.method === "_session/steering") {
+        const image = message.params.prompt.some((block: { type: string }) => block.type === "image");
+        ws.send(JSON.stringify(image
+          ? { jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Kiro takes text into a running turn, not images" } }
+          : { jsonrpc: "2.0", id: message.id, result: { outcome: "steered" } }));
+      }
+    }));
+    await new Promise((resolve) => server!.once("listening", resolve));
+    const url = `ws://127.0.0.1:${(server.address() as { port: number }).port}/acp?token=t`;
+    const updates: unknown[] = [];
+    const session = connectSession({ url, sessionId: "s", cwd: "/", agentId: "kiro", dispatch: (action) => { if (action.type === "update") updates.push(action.update); } });
+    await session.load();
+    expect(await session.steer([{ type: "text", text: "and this" }, { type: "image", mimeType: "image/png", data: "AQID" }])).toBe("refused");
+    expect(updates).toEqual([]);
+    expect(await session.steer([{ type: "text", text: "and this" }])).toBe("steered");
+    expect(updates).toHaveLength(1);
+  });
+
   it("tells the view when the host gave its session to another view", async () => {
     const { url } = await agent(true, true);
     let takenOver = false;

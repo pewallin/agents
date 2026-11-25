@@ -1418,7 +1418,16 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
     const enqueue = () => withPaths().then((text) => hostJson("/api/queue", { text })).catch(() => setNotice("The message could not be queued."));
     if (!(prompting || working)) { void withAttachments(typed).then((blocks) => session.prompt(blocks), failed); return; }
     if (how === "queue" || steerWay === "none") { void enqueue(); return; }
-    if (steerWay === "acp") { void withAttachments(typed).then((blocks) => session.steer(blocks), failed); return; }
+    if (steerWay === "acp") {
+      // A message the agent would not take into its turn (Kiro takes no images there) waits for
+      // the turn's end in the queue instead of being lost.
+      void withAttachments(typed).then(async (blocks) => {
+        if (await session.steer(blocks) !== "refused") return;
+        setNotice(`${agentName} cannot take this message during its turn, so it is queued for when the turn is done.`);
+        await enqueue();
+      }, failed);
+      return;
+    }
     // Through the pane's steer inbox (Pi): what the agent cannot take now waits for the turn's end.
     void withPaths().then((text) => fetch("/api/steer", {
       method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ text }),
@@ -1736,7 +1745,7 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
               ? <button className="go stop" type="button" aria-label="Stop" onClick={() => void session.cancel()}>
                   <svg viewBox="0 0 14 14" aria-hidden="true"><rect x="3.8" y="3.8" width="6.4" height="6.4" rx="1.3" fill="currentColor" /></svg>
                 </button>
-              : <SendButton ready={Boolean(draft.trim())} flying={flying} label={busy ? (steerWay === "none" ? "Queue" : "Steer") : "Send"} />}
+              : <SendButton ready={Boolean(draft.trim()) || attachments.length > 0} flying={flying} label={busy ? (steerWay === "none" ? "Queue" : "Steer") : "Send"} />}
           </div>
         </form>
       </div>

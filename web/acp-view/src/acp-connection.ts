@@ -22,8 +22,9 @@ export interface AcpSession {
   /** Adds to the turn in progress, for an agent that takes steering over ACP (`_session/steering`:
    *  Codex, Claude, and Kiro through the pane's host, src/kiro-steering.ts): "steered" when it
    *  went into the running turn, "prompted" when the turn had ended, or the agent takes no
-   *  steering, and it went as a prompt of its own. */
-  steer(blocks: ContentBlock[]): Promise<"steered" | "prompted">;
+   *  steering, and it went as a prompt of its own; "refused" when the agent would not take it into
+   *  its turn (Kiro takes no images there) and nothing was sent. */
+  steer(blocks: ContentBlock[]): Promise<"steered" | "prompted" | "refused">;
   /** Whether the agent takes steering over ACP (its initialize says so); known once it answers. */
   steering(): Promise<boolean>;
   /** What a prompt may hold besides text and links (initialize's promptCapabilities). */
@@ -179,9 +180,14 @@ export function connectSession(options: {
       }
       // promptRequired: a turn that ended meanwhile gets the message as a prompt of the view's own,
       // whose answer the view follows like any other.
-      const result = await whenOpen(() => agent.request("_session/steering", {
-        sessionId, prompt: blocks, _meta: { steering: { idleBehavior: "promptRequired" } },
-      } as never)) as { outcome?: string } | undefined;
+      let result: { outcome?: string } | undefined;
+      try {
+        result = await whenOpen(() => agent.request("_session/steering", {
+          sessionId, prompt: blocks, _meta: { steering: { idleBehavior: "promptRequired" } },
+        } as never)) as { outcome?: string } | undefined;
+      } catch {
+        return "refused";
+      }
       if (result?.outcome === "promptRequired") {
         await this.prompt(blocks);
         return "prompted";
