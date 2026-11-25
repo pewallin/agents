@@ -3,7 +3,7 @@
 // version it speaks (data-acp-bridge on <html>), so a view and an app of different releases are
 // noticed in the pane's log instead of failing quietly. Bump BRIDGE_VERSION when a channel or its
 // message changes.
-export const BRIDGE_VERSION = 3;
+export const BRIDGE_VERSION = 4;
 
 /** The app's message handlers (window.webkit.messageHandlers.<name>.postMessage). */
 export const APP_HANDLERS = {
@@ -31,6 +31,9 @@ export const PAGE_EVENTS = {
   quote: "agents-next-quote",
   dictation: "agents-next-dictation",
   reviewConversation: "agents-next-review-conversation",
+  /** The app is about to take a picture of the window (app control's window.snapshot): a page it
+   *  does not show draws what it holds back (visibility.ts), so the picture is current. */
+  snapshot: "agents-next-snapshot",
 } as const;
 
 /** Actions the page asks of the app by navigating to agents-next-action://<action>. */

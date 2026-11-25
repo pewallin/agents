@@ -16,6 +16,7 @@ import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOp
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { workFolders } from "./paths";
+import { pageHidden, usePageVisible, waitsWhileHidden } from "./visibility";
 import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, pageName, shortPath, thoughtSummary, toolOutput, webStep, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
 import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, ResultStrip, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
@@ -60,12 +61,37 @@ export interface HostInfo {
   agent: { id: string; name: string };
 }
 
-const useSession = create<SessionState & { dispatch: (action: SessionAction) => void }>((set) => ({
+// What an agent streams while the page is hidden is reduced here and shown in one render when the
+// page is seen again (visibility.ts): a hidden view rendered every chunk of a working agent.
+let waiting: SessionState | null = null;
+const useSession = create<SessionState & { dispatch: (action: SessionAction) => void }>((set, get) => ({
   ...emptySession(),
-  dispatch: (action) => set((state) => reduce(state, action)),
+  dispatch: (action) => {
+    const current = waiting ?? get();
+    const next = reduce(current, action);
+    if (pageHidden() && waitsWhileHidden(current, action)) {
+      waiting = next;
+      return;
+    }
+    waiting = null;
+    set(next);
+  },
 }));
+const showWaiting = () => {
+  if (!waiting) return;
+  const shown = waiting;
+  waiting = null;
+  useSession.setState(shown);
+};
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => { if (!pageHidden()) showWaiting(); });
+  // A picture of a window nobody sees (a locked screen) shows the conversation as it is.
+  window.addEventListener(PAGE_EVENTS.snapshot, showWaiting);
+}
+/** The session as it is, with what waits to be shown. */
+const sessionState = (): SessionState => waiting ?? useSession.getState();
 // For inspection and tests: the session's state, and a way to put a state in front of the view.
-(window as unknown as { __acpState: () => SessionState }).__acpState = () => useSession.getState();
+(window as unknown as { __acpState: () => SessionState }).__acpState = sessionState;
 (window as unknown as { __acpDispatch: (action: SessionAction) => void }).__acpDispatch = (action) => useSession.getState().dispatch(action);
 
 function readToken(): string | null {
@@ -102,11 +128,14 @@ darkQuery?.addEventListener?.("change", applyTheme);
 /** A clock for what is shown while the agent works; ticks once a second only while needed. */
 function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
+  // Not while the page is hidden: it is right again the moment the page is shown.
+  const visible = usePageVisible();
   useEffect(() => {
-    if (!active) return;
+    if (!active || !visible) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [active, visible]);
   return now;
 }
 
@@ -1981,7 +2010,7 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
     events.addEventListener("send", (event) => {
       const { review: id, text } = JSON.parse((event as MessageEvent<string>).data) as { review: string; text: string };
       if (!myReviews.current.has(id)) return;
-      const busy = attention(useSession.getState()) === "working";
+      const busy = attention(sessionState()) === "working";
       void (busy ? session.steer : session.prompt)([{ type: "text", text }]);
     });
     return () => events.close();
@@ -2129,7 +2158,7 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
 /** The folders the agent worked in, worked out again only when its tool calls change. */
 let nearCache: { calls: SessionState["toolCalls"]; folders: string[] } | undefined;
 function nearFolders(): string[] {
-  const calls = useSession.getState().toolCalls;
+  const calls = sessionState().toolCalls;
   if (nearCache?.calls !== calls) nearCache = { calls, folders: workFolders(Object.values(calls)) };
   return nearCache.folders;
 }

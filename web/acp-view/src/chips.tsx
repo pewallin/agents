@@ -10,6 +10,7 @@ import { WorkerChip } from "./coordination-view";
 import type { FileChange } from "./turns";
 import type { SentAttachment } from "./session-state";
 import { APP_HANDLERS, appHandler, THUMBNAIL_SCHEME } from "./bridge";
+import { usePageVisible } from "./visibility";
 
 export type ChipTarget =
   | { kind: "file" | "image" | "dir"; path: string; rel: string; line?: number }
@@ -164,8 +165,10 @@ let paneList: { at: number; panes: Promise<PaneSummary[]> } | undefined;
 /** The panes of the pane's tmux session, with their agents' state, asked again every few seconds. */
 function usePanes(host: ChipHost | null, wanted: boolean): PaneSummary[] | undefined {
   const [panes, setPanes] = useState<PaneSummary[] | undefined>(undefined);
+  // Asked again only while the page is seen, and at once when it is shown.
+  const visible = usePageVisible();
   useEffect(() => {
-    if (!wanted || !host) return;
+    if (!wanted || !host || !visible) return;
     let live = true;
     const load = () => {
       if (!paneList || Date.now() - paneList.at > 4000) {
@@ -176,7 +179,7 @@ function usePanes(host: ChipHost | null, wanted: boolean): PaneSummary[] | undef
     load();
     const timer = setInterval(load, 5000);
     return () => { live = false; clearInterval(timer); };
-  }, [wanted, host]);
+  }, [wanted, host, visible]);
   return panes;
 }
 
