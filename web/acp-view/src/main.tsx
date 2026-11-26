@@ -18,7 +18,7 @@ import { attention, emptySession, reduce, shownMessage, type PermissionRequest, 
 import { workFolders } from "./paths";
 import { pageHidden, usePageVisible, whenShown } from "./visibility";
 import { buildTurns, changesOf, keepUnchanged, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, pageName, shortPath, thoughtSummary, toolOutput, webStep, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
-import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, ResultStrip, StateMark, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
+import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, prefetchResults, resultNames, ResultStrip, StateMark, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
@@ -2538,6 +2538,18 @@ function FirstPrompt({ info, sessionId, onStarted, onMoved }: { info: HostInfo; 
  * it is ready, so the conversation comes in whole, once. An agent that replays only as it answers
  * the load (Codex, Kiro, Pi, OpenCode) is open by then, and this never says so.
  */
+/** How long a conversation waits for its result pictures to be looked up before it shows. */
+const RESULTS_WAIT_MS = 600;
+
+/** Looks up the result names of the conversation the store holds, waiting at most RESULTS_WAIT_MS. */
+function preparedResults(): Promise<void> {
+  const names = useSession.getState().items.flatMap((item) => item.type === "agent" ? resultNames(item.text) : []);
+  return Promise.race([
+    prefetchResults(names, (missing) => hostJson<{ resolved: Record<string, ChipTarget | null> }>("/api/resolve", { names: missing, near: [] }).then((value) => value.resolved)),
+    new Promise<void>((resolve) => setTimeout(resolve, RESULTS_WAIT_MS)),
+  ]);
+}
+
 function useHistoryCameIn(session: AcpSession | null, watching: boolean): boolean {
   const [cameIn, setCameIn] = useState<AcpSession | null>(null);
   useEffect(() => {
@@ -2548,7 +2560,9 @@ function useHistoryCameIn(session: AcpSession | null, watching: boolean): boolea
       if (!historyArriving(state)) return;
       clearTimeout(timer);
       timer = setTimeout(() => {
-        void markdownReady.catch(() => undefined).then(() => { if (!stopped) setCameIn(session); });
+        // The pictures under its answers are looked up first (at most a short while), so they are
+        // in the conversation's first frame instead of growing rows under it after.
+        void Promise.all([markdownReady.catch(() => undefined), preparedResults()]).then(() => { if (!stopped) setCameIn(session); });
       }, HISTORY_SETTLED_MS);
     };
     follow(useSession.getState());
@@ -2680,6 +2694,8 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
     let cancelled = false;
     send({ type: "connect" });
     Promise.all([session.load(), markdownReady.catch(() => undefined)])
+      // The pictures under its answers are looked up before it shows (prefetchResults).
+      .then(([loadedSession]) => preparedResults().then(() => [loadedSession] as const))
       .then(([loadedSession]) => {
         if (cancelled) return;
         // A reload opens the session the view started.

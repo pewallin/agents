@@ -734,17 +734,38 @@ export function ResultStrip({ answer, changes, version }: { answer: string; chan
   return <ResolvedStrip names={names} made={made} host={host} version={version} />;
 }
 
+/** What `/api/resolve` said of a result name, kept for the page's life: a conversation drawn again
+ *  (a reload, a turn that ends) shows its pictures at once instead of growing under them. */
+const resolvedResults = new Map<string, ChipTarget | null>();
+
+/** Looks up the result names of a conversation before it shows (the view waits a little for it),
+ *  so the strips under its answers are there in its first frame and nothing grows after. */
+export function prefetchResults(names: string[], ask: (names: string[]) => Promise<Record<string, ChipTarget | null>>): Promise<void> {
+  const missing = [...new Set(names)].filter((name) => !resolvedResults.has(name));
+  if (missing.length === 0) return Promise.resolve();
+  return ask(missing).then((found) => { for (const name of missing) resolvedResults.set(name, found[name] ?? null); }, () => undefined);
+}
+
+function resolvedPaths(names: string[], made: string[]): string[] | null {
+  if (!names.every((name) => resolvedResults.has(name))) return null;
+  const files = names.map((name) => resolvedResults.get(name)).flatMap((target) => (target && (target.kind === "file" || target.kind === "image") && RESULT_EXTENSIONS.test(target.path) ? [target.path] : []));
+  return [...new Set([...files, ...made])];
+}
+
 function ResolvedStrip({ names, made, host, version }: { names: string[]; made: string[]; host: ChipHost | null; version: string }) {
-  const [paths, setPaths] = useState<string[] | null>(null);
+  const [paths, setPaths] = useState<string[] | null>(() => resolvedPaths(names, made));
   const theme = useTheme();
   const key = `${names.join("\n")}|${made.join("\n")}`;
   useEffect(() => {
     if (!host) return;
+    const known = resolvedPaths(names, made);
+    if (known) { setPaths(known); return; }
     let live = true;
     const ask = names.length > 0
       ? host.hostJson<{ resolved: Record<string, ChipTarget | null> }>("/api/resolve", { names, near: host.near?.() ?? [] }).then((value) => value.resolved, () => ({}) as Record<string, ChipTarget | null>)
       : Promise.resolve({} as Record<string, ChipTarget | null>);
     void ask.then((found) => {
+      for (const name of names) resolvedResults.set(name, found[name] ?? null);
       if (!live) return;
       const files = names.map((name) => found[name]).flatMap((target) => (target && (target.kind === "file" || target.kind === "image") && RESULT_EXTENSIONS.test(target.path) ? [target.path] : []));
       setPaths([...new Set([...files, ...made])]);
