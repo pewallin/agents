@@ -1570,7 +1570,9 @@ function handleBridge(
           program,
           name: entry.name ?? program.split("/").pop(),
           threads: (entry.threads ?? []).map((thread) => ({
-            task: thread.task, title: thread.title, state: thread.state,
+            task: thread.task, title: thread.title, state: thread.state, updatedAt: thread.updatedAt ?? null, resolvedAt: thread.resolvedAt ?? null,
+            agent: thread.harness ?? (Array.isArray(thread.sessions) ? (thread.sessions[0] as { agent?: unknown } | undefined)?.agent ?? null : null),
+            line: typeof thread.line === "string" ? thread.line : null,
             session: Array.isArray(thread.sessions) ? (thread.sessions[0] as { session?: unknown } | undefined)?.session ?? null : null,
           })),
         });

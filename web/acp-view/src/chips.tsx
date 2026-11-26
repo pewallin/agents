@@ -228,12 +228,12 @@ export function fileTarget(path: string, rel: string): ChipTarget {
 
 /** Where a worker stands, as a mark: a check when done, a spinner while working, a dot otherwise
  *  (orange when it waits for you, red when blocked). */
-const STATE_WORDS: Record<WorkerState, string> = { "needs-you": "Needs you", blocked: "Needs you", done: "Ready for review", working: "Working", idle: "Stopped" };
+const STATE_WORDS: Record<WorkerState | "resolved", string> = { "needs-you": "Needs you", blocked: "Needs you", done: "Ready for review", working: "Working", idle: "Stopped", resolved: "Resolved" };
 
 /** A thread's mark, a shape for each state so it reads without its colour, as the app draws it:
  *  a half-filled orange circle when it needs you (a blocker too), a green circle with a check
  *  when it is ready for review, the spinner while working, a dashed grey circle when stopped. */
-export function StateMark({ state }: { state: WorkerState }) {
+export function StateMark({ state }: { state: WorkerState | "resolved" }) {
   const word = STATE_WORDS[state];
   if (state === "working") return <span className="wk-mark spin" role="img" aria-label={word} title={word} />;
   return (
@@ -242,6 +242,7 @@ export function StateMark({ state }: { state: WorkerState }) {
       {(state === "needs-you" || state === "blocked") && <><circle cx="5" cy="5" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M5 0.8 A4.2 4.2 0 0 0 5 9.2 Z" fill="currentColor" /></>}
       {state === "done" && <><circle cx="5" cy="5" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M3 5.2l1.4 1.4 2.6-3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></>}
       {state === "idle" && <circle cx="5" cy="5" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.2" strokeDasharray="2 1.6" />}
+      {state === "resolved" && <path d="M2.2 5.3l1.9 1.9 3.7-4.2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />}
     </svg>
   );
 }

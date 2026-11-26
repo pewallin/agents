@@ -18,7 +18,7 @@ import { attention, emptySession, reduce, shownMessage, type PermissionRequest, 
 import { workFolders } from "./paths";
 import { pageHidden, usePageVisible, whenShown } from "./visibility";
 import { buildTurns, changesOf, keepUnchanged, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, pageName, shortPath, thoughtSummary, toolOutput, webStep, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
-import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, ResultStrip, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
+import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, ResultStrip, StateMark, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
@@ -2785,7 +2785,29 @@ const outputId = decodeURIComponent(location.pathname.match(/^\/output\/([^/]+)/
 /** A coordinator's threads, in the place of a thread beside you (/threads?program=&from=). */
 const threadsOf = location.pathname === "/threads" ? new URLSearchParams(location.search).get("program") : null;
 
-interface ListedThread { task: string; title: string; state: string; session: string | null }
+interface ListedThread { task: string; title: string; state: string; session: string | null; updatedAt?: string | null; resolvedAt?: string | null; agent?: string | null; line?: string | null }
+
+/** An agent's name as the app writes it. */
+function agentLabel(agent: string | null | undefined): string {
+  const names: Record<string, string> = { claude: "Claude Code", codex: "Codex", kiro: "Kiro", opencode: "OpenCode", pi: "Pi", copilot: "Copilot" };
+  return agent ? names[agent] ?? agent : "";
+}
+
+/** A thread's state as its mark draws it (the app's Conversations marks). */
+function markState(state: string): "needs-you" | "done" | "working" | "idle" | "resolved" {
+  return state === "needs-you" || state === "done" || state === "working" || state === "resolved" ? state : "idle";
+}
+
+/** How long ago, as the app's rows say it: "now", "5m", "3h", "2d". */
+function shortAge(at: string | null | undefined): string {
+  const ms = at ? Date.now() - Date.parse(at) : NaN;
+  if (!Number.isFinite(ms)) return "";
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
 /** The list's groups, by where each thread stands (a stopped thread waits for a look too). */
 const THREAD_GROUPS: Array<{ title: string; states: string[] }> = [
   { title: "Needs you", states: ["needs-you"] },
@@ -2806,11 +2828,13 @@ function ThreadsPage({ program }: { program: string }) {
   const from = new URLSearchParams(location.search).get("from");
   const [listing, setListing] = useState<{ name: string; threads: ListedThread[] } | null | undefined>(undefined);
   const [selected, setSelected] = useState<string | null>(from);
+  const [showsResolved, setShowsResolved] = useState(false);
   useEffect(() => {
     hostJson<{ name: string; threads: ListedThread[] }>(`/api/threads?program=${encodeURIComponent(program)}`)
       .then((value) => { setListing(value); document.title = `${value.name} › Threads`; }, () => setListing(null));
   }, [program]);
-  const ordered = useMemo(() => THREAD_GROUPS.flatMap((group) => (listing?.threads ?? []).filter((thread) => group.states.includes(thread.state))), [listing]);
+  const ordered = useMemo(() => THREAD_GROUPS.filter((group) => showsResolved || group.title !== "Resolved")
+    .flatMap((group) => (listing?.threads ?? []).filter((thread) => group.states.includes(thread.state))), [listing, showsResolved]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!ordered.length) return;
@@ -2829,22 +2853,40 @@ function ThreadsPage({ program }: { program: string }) {
   }, [ordered, selected, program]);
   if (listing === undefined) return <Notice>Opening the threads…</Notice>;
   if (listing === null) return <Notice>The threads could not be read.</Notice>;
+  const row = (thread: ListedThread) => {
+    const detail = [agentLabel(thread.agent), thread.line].filter(Boolean).join(" · ");
+    return (
+      <button key={thread.task} type="button" className={`thread-row ${thread.state}${thread.task === selected ? " selected" : ""}`}
+        disabled={!thread.session} title={thread.session ? undefined : "This thread has no session log to show"}
+        onClick={() => { setSelected(thread.task); if (thread.session) location.assign(mirrorAddress(thread, program)); }}>
+        <span className={`thread-mark ${markState(thread.state)}`}><StateMark state={markState(thread.state)} /></span>
+        <span className="thread-text">
+          <span className="thread-line1">
+            <span className="thread-title">{thread.title || thread.task}</span>
+            <span className="thread-age">{shortAge(thread.state === "resolved" ? thread.resolvedAt : thread.updatedAt)}</span>
+          </span>
+          {detail && <span className="thread-detail">{detail}</span>}
+        </span>
+      </button>
+    );
+  };
   return (
     <div className="view threads-page"><div className="main"><div className="scroll"><div className="col">
+      <h1 className="threads-heading">{listing.name} · Threads</h1>
       {THREAD_GROUPS.map((group) => {
         const threads = listing.threads.filter((thread) => group.states.includes(thread.state));
         if (threads.length === 0) return null;
+        // Resolved threads fold at the foot, as Conversations folds them.
+        const folds = group.title === "Resolved";
         return (
           <section key={group.title} className="thread-group">
-            <h2>{group.title}</h2>
-            {threads.map((thread) => (
-              <button key={thread.task} type="button" className={`thread-row${thread.task === selected ? " selected" : ""}`}
-                disabled={!thread.session} title={thread.session ? undefined : "This thread has no session log to show"}
-                onClick={() => { setSelected(thread.task); if (thread.session) location.assign(mirrorAddress(thread, program)); }}>
-                <span className={`thread-mark ${thread.state}`} aria-hidden="true" />
-                <span className="thread-title">{thread.title || thread.task}</span>
-              </button>
-            ))}
+            {folds
+              ? <button type="button" className="thread-fold" aria-expanded={showsResolved} onClick={() => setShowsResolved(!showsResolved)}>
+                  <svg viewBox="0 0 10 10" aria-hidden="true" className={showsResolved ? "open" : undefined}><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                  {group.title} · {threads.length}
+                </button>
+              : <h2>{group.title} · {threads.length}</h2>}
+            {(!folds || showsResolved) && threads.map(row)}
           </section>
         );
       })}
