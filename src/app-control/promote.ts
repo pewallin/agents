@@ -97,7 +97,7 @@ export async function runAgentPromote(command) {
       start: fresh ? "fresh" : notes.coordinatedBefore ? "carry-on" : "promoted",
       steps: [carryOn, memory, nameProgram, nameThreads, elsewhere, transcript],
     });
-    enqueueMessage(program, uuid, text, `Coordinator of “${programName(program)}”`, undefined, { lines: true });
+    enqueueMessage(program, uuid, text, `Coordinator of “${programName(program)}”`, undefined, { lines: true, event: { kind: "start" } });
   }
   // The user who made a running agent coordinator is about to talk to it: the line goes in now
   // if the agent waits at its prompt, not a supervisor tick or two later. An agent that has just
@@ -105,7 +105,7 @@ export async function runAgentPromote(command) {
   const deliveredNow = params.tell && !fresh ? await deliverQueuedNow(program, uuid, record) : undefined;
   if (params.tell || tookOver || adopted.length) ensureSupervisor(program);
   const next = tookOver?.memoryRequested
-    ? `The coordinator before you writes ${tookOver.memory} now and tells you with a ⟢ agents line when it is there. Wait for that line and read the file before you act; do not write ${tookOver.memory} yourself until then.`
+    ? `The coordinator before you writes ${tookOver.memory} now and tells you with an <agents-event> line when it is there. Wait for that line and read the file before you act; do not write ${tookOver.memory} yourself until then.`
     : (carryOn + naming + elsewhere).trim() || undefined;
   const handover = tookOver?.previousSession
     ? `The coordinator before you ran as ${tookOver.previousSession.agent}; its transcript is ${tookOver.previousSession.file}. Read it only where MEMORY.md leaves a gap, and check what either says was done against the repository.`
@@ -243,7 +243,7 @@ export async function runAgentAdopt(command) {
   if (language) setPaneOption(pane, LANGUAGE_OPTION, language);
   noteSubWorker(program, sub, task, command.text);
   // Its pane stays where it is; the line reaches it once it is idle.
-  enqueueMessage(program, ensurePaneUUID(target), `ROLE: worker. The coordinator in pane ${own.paneID} takes you on for task "${task}". Read your brief at ${files.brief} and do the task; read ${workerGuidePath(program)} once: how workers work here. ${languageSentence(language)} Report with: ${shellQuote(files.cli)} agent report "<one-line status>" --done (or --blocked); ask your coordinator with ${shellQuote(files.cli)} agent ask "<question>", the user with agent ask --user "<question>".`, `You are a worker on task "${task}"`);
+  enqueueMessage(program, ensurePaneUUID(target), `ROLE: worker. The coordinator in pane ${own.paneID} takes you on for task "${task}". Read your brief at ${files.brief} and do the task; read ${workerGuidePath(program)} once: how workers work here. ${languageSentence(language)} Report with: ${shellQuote(files.cli)} agent report "<one-line status>" --done (or --blocked); ask your coordinator with ${shellQuote(files.cli)} agent ask "<question>", the user with agent ask --user "<question>".`, `You are a worker on task "${task}"`, undefined, { event: { kind: "start", thread: task } });
   const background = await inheritCoordinatorBackground(own.paneID, pane);
   ensureSupervisor(program);
   notifyApp(own.sessionName);
@@ -317,4 +317,4 @@ export function isRespawning(program, task) {
 
 // Reminders and watches. They live as files in <program>/.watches, so the supervisor (which
 // stays alive while there are any) can act on them after a restart, and each ends with one
-// self-contained ⟢ agents line for the agent that asked.
+// self-contained <agents-event> line for the agent that asked.

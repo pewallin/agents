@@ -4,7 +4,7 @@ import { basename, join } from "path";
 import { exec } from "./shell.js";
 import { shellCommand } from "./command-words.js";
 import { kiroContinuedSession, kiroHistoryForCwd, kiroSessionTranscript } from "./kiro-sessions.js";
-import { DELIVERY_MARKER } from "./delivery-marker.js";
+import { ENVELOPE_OPEN, parseEnvelopeLine } from "./agent-envelope.js";
 
 export interface AgentSessionHistoryItem {
   sessionId: string;
@@ -692,9 +692,12 @@ export function retitledSharedOpenings(items: AgentSessionHistoryItem[]): AgentS
 // A conversation that opened with a line the agents CLI typed into the agent's prompt (a
 // coordinator's or a worker's wake) was started by an agent; its title is what the line says.
 function withDeliveryLineTitle(item: AgentSessionHistoryItem): AgentSessionHistoryItem {
-  if (!item.title.startsWith(DELIVERY_MARKER)) return item;
-  const said = item.title.slice(DELIVERY_MARKER.length).replace(/^\s*·\s*/, "").replace(/\s*·\s*read\s.*$/, "").trim();
-  return { ...item, title: said || item.title, startedByAgent: true };
+  // The envelope is a wrapped prompt, unwrapped already: what is left is "<summary> · read <file>".
+  if (item.startedByAgent && / · read \S+$/.test(item.title)) return { ...item, title: item.title.replace(/ · read \S+$/, "").trim() || item.title };
+  if (!item.title.trimStart().startsWith(ENVELOPE_OPEN)) return item;
+  // A title cut short may end inside the envelope's opening: it says nothing then.
+  const said = parseEnvelopeLine(item.title)?.summary;
+  return { ...item, title: said || "Message from agents", startedByAgent: true };
 }
 
 // The short title of one made from a prompt is its first sentence, as a list shows a subject.

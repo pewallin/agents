@@ -173,7 +173,7 @@ export function processWatches(program) {
   const watches = readWatches(program);
   for (const watch of watches) {
     const finish = (line, summary) => {
-      enqueueMessage(program, watch.target, line, summary);
+      enqueueMessage(program, watch.target, line, summary, undefined, { event: { kind: "note" } });
       removeWatch(program, watch.id);
       supervisorLog(`${watch.id} done`);
     };

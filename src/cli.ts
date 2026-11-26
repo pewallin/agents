@@ -698,6 +698,27 @@ program
     }
   });
 
+// A coordinator's conversation with the user (src/app-control/conversation.ts): what its pane
+// shows. Works over SSH like `agents threads`.
+program
+  .command("thread")
+  .description("Show a coordinator's conversation with the user")
+  .requiredOption("--program <dir>", "The program folder")
+  .option("--after <id>", "Only entries after this one")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const { readThread } = await import("./app-control/conversation.js");
+    const entries = readThread(opts.program, { after: opts.after, withReplies: true });
+    if (opts.json || !process.stdout.isTTY) {
+      console.log(JSON.stringify({ program: opts.program, entries }, null, 2));
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.kind === "message") console.log(`> ${entry.text}`);
+      else console.log(`${entry.reply ?? ""}\n  · ${entry.how.start === "fresh" ? "fresh" : "continued"}${typeof entry.ms === "number" ? `, ${Math.round(entry.ms / 1000)} s` : ""}`);
+    }
+  });
+
 // What an ACP session showed, from the session log its pane's host wrote (src/session-log.ts):
 // one session, the sessions it goes on from (--chain), or a worker thread's sessions in order
 // (--task, from its sessions.jsonl). Works over SSH like `agents threads`.

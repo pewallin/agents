@@ -23,6 +23,7 @@ import { followOffers } from "./steer.js";
 import { markResolved, markUnresolved, recordCoordinatorSession, recordTaskSession, reopenedAfterDone, resolvesOnClose, threadsEpoch } from "./threads.js";
 import { agentStatuses, cliVersion, readFileOr, runningSupervisor, supervisorBeatFile } from "./supervisor-control.js";
 import { processWatches, readWatches } from "./watch.js";
+import { startFreshRunIfCold } from "./fresh-run.js";
 
 // Typing into a prompt the user is writing in would mix the line into their draft and send both.
 // The app knows when the user last typed into a pane and whether that may still sit unsent.
@@ -280,7 +281,7 @@ export async function runSupervisor(command) {
         } else if (waitsOnChoice && !tracked.waitsOnChoice && record.parent) {
           const pane = panes.get(record.paneID);
           const choice = screenState(pane?.text) === "choice" ? screenChoiceText(pane.text) : undefined;
-          enqueueMessage(program, record.parent, waitsLine(record.task, record.paneID, choice), `Worker ${record.task} waits for a permission`);
+          enqueueMessage(program, record.parent, waitsLine(record.task, record.paneID, choice), `Worker ${record.task} waits for a permission`, undefined, { event: { kind: "wake", thread: record.task } });
           supervisorLog(`${record.task} waits on a choice`);
         }
         tracked.waitsOnChoice = waitsOnChoice;
@@ -313,7 +314,7 @@ export async function runSupervisor(command) {
               noteForCoordinator(program, record.parent, record.task, noteLine(program, record.task, "stopped", preview, { done }));
               supervisorLog(`${record.task} stopped after a turn the user drove; noted for its coordinator`);
             } else {
-              enqueueMessage(program, record.parent, wakeLine(program, record.task, "stopped", preview, undefined, { done }), wakeSummary(record.task, "stopped"));
+              enqueueMessage(program, record.parent, wakeLine(program, record.task, "stopped", preview, undefined, { done }), wakeSummary(record.task, "stopped"), undefined, { event: { kind: "wake", thread: record.task } });
               supervisorLog(`${record.task} stopped without a report`);
             }
             notified[record.task] = episode;
@@ -344,7 +345,7 @@ export async function runSupervisor(command) {
       const inputAt = Math.max(tracked.inputAt || 0, deliveredAt(program, tracked.uuid));
       const unfinished = !done || inputAt > (Date.parse(done.at) || 0);
       if (!closedOnPurpose && unfinished && tracked.parent) {
-        enqueueMessage(program, tracked.parent, wakeLine(program, tracked.task, "closed", report.state || "started", undefined, { done }), wakeSummary(tracked.task, "closed"));
+        enqueueMessage(program, tracked.parent, wakeLine(program, tracked.task, "closed", report.state || "started", undefined, { done }), wakeSummary(tracked.task, "closed"), undefined, { event: { kind: "wake", thread: tracked.task } });
         supervisorLog(`${tracked.task} closed`);
       }
       if (!closedOnPurpose) {
@@ -411,6 +412,11 @@ export async function runSupervisor(command) {
       }
       if (waiting) {
         noteDelivery(program, uuid, record.paneID, { queued: messages.length, waiting }, now);
+        continue;
+      }
+      // A coordinator whose session went cold starts this run fresh; the lines wait for it.
+      if (record.role === "coordinator" && startFreshRunIfCold(program, record, statuses.get(record.paneID), supervisorLog)) {
+        noteDelivery(program, uuid, record.paneID, { queued: messages.length + 1, waiting: "the coordinator starts a fresh session" }, now);
         continue;
       }
       // Claimed one by one: a promote typing them in itself may have taken some.

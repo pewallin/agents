@@ -15,7 +15,7 @@ import { readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { appInputState, deliveredAt } from "./supervisor.js";
 import { readFileOr } from "./supervisor-control.js";
 import { clockText } from "./watch.js";
-import { DELIVERY_MARKER } from "../delivery-marker.js";
+import { envelopeBlock, envelopeLine } from "../agent-envelope.js";
 
 // A queued line carries its message and a few words on what it is about: the agent's prompt gets
 // only those words and the file the message waits in (deliveryLine).
@@ -23,12 +23,15 @@ import { DELIVERY_MARKER } from "../delivery-marker.js";
 // starts with the time, so lines go out in the order they came.
 // A message is one line, but for one written as Markdown (`lines`: a coordinator's start), whose
 // paragraphs and lists stay: the prompt only names the file that holds it.
-export function enqueueMessage(program, targetUUID, text, summary, id = newMessageID(), { lines = false } = {}) {
+// `event` is what its envelope says of it (agent-envelope.ts): kind, from, words, thread and
+// replyTo; a wake from the CLI by default.
+export function enqueueMessage(program, targetUUID, text, summary, id = newMessageID(), { lines = false, event = {}, at = undefined } = {}) {
   const dir = path.join(program, ".queue", targetUUID);
   fs.mkdirSync(dir, { recursive: true });
   const body = lines ? String(text || "").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim() : oneLine(text, 2000);
-  const entry = { id, summary: oneLine(summary, SUMMARY_LIMIT), text: body };
-  writeFileAtomic(path.join(dir, `${Date.now()}-${id}.txt`), `${JSON.stringify(entry)}\n`);
+  const entry = { id, summary: oneLine(summary, SUMMARY_LIMIT), text: body, event: messageEvent(event) };
+  // `at` orders it among the queued lines (a fresh run's start goes before the wake that came).
+  writeFileAtomic(path.join(dir, `${at ?? Date.now()}-${id}.txt`), `${JSON.stringify(entry)}\n`);
   return id;
 }
 
@@ -37,10 +40,10 @@ export function enqueueMessage(program, targetUUID, text, summary, id = newMessa
 // (typeQueuedLines).
 export const RIDER_SUFFIX = ".info";
 
-export function enqueueRider(program, targetUUID, text, summary, id) {
+export function enqueueRider(program, targetUUID, text, summary, id, event = {}) {
   const dir = path.join(program, ".queue", targetUUID);
   fs.mkdirSync(dir, { recursive: true });
-  const entry = { id, summary: oneLine(summary, SUMMARY_LIMIT), text: oneLine(text, 2000) };
+  const entry = { id, summary: oneLine(summary, SUMMARY_LIMIT), text: oneLine(text, 2000), event: messageEvent({ kind: "note", ...event }) };
   writeFileAtomic(path.join(dir, `${Date.now()}-${id}${RIDER_SUFFIX}`), `${JSON.stringify(entry)}\n`);
   return id;
 }
@@ -60,19 +63,35 @@ export function readQueued(file) {
   try {
     const entry = JSON.parse(raw);
     if (entry && typeof entry.text === "string" && entry.text.trim()) {
-      return { id: entry.id, summary: oneLine(entry.summary || entry.text, SUMMARY_LIMIT), text: entry.text.trim() };
+      return { id: entry.id, summary: oneLine(entry.summary || entry.text, SUMMARY_LIMIT), text: entry.text.trim(), event: messageEvent(entry.event) };
     }
   } catch {
     // The bare line.
   }
   const text = raw.replace(/^\[agents\]\s*/, "");
-  return { summary: oneLine(text, SUMMARY_LIMIT), text };
+  return { summary: oneLine(text, SUMMARY_LIMIT), text, event: messageEvent() };
+}
+
+// What an envelope says of a message: the CLI's own wake unless told otherwise. Only the user's
+// own words are verbatim; anything an agent wrote, or the CLI wrote about it, is data.
+export function messageEvent(event = {}) {
+  const from = typeof event.from === "string" && event.from ? event.from : "agents";
+  const kind = typeof event.kind === "string" && event.kind ? event.kind : "wake";
+  // The CLI's own protocol text (a role and how to work) is neither the user's nor another agent's.
+  const words = from === "user" ? "verbatim" : kind === "start" && from === "agents" ? undefined : "data";
+  return {
+    kind,
+    from,
+    ...(words ? { words } : {}),
+    ...(typeof event.thread === "string" && event.thread ? { thread: event.thread } : {}),
+    ...(typeof event.replyTo === "string" && event.replyTo ? { replyTo: event.replyTo } : {}),
+  };
 }
 
 // What a line typed into an agent's prompt is: one short row the user can read at a glance, that
-// says what came and where the whole of it is. The marker says the line is the app's, not the
-// user's; the messages themselves wait in a file under <program>/messages/.
-export { DELIVERY_MARKER };
+// says what came and where the whole of it is, in its envelope (agent-envelope.ts): the agent and
+// the app tell it from the user's own typing, and the user's words from another agent's. The
+// messages themselves wait in a file under <program>/messages/, each in an envelope of its own.
 export const SUMMARY_LIMIT = 80;
 export const MESSAGE_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -81,12 +100,26 @@ export function deliveryLine(program, entries, reminder) {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*$/, "");
   // The app knows the line by this name (TerminalAgentsMessageScanner): <stamp>-<4 hex>.md.
   const file = path.join(dir, `${stamp}-${crypto.randomBytes(2).toString("hex")}.md`);
-  const body = [...entries.map(entry => entry.text), ...(reminder ? [reminder] : [])].join("\n\n");
+  const events = entries.map(entry => ({ ...messageEvent(entry.event), ...(entry.id ? { id: entry.id } : {}) }));
+  const body = [
+    ...entries.map((entry, index) => envelopeBlock(events[index], entry.text)),
+    ...(reminder ? [envelopeBlock({ kind: "note", from: "agents" }, reminder)] : []),
+  ].join("\n\n");
   writeFileAtomic(file, `${body}\n`);
   pruneMessages(dir);
   const joined = entries.map(entry => entry.summary).join("; ");
   const summary = entries.length === 1 || joined.length <= SUMMARY_LIMIT ? joined : `${entries.length} messages`;
-  return `${DELIVERY_MARKER} · ${summary} · read ${file}`;
+  // One message says what it is; several say how many, and verbatim only when all are the user's.
+  const line = entries.length === 1
+    ? events[0]
+    : {
+      kind: "messages",
+      count: entries.length,
+      from: [...new Set(events.map(event => event.from))].length === 1 ? events[0].from : "agents",
+      words: events.every(event => event.words === "verbatim") ? "verbatim" : "data",
+      ...([...new Set(events.map(event => event.thread))].length === 1 && events[0].thread ? { thread: events[0].thread } : {}),
+    };
+  return envelopeLine(line, summary, file);
 }
 
 export function pruneMessages(dir) {
@@ -241,7 +274,7 @@ export const NOTE_SUFFIX = ".note";
 export function noteForCoordinator(program, targetUUID, task, text) {
   const dir = path.join(program, ".queue", targetUUID);
   fs.mkdirSync(dir, { recursive: true });
-  const entry = { task, at: new Date().toISOString(), summary: `Worker ${task} worked with the user`, text: oneLine(text, 2000) };
+  const entry = { task, at: new Date().toISOString(), summary: `Worker ${task} worked with the user`, text: oneLine(text, 2000), event: messageEvent({ kind: "note", thread: task }) };
   writeFileAtomic(path.join(dir, `${task}${NOTE_SUFFIX}`), `${JSON.stringify(entry)}\n`);
   writeStatusFile(program);
 }

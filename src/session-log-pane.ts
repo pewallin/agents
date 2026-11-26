@@ -52,3 +52,17 @@ export function paneSessionLog(paneId: string): { origin: (sessionId: string) =>
     onSession: (sessionId) => setPaneOption(paneId, SESSION_LOG_OPTION, sessionId),
   };
 }
+
+/** The program a pane coordinates now (@agents_role coordinator, @agents_program), read at most
+ *  every 10 s: a promote makes a pane coordinator while its host runs. */
+export function paneCoordinatorProgram(paneId: string): () => string | undefined {
+  let checkedAt = 0;
+  let program: string | undefined;
+  return () => {
+    if (Date.now() - checkedAt > 10_000) {
+      checkedAt = Date.now();
+      program = paneOption(paneId, "@agents_role") === "coordinator" ? paneOption(paneId, "@agents_program") : undefined;
+    }
+    return program;
+  };
+}

@@ -130,7 +130,7 @@ export const MCP_TOOLS = [
   },
   {
     name: "ask",
-    description: "Ask your coordinator a question and wait for its answer, so you go on in the same turn. When no answer comes in time (answered: false), the question stays open and the answer arrives in your prompt later as a line that starts with ⟢ agents. With to_user, the question is for the person you work for: it does not wait; end your turn, they answer in your pane.",
+    description: "Ask your coordinator a question and wait for its answer, so you go on in the same turn. When no answer comes in time (answered: false), the question stays open and the answer arrives in your prompt later as an <agents-event> line. With to_user, the question is for the person you work for: it does not wait; end your turn, they answer in your pane.",
     inputSchema: {
       type: "object",
       properties: {

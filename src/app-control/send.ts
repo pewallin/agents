@@ -257,7 +257,7 @@ export async function runAgentSend(command) {
 
     // Information only: it waits for the next line that goes to the agent and rides along.
     if (!wake) {
-      enqueueRider(program, targetUUID, line, `Note from ${senderName(own)}`, id);
+      enqueueRider(program, targetUUID, line, `Note from ${senderName(own)}`, id, { from: senderFrom(own), thread: target.task || own.task });
       const riding = writeMessageRecord(program, record, "queued", `rides along with the next line to pane ${target.paneID}`, { reason: undefined });
       return {
         id: requestID("cli"),
@@ -267,7 +267,7 @@ export async function runAgentSend(command) {
     }
 
     const summary = question ? `Answer from ${senderName(own)}` : late ? `Late reply from ${senderName(own)}` : `Message from ${senderName(own)}`;
-    enqueueMessage(program, targetUUID, line, summary, id);
+    enqueueMessage(program, targetUUID, line, summary, id, { event: { kind: question ? "answer" : "message", from: senderFrom(own), thread: target.task || own.task, replyTo: question?.id || late?.id || repliesTo } });
     const queuedRecord = writeMessageRecord(program, record, "queued", `for the prompt of pane ${target.paneID}`, { reason: undefined });
     answered("prompt");
     ensureSupervisor(program);
@@ -332,6 +332,14 @@ export function editDistance(a, b) {
     }
   }
   return row[b.length];
+}
+
+// Who a message is from, as its envelope says: the coordinator or a worker by its task. The
+// user is only ever named by the app (`--from user`).
+export function senderFrom(own) {
+  if (own.fromUser) return "user";
+  if (own.role === "coordinator") return "coordinator";
+  return own.task ? `worker:${own.task}` : "agents";
 }
 
 export function senderName(own) {

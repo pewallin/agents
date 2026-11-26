@@ -1,7 +1,7 @@
 // Coordinators and workers in the ACP view: what the app says of the pane's role and its
 // workers (pushed into the page like the look), and the lines the coordination protocol puts into
 // a conversation, recognised so the view shows them as what they are rather than as your words:
-//   ⟢ agents · <summary> · read <file>                       a wake-up or message (agents-app-control)
+//   <agents-event kind … from … words …><summary> · read <file></agents-event>   a wake-up or message (agents-app-control)
 //   ROLE: worker. You were started by a coordinator for task "<task>". Read your brief at <file>…
 //   <cli> agent spawn|send|report|close …                     the agent's own coordination commands
 import { create } from "zustand";
@@ -111,17 +111,31 @@ export function workerTitle(coordination: Coordination, task: string): string {
   return workerNamed(coordination, task)?.threadTitle ?? threadNamed(coordination, task)?.title ?? task;
 }
 
-const MARKER = "⟢ agents · ";
+const OPEN = "<agents-event ";
+const CLOSE = "</agents-event>";
 const READ = " · read ";
 
-/** A wake-up or message line: its summary and the file with the whole of it. */
-export function parseDelivery(text: string): { summary: string; file?: string } | null {
+/** A wake-up or message line in its envelope (the agents CLI's agent-envelope.ts): its summary,
+ *  the file with the whole of it, who it is from and whether it holds the user's own words. */
+export function parseDelivery(text: string): { summary: string; file?: string; kind?: string; from?: string; words?: string; thread?: string } | null {
   const trimmed = text.trim();
-  if (!trimmed.startsWith(MARKER)) return null;
-  const rest = trimmed.slice(MARKER.length);
-  const at = rest.lastIndexOf(READ);
-  if (at < 0) return { summary: rest.split("\n")[0] };
-  return { summary: rest.slice(0, at).trim(), file: rest.slice(at + READ.length).split(/\s/)[0] };
+  if (!trimmed.startsWith(OPEN)) return null;
+  const opening = trimmed.indexOf(">");
+  if (opening < 0) return null;
+  const attributes: Record<string, string> = {};
+  for (const match of trimmed.slice(OPEN.length, opening).matchAll(/([a-z-]+)="([^"]*)"/g)) attributes[match[1]] = match[2];
+  if (!attributes.kind) return null;
+  const end = trimmed.indexOf(CLOSE, opening);
+  const body = trimmed.slice(opening + 1, end < 0 ? undefined : end).split("\n")[0];
+  const at = body.lastIndexOf(READ);
+  const said = { kind: attributes.kind, ...(attributes.from ? { from: attributes.from } : {}), ...(attributes.words ? { words: attributes.words } : {}), ...(attributes.thread ? { thread: attributes.thread } : {}) };
+  if (at < 0) return { summary: body.trim(), ...said };
+  return { summary: body.slice(0, at).trim(), file: body.slice(at + READ.length).split(/\s/)[0], ...said };
+}
+
+/** A message file as the view shows it: each message's text, its envelope's lines left out. */
+export function messageFileText(text: string): string {
+  return text.split("\n").filter((line) => !/^<\/?agents-event\b[^>]*>$/.test(line.trim())).join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** The tasks a summary names ("Worker ios-tests is done; Worker ui is blocked"). */

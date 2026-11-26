@@ -1,0 +1,116 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import WebSocket from "ws";
+import { startAcpHost, type AcpHost } from "./acp-host.js";
+import { readThread } from "./app-control/conversation.js";
+
+// The stand-in agent of acp-rest.test.ts.
+const AGENT = (dir: string) => `
+const fs = require("node:fs");
+const store = ${JSON.stringify(join(dir, "store.json"))};
+const notes = ${JSON.stringify(join(dir, "agent-notes.txt"))};
+fs.appendFileSync(notes, "start\\n");
+const read = () => { try { return JSON.parse(fs.readFileSync(store, "utf8")); } catch { return {}; } };
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const update = (sessionId, u) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: u } });
+const options = (mode) => [{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: mode, options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }] }];
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.method) fs.appendFileSync(notes, m.method + (m.params && m.params.value ? " " + m.params.value : "") + "\\n");
+  const sessions = read();
+  if (m.method === "initialize") send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+  else if (m.method === "session/new") { sessions["fake-1"] = []; fs.writeFileSync(store, JSON.stringify(sessions)); send({ jsonrpc: "2.0", id: m.id, result: { sessionId: "fake-1", configOptions: options("default") } }); }
+  else if (m.method === "session/load") {
+    for (const [user, agent] of sessions[m.params.sessionId] || []) {
+      update(m.params.sessionId, { sessionUpdate: "user_message_chunk", content: { type: "text", text: user } });
+      update(m.params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: agent } });
+    }
+    send({ jsonrpc: "2.0", id: m.id, result: { configOptions: options("default") } });
+  } else if (m.method === "session/set_config_option") send({ jsonrpc: "2.0", id: m.id, result: { configOptions: options(m.params.value) } });
+  else if (m.method === "session/prompt") {
+    const text = m.params.prompt[0].text;
+    (sessions[m.params.sessionId] = sessions[m.params.sessionId] || []).push([text, "Hello"]);
+    fs.writeFileSync(store, JSON.stringify(sessions));
+    update(m.params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello" } });
+    send({ jsonrpc: "2.0", id: m.id, result: { stopReason: "end_turn" } });
+  } else if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+});
+`;
+
+const until = async (check: () => boolean | Promise<boolean>, ms = 8_000) => {
+  const deadline = Date.now() + ms;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("timed out");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+};
+
+
+describe("a coordinator's pane", () => {
+  let dir: string;
+  let program: string;
+  let host: AcpHost | undefined;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "acp-coordinator-"));
+    program = join(dir, "program");
+    mkdirSync(join(dir, "web"), { recursive: true });
+    mkdirSync(program, { recursive: true });
+    writeFileSync(join(dir, "web", "index.html"), "<!doctype html>");
+  });
+  afterEach(async () => {
+    await host?.close();
+    host = undefined;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the user's messages and its answers apart from its sessions, and a view shows that conversation", async () => {
+    host = await startAcpHost({
+      paneId: "%8", agent: { id: "test-acp", name: "Test" }, runtimeTempDir: join(dir, "rt"), webRoot: join(dir, "web"), cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", AGENT(dir)], env: process.env },
+      sessionLog: { harness: "test", root: join(dir, "sessions") },
+      coordinatorProgram: () => program,
+      historyAgent: "claude",
+    });
+    const h = host;
+    await h.startHostedSession();
+    const ws = new WebSocket(`${h.url.replace("http", "ws")}/acp?token=${encodeURIComponent(h.token)}`, { headers: { Origin: h.url } });
+    const got: Array<Record<string, unknown>> = [];
+    ws.on("message", (data) => got.push(JSON.parse(String(data))));
+    await new Promise((resolve) => ws.once("open", resolve));
+    const ask = async (id: number, method: string, params: Record<string, unknown>) => {
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+      await until(() => got.some((m) => m.id === id && m.method === undefined));
+    };
+    await ask(1, "initialize", { protocolVersion: 1 });
+    await ask(2, "session/load", { sessionId: "fake-1", cwd: dir, mcpServers: [] });
+    await ask(3, "session/prompt", { sessionId: "fake-1", prompt: [{ type: "text", text: "Fix the login" }] });
+    // A wake the CLI typed is no message of the user's; its turn says what woke it.
+    await h.hostedPrompt('<agents-event kind="wake" thread="login" from="agents" words="data">Worker login is done · read /p/m.md</agents-event>');
+    const thread = readThread(program);
+    expect(thread.map((entry) => entry.kind)).toEqual(["message", "turn", "turn"]);
+    expect(thread[0]).toMatchObject({ from: "user", via: "pane", text: "Fix the login" });
+    expect(thread[1]).toMatchObject({ agent: "claude", session: "fake-1", how: { start: "continue" }, reply: "Hello" });
+    expect(thread[2]).toMatchObject({ wokeBy: "Worker login is done", reply: "Hello" });
+    ws.close();
+
+    // A view that loads the pane again is given the conversation.
+    const again = new WebSocket(`${h.url.replace("http", "ws")}/acp?token=${encodeURIComponent(h.token)}`, { headers: { Origin: h.url } });
+    const seen: Array<Record<string, unknown>> = [];
+    again.on("message", (data) => seen.push(JSON.parse(String(data))));
+    await new Promise((resolve) => again.once("open", resolve));
+    again.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+    again.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/load", params: { sessionId: "fake-1", cwd: dir, mcpServers: [] } }));
+    await until(() => seen.some((m) => m.id === 2 && m.method === undefined));
+    const texts = seen.filter((m) => m.method === "session/update").map((m) => (m.params as { update: { sessionUpdate: string; content?: { text?: string } } }).update)
+      .map((update) => `${update.sessionUpdate}:${update.content?.text ?? ""}`);
+    expect(texts).toEqual([
+      "user_message_chunk:Fix the login",
+      "agent_message_chunk:Hello",
+      'user_message_chunk:<agents-event kind="wake" from="agents" words="data">Worker login is done</agents-event>',
+      "agent_message_chunk:Hello",
+    ]);
+    again.close();
+  }, 20_000);
+});

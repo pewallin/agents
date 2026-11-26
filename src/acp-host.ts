@@ -25,7 +25,9 @@ import { AcpCompaction, compactionWay } from "./acp-compaction.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { TerminalReader } from "./terminal-question.js";
-import { markSessionLogInTui, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions } from "./session-log.js";
+import { appendThreadMessage, appendThreadTurn, readThread, takeNextRun, threadUpdates } from "./app-control/conversation.js";
+import { parseEnvelopeLine } from "./agent-envelope.js";
+import { markSessionLogInTui, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions, type SessionLogTurn } from "./session-log.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween, workRoots } from "./acp-peek.js";
 
@@ -110,7 +112,10 @@ export interface AcpHostOptions {
   rest?: { idleMs: number; /** Called as the agent is about to stop; what it returns, once it has. */ onRest?: (sessionId: string) => (() => void) | void };
   /** Writes the session logs of what the views and the host's own session draw (session-log.ts):
    *  the agent's harness name, and where a session's chain goes on from. */
-  sessionLog?: Omit<SessionLogTapOptions, "cwd" | "log">;
+  sessionLog?: Omit<SessionLogTapOptions, "cwd" | "log" | "onTurn">;
+  /** The program the pane coordinates now, if it does: the user's prompts from a view and each
+   *  turn's answer go into its conversation (<program>/thread.jsonl, conversation.ts). */
+  coordinatorProgram?: () => string | undefined;
   /** The pane's conversations; defaults to `agents history` for the pane (paneHistory). */
   history?: (limit: number) => Promise<PaneHistory>;
 }
@@ -399,7 +404,44 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const plan = new AcpPlanRecorder(acpHostPlanPath(metadataPath));
   const promptPath = acpHostPromptPath(metadataPath);
   const reviews = new ReviewStore();
-  const sessionLog = options.sessionLog ? new SessionLogTap({ ...options.sessionLog, cwd: options.cwd, log }) : undefined;
+  // A coordinator's pane: its conversation with the user is kept apart from its sessions.
+  const coordinatorTurn = (turn: SessionLogTurn) => {
+    const program = options.coordinatorProgram?.();
+    if (!program) return;
+    const woke = parseEnvelopeLine(turn.prompt);
+    appendThreadTurn(program, {
+      startedAt: turn.startedAt.toISOString(),
+      ...(options.historyAgent ? { agent: options.historyAgent } : {}),
+      ...(turn.config.model ? { model: turn.config.model } : {}),
+      session: turn.sessionId,
+      how: takeNextRun(program) ?? { start: "continue" },
+      ...(woke ? { wokeBy: woke.summary } : {}),
+      ms: turn.ms,
+      steps: turn.steps,
+      ...(turn.reply ? { reply: turn.reply } : {}),
+    });
+    // A view that loads the pane again shows the conversation, this turn folded in it.
+    const history = conversationHistory(turn.sessionId);
+    if (history && hosted?.sessionId === turn.sessionId) hosted.replaceHistory(history);
+  };
+  /** A coordinator's conversation as the session updates of `sessionId` a view draws. */
+  const conversationHistory = (sessionId: string): string[] | undefined => {
+    const program = options.coordinatorProgram?.();
+    if (!program) return undefined;
+    return threadUpdates(readThread(program, { withReplies: true }))
+      .map((update) => JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } }));
+  };
+  const sessionLog = options.sessionLog ? new SessionLogTap({ ...options.sessionLog, cwd: options.cwd, log, onTurn: (turn) => { try { coordinatorTurn(turn); } catch (error) { log(`the coordinator's conversation: ${error instanceof Error ? error.message : String(error)}`); } } }) : undefined;
+  /** The user's prompt from a view of a coordinator's pane, as a message of its conversation; a
+   *  line the CLI typed (an envelope) is a wake, not the user's. */
+  const userPrompt = (line: string) => {
+    const program = options.coordinatorProgram?.();
+    if (!program) return;
+    const prompt = (parseJson(line)?.params as { prompt?: unknown } | undefined)?.prompt;
+    const text = Array.isArray(prompt) ? prompt.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n").trim() : "";
+    if (!text || parseEnvelopeLine(text)) return;
+    try { appendThreadMessage(program, { text, via: "pane" }); } catch (error) { log(`the coordinator's conversation: ${error instanceof Error ? error.message : String(error)}`); }
+  };
   /** The pane's screen, read only when it changed (the view asks every second or so). */
   const terminal = new TerminalReader(options.paneId);
   const events = new Set<ServerResponse>();
@@ -645,7 +687,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       return;
     }
     if (connection.live) {
-      if (isPromptLine(line)) recordViewPrompt(promptPath);
+      if (isPromptLine(line)) { recordViewPrompt(promptPath); userPrompt(line); }
       connection.live.fromView(line);
       return;
     }
@@ -683,7 +725,8 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     const log = readSessionLog(sessionId, { root: options.sessionLog.root });
     if (!meta?.opened || !log) return undefined;
     const notification = (update: Record<string, unknown>) => JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } });
-    const history = sessionLogUpdates(log.lines, log.path).map(notification);
+    // A coordinator's pane shows its conversation, not its session.
+    const history = conversationHistory(sessionId) ?? sessionLogUpdates(log.lines, log.path).map(notification);
     if (Array.isArray(meta.commands)) history.push(notification({ sessionUpdate: "available_commands_update", availableCommands: meta.commands }));
     if (meta.usage) history.push(notification({ sessionUpdate: "usage_update", ...meta.usage }));
     return { history, result: meta.opened };
@@ -732,7 +775,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       if (connection) {
         connection.live = session.attach(connection.send, undefined, connection.synced === true);
         for (const line of connection.pending.splice(0)) {
-          if (isPromptLine(line)) recordViewPrompt(promptPath);
+          if (isPromptLine(line)) { recordViewPrompt(promptPath); userPrompt(line); }
           connection.live.fromView(line);
         }
       }
@@ -889,7 +932,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
             }
             view.sessions.open(loading.sessionId);
           }
-          if (isPromptLine(line)) recordViewPrompt(promptPath);
+          if (isPromptLine(line)) { recordViewPrompt(promptPath); userPrompt(line); }
           sessionLog?.clientLine(`view-${client}`, line);
           activity.clientLine(client, line);
           activityChanged();
@@ -986,7 +1029,11 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       sessionLog?.streamGone(hostedStream);
     });
     hosted = session;
-    return await session.start(options.cwd, existing, resume);
+    const id = await session.start(options.cwd, existing, resume);
+    // A coordinator's pane shows its conversation once it has one, not the session's own replay.
+    const conversation = resume ? undefined : conversationHistory(id);
+    if (conversation && conversation.length > 0) session.replaceHistory(conversation);
+    return id;
   }
 
   return {

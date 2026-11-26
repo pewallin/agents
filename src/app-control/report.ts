@@ -54,7 +54,7 @@ export async function runAgentReport(command) {
       questionId = recordQuestion(record.program, record, line, false);
       queuedFor = "parent";
     } else {
-      enqueueMessage(record.program, record.parent, wakeLine(record.program, record.task, state, line, record.parent), wakeSummary(record.task, state));
+      enqueueMessage(record.program, record.parent, wakeLine(record.program, record.task, state, line, record.parent), wakeSummary(record.task, state), undefined, { event: { kind: "wake", thread: record.task } });
       queuedFor = "parent";
     }
     ensureSupervisor(record.program);

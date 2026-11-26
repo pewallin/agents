@@ -401,3 +401,14 @@ worker) needs no agent process to be shown:
 Codex shares its thread with its TUI live through the pane's app-server and does not rest: its
 pane's agent is the TUI. Pi and Copilot stay as they were (Pi unchecked here, Copilot cannot load a
 session).
+
+## A coordinator's pane (2026-11-26)
+
+When the pane coordinates (`@agents_role coordinator` with `@agents_program`, read every 10 s), the
+host keeps the coordinator's conversation apart from its sessions (agents-next
+`docs/coordinator-threads.md`, "The coordinator's conversation"): a prompt from a view is a
+`message` of `<program>/thread.jsonl` unless it is an `<agents-event>` the CLI typed, and each
+prompt's turn end writes a `turn` with the turn's steps and its last message as the answer
+(`SessionLogTap` `onTurn`). A view's load of the host's session is given that conversation instead
+of the session's own history (`threadUpdates`): resting from the log, after a wake, and once a
+turn has ended. A Codex coordinator (its prompts go to its TUI) is not covered.

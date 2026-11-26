@@ -190,6 +190,12 @@ export class HostedSession {
     }
   }
 
+  /** What a view that loads the session later is given instead of the session's own history (a
+   *  coordinator's pane shows its conversation). The view attached now goes on as it is. */
+  replaceHistory(lines: string[]): void {
+    this.history.splice(0, this.history.length, ...lines);
+  }
+
   /** Prompts the agent with `text`, as typed into its TUI; resolves when its turn ends. */
   async prompt(text: string): Promise<string | undefined> {
     if (!this.sessionId) throw new Error("the session has not started");

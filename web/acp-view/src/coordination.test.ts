@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { describeAgentEvent, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, threadNamed, workerInPane, workerState, workerTitle } from "./coordination";
+import { describeAgentEvent, messageFileText, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, threadNamed, workerInPane, workerState, workerTitle } from "./coordination";
 
 describe("coordination lines", () => {
   it("reads a wake-up line", () => {
-    const line = "⟢ agents · Worker ios-tests is done; Worker ui is blocked · read /Users/p/.agents/programs/app/messages/20261107T014200-ab12.md";
-    expect(parseDelivery(line)).toEqual({ summary: "Worker ios-tests is done; Worker ui is blocked", file: "/Users/p/.agents/programs/app/messages/20261107T014200-ab12.md" });
+    const line = '<agents-event kind="messages" count="2" from="agents" words="data">Worker ios-tests is done; Worker ui is blocked · read /Users/p/.agents/programs/app/messages/20261107T014200-ab12.md</agents-event>';
+    expect(parseDelivery(line)).toEqual({ kind: "messages", from: "agents", words: "data", summary: "Worker ios-tests is done; Worker ui is blocked", file: "/Users/p/.agents/programs/app/messages/20261107T014200-ab12.md" });
+    expect(parseDelivery('<agents-event kind="answer" from="user" words="verbatim" thread="ui">Answer from the user</agents-event>')).toEqual({ kind: "answer", from: "user", words: "verbatim", thread: "ui", summary: "Answer from the user" });
+    expect(messageFileText('<agents-event kind="wake" from="agents" words="data">\nWorker ui is done.\n</agents-event>\n\n<agents-event kind="note" from="agents">\n(Reminder)\n</agents-event>\n')).toBe("Worker ui is done.\n\n(Reminder)");
     expect(tasksIn("Worker ios-tests is done; Worker ui's pane closed")).toEqual(["ios-tests", "ui"]);
     expect(parseDelivery("hello")).toBeNull();
   });

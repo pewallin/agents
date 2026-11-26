@@ -72,6 +72,14 @@ export function protocolFile() {
   return fs.existsSync(file) ? file : undefined;
 }
 
+// What an envelope says (`<agents-event …>`): the agents-coordinator skill's envelope.md.
+export function envelopeFile() {
+  const directory = appControlSkillDirectory();
+  if (!directory) return undefined;
+  const file = path.resolve(directory, "..", "agents-coordinator", "envelope.md");
+  return fs.existsSync(file) ? file : undefined;
+}
+
 export function protocolText(file, program, cli) {
   const text = readFileOr(file, "")
     .replace(/`agents-app-control /g, `\`${shellQuote(cli)} `)
@@ -240,7 +248,7 @@ export function takeOver(old, record, program) {
   }
   if (old.live) {
     const oldCLI = ensureSharedCLI();
-    enqueueMessage(program, old.uuid, `The agent in pane ${record.paneID} takes over as coordinator of ${program}; your workers report to it from now on. Bring ${memory} up to date for it, under these headings: Next task; Decisions (with the approaches you rejected, and why); Files; Current state (what each worker does and why); Open questions and risks. Then tell it with: ${shellQuote(oldCLI)} agent send "MEMORY.md is written" --to ${record.uuid}`, `Pane ${record.paneID} takes over as coordinator`);
+    enqueueMessage(program, old.uuid, `The agent in pane ${record.paneID} takes over as coordinator of ${program}; your workers report to it from now on. Bring ${memory} up to date for it, under these headings: Next task; Decisions (with the approaches you rejected, and why); Files; Current state (what each worker does and why); Open questions and risks. Then tell it with: ${shellQuote(oldCLI)} agent send "MEMORY.md is written" --to ${record.uuid}`, `Pane ${record.paneID} takes over as coordinator`, undefined, { event: { kind: "start" } });
     notifyApp(old.sessionName);
   }
   return {

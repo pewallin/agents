@@ -102,6 +102,7 @@ describe("an ACP host whose agent rests", () => {
     first.ws.close();
     // Idle with no view in front: the agent stops, the host keeps the session.
     await until(async () => (await state(h)).resting === true, 6_000);
+    await until(() => rested.length > 0);
     expect(rested).toEqual(["fake-1"]);
     const starts = notes().filter((line) => line === "start").length;
 

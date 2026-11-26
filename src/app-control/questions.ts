@@ -70,7 +70,7 @@ export function recordQuestion(program, record, line, blocking) {
   const askedAt = new Date().toISOString();
   record.uuid = ensurePaneUUID(record);
   writeQuestion(program, { id, task: record.task, from: record.uuid, to: record.parent, text: line, askedAt, blocking, state: "open" });
-  enqueueMessage(program, record.parent, wakeLine(program, record.task, "ask-coordinator", line, record.parent, { questionId: id }), wakeSummary(record.task, "ask-coordinator"), id);
+  enqueueMessage(program, record.parent, wakeLine(program, record.task, "ask-coordinator", line, record.parent, { questionId: id }), wakeSummary(record.task, "ask-coordinator"), id, { event: { kind: "question", from: `worker:${record.task}`, thread: record.task } });
   writeMessageRecord(program, { id, program, target: record.parent, task: undefined, from: record.uuid, mode: "queue", question: true, createdAt: askedAt }, "queued", "the question, for the coordinator's prompt");
   return id;
 }

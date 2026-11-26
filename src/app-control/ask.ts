@@ -89,7 +89,7 @@ export async function runAgentAsk(command) {
       ok: false,
       error: {
         code: "askTimedOut",
-        message: `No answer within ${Math.round(timeoutMs / 1000)}s. The question stays open: the coordinator's answer comes in your prompt as a ⟢ agents line. Go on with what does not depend on it, or end your turn.`,
+        message: `No answer within ${Math.round(timeoutMs / 1000)}s. The question stays open: the coordinator's answer comes in your prompt as an <agents-event> line. Go on with what does not depend on it, or end your turn.`,
       },
       result: { questionId: id, answered: false, state: "open", task: record.task },
     };

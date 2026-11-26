@@ -360,7 +360,7 @@ interface OpenLog {
   /** The message or thought being streamed, joined until something else comes. */
   text?: { kind: "agent" | "thought" | "user"; text: string; images: unknown[]; replay: boolean };
   tools: Map<string, PendingTool>;
-  turn?: { startedAt: number; tools: number; edits: number; failed: number };
+  turn?: { startedAt: number; tools: number; edits: number; failed: number; prompt: string; steps: string[]; reply: string };
   /** The session's choices as the agent last said (config options, mode, model), for turnEnd. */
   config: Record<string, string>;
   lastPlan?: string;
@@ -377,7 +377,21 @@ export interface SessionLogTapOptions {
   origin?: (sessionId: string) => SessionLogOrigin;
   /** A log was made or opened for a session (the host keeps the pane's last session). */
   onSession?: (sessionId: string) => void;
+  /** A prompt's turn ended: what it was asked, its steps (tool titles, a failed one marked) and
+   *  its answer (the turn's last message), for a coordinator's conversation (conversation.ts). */
+  onTurn?: (turn: SessionLogTurn) => void;
   log?: (message: string) => void;
+}
+
+export interface SessionLogTurn {
+  sessionId: string;
+  prompt: string;
+  startedAt: Date;
+  ms: number;
+  steps: string[];
+  reply: string;
+  stopReason?: string;
+  config: Record<string, string>;
 }
 
 /**
@@ -535,7 +549,8 @@ export class SessionLogTap {
         if (!open) return;
         this.flushAll(open);
         this.writeUser(open, prompt, false);
-        open.turn = { startedAt: Date.now(), tools: 0, edits: 0, failed: 0 };
+        const text = (prompt as Array<{ type?: unknown; text?: unknown }>).filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text as string).join("\n");
+        open.turn = { startedAt: Date.now(), tools: 0, edits: 0, failed: 0, prompt: text, steps: [], reply: "" };
       }
     } else if (message.method === "session/set_config_option" && sessionId && typeof params.configId === "string" && typeof params.value === "string") {
       const open = this.logs.get(sessionId);
@@ -640,6 +655,16 @@ export class SessionLogTap {
       });
       open.how = undefined;
       this.saveMeta(open);
+      if (turn) {
+        try {
+          this.options.onTurn?.({
+            sessionId: asked.sessionId, prompt: turn.prompt, startedAt: new Date(turn.startedAt), ms: Date.now() - turn.startedAt,
+            steps: turn.steps, reply: turn.reply, stopReason: typeof stopReason === "string" ? stopReason : undefined, config: { ...open.config },
+          });
+        } catch (error) {
+          this.fail(error);
+        }
+      }
     }
   }
 
@@ -804,6 +829,8 @@ export class SessionLogTap {
       return;
     }
     open.writer.append(text.kind, { text: text.text, ...(text.images.length > 0 ? { images: text.images } : {}), ...(text.replay ? { replay: true } : {}) });
+    // The turn's answer is its last message: what it ends with.
+    if (text.kind === "agent" && !text.replay && open.turn && text.text.trim()) open.turn.reply = text.text.trim();
   }
 
   /** The text being streamed, and with `tools` the calls that never said they settled. */
@@ -820,6 +847,7 @@ export class SessionLogTap {
     if (open.turn) {
       if (edits) open.turn.edits += 1;
       if (tool.status === "failed") open.turn.failed += 1;
+      if (!open.replaying) open.turn.steps.push(`${tool.status === "failed" ? "✗ " : ""}${tool.title ?? tool.toolKind ?? "tool"}`);
     }
     open.writer.append("tool", {
       id: tool.id,

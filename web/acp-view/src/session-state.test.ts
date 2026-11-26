@@ -205,10 +205,10 @@ describe("what the agent sends besides text", () => {
 
 describe("a turn the terminal started", () => {
   it("shows the line the agents CLI typed into the terminal", () => {
-    let state = reduce(emptySession(), { type: "typedInTerminal", text: "⟢ agents · Worker ui is done · read /p/m.md", at: 1000 });
+    let state = reduce(emptySession(), { type: "typedInTerminal", text: "<agents-event kind=\"wake\" from=\"agents\" words=\"data\">Worker ui is done · read /p/m.md</agents-event>", at: 1000 });
     state = reduce(state, { type: "update", update: { sessionUpdate: "session_info_update", _meta: { codex: { threadStatus: { type: "active" } } } } as never, at: 1500 });
     state = reduce(state, { type: "update", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "On it" } }, at: 2000 });
-    expect(state.items[0]).toMatchObject({ type: "user", external: true, text: "⟢ agents · Worker ui is done · read /p/m.md" });
+    expect(state.items[0]).toMatchObject({ type: "user", external: true, text: "<agents-event kind=\"wake\" from=\"agents\" words=\"data\">Worker ui is done · read /p/m.md</agents-event>" });
     expect(state.typedInTerminal).toBeUndefined();
   });
 

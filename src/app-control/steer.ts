@@ -297,7 +297,7 @@ export function followOffers(program, records) {
     const { record: updated, done, tell } = settleOffer(program, record, atPrompt);
     if (tell && updated.from && targets.has(updated.from)) {
       const fallback = `${appControlCommandText()} agent send --to ${shellQuote(updated.task || updated.target)} --id ${updated.id} --mode queue --json`;
-      enqueueMessage(program, updated.from, `Message ${updated.id} to ${updated.task || updated.pane} was not steered and reached nobody: ${updated.reason}. To deliver it at the agent's prompt instead, run: ${fallback}`, `Message ${updated.id} was not steered`);
+      enqueueMessage(program, updated.from, `Message ${updated.id} to ${updated.task || updated.pane} was not steered and reached nobody: ${updated.reason}. To deliver it at the agent's prompt instead, run: ${fallback}`, `Message ${updated.id} was not steered`, undefined, { event: { kind: "note" } });
       supervisorLog(`message ${updated.id} was not steered: ${updated.reason}`);
     }
     if (done) fs.rmSync(path.join(dir, id), { force: true });

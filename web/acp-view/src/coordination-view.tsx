@@ -4,7 +4,7 @@
 // coordinator and thread. A coordinator's workers are its threads, listed in the app.
 import { lazy, Suspense, useContext, useEffect, useState, type ReactNode } from "react";
 import { Chip, ChipHostContext, NamedChip } from "./chips";
-import { describeAgentEvent, tasksIn, useCoordination, workerNamed, workerTitle, type AgentEvent } from "./coordination";
+import { describeAgentEvent, messageFileText, tasksIn, useCoordination, workerNamed, workerTitle, type AgentEvent } from "./coordination";
 
 const Markdown = lazy(() => import("./markdown"));
 
@@ -52,12 +52,13 @@ function SummaryWithWorkers({ summary }: { summary: string }) {
   return <>{parts}</>;
 }
 
-/** A wake-up or message from the coordination (⟢ agents · …): one quiet row, not your words. A
+/** A wake-up or message from the coordination (an `<agents-event>` line): one quiet row, not your words. A
  *  click on it shows the message in place (a coordinator's start: its role and first steps); the
  *  chip opens the file. Read only once opened: a coordinator's view holds many of these. */
 export function DeliveryRow({ summary, file, at }: { summary: string; file?: string; at?: number }) {
   const [open, setOpen] = useState(false);
-  const text = useProgramText(open && file ? file : null);
+  const raw = useProgramText(open && file ? file : null);
+  const text = typeof raw === "string" ? messageFileText(raw) : raw;
   const title = at ? new Date(at).toLocaleString() : undefined;
   if (!file) {
     return (

@@ -54,7 +54,7 @@ beforeAll(() => {
   claudeSaid("ai-named", relay, { type: "ai-title", aiTitle: "Keep tab widths steady", sessionId: "ai-named" });
   claudeSaid("alike-1", "Reply in Swedish; all artifacts in English. Fix the export button on Safari.");
   claudeSaid("alike-2", "Reply in Swedish; all artifacts in English. Make the tabs keep their width.");
-  claudeSaid("woken", "⟢ agents · Worker cp-test is done · read /home/p/.agents/programs/web/messages/20261029T1-ab12.md");
+  claudeSaid("woken", '<agents-event kind="wake" thread="cp-test" id="m1" from="agents" words="data">Worker cp-test is done · read /home/p/.agents/programs/web/messages/20261029T1-ab12.md</agents-event>');
   claudeSaid("asked", "Install the TypeSafe skill. If you're in Claude Code, run the marketplace command.");
   claudeSaid("renamed", relay, { type: "ai-title", aiTitle: "Keep tab widths steady" }, { type: "custom-title", customTitle: "Tabs that stay put" });
 

@@ -20,7 +20,7 @@ import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost, type AcpHost } 
 import { paneUsageReader, reportViewActivity, restIdleMs, type AcpAgentEntry } from "./acp-host-cli.js";
 import type { AcpLaunchSettings } from "./acp-launch-settings.js";
 import { getStateDir } from "./paths.js";
-import { paneSessionLog } from "./session-log-pane.js";
+import { paneCoordinatorProgram, paneSessionLog } from "./session-log-pane.js";
 import { reportState, type ReportedState } from "./state.js";
 
 export interface HandoffSessionInput {
@@ -656,6 +656,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
         historyAgent: agent.stateAgent,
         sessionLog: { harness: agent.stateAgent, ...paneSessionLog(paneId) },
+        coordinatorProgram: paneCoordinatorProgram(paneId),
         // The agent's hooks may say it ended when it rests (Claude's SessionEnd): the pane keeps
         // its agent, state and session as they were.
         rest: agent.rests ? {
