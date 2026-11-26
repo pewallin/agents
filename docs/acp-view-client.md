@@ -412,3 +412,18 @@ prompt's turn end writes a `turn` with the turn's steps and its last message as 
 (`SessionLogTap` `onTurn`). A view's load of the host's session is given that conversation instead
 of the session's own history (`threadUpdates`): resting from the log, after a wake, and once a
 turn has ended. A Codex coordinator (its prompts go to its TUI) is not covered.
+
+## A thread beside you, drawn from its log (2026-11-26)
+
+`/thread/<session>?agents-next=acp-page&mirror=1&task=<task>&program=<program>` on any ACP host of
+the Mac shows a worker's thread without its agent: `GET /api/log?session&task&program` gives the
+thread's sessions (its sessions.jsonl in order, each with the sessions it goes on from) as the
+updates a view draws, the thread's title and the last session's meta; `GET /api/log/events`
+(SSE, `updates`) sends each line the log gets after that. So it is never a second view on the
+agent and never a second writer. The page's title is "Threads › <title>". What the user writes
+goes to Agents Next (`agentsNextThreadReply`, bridge version 5), which sends it as theirs (`agent
+send --from user`, the app's token checked over its socket); it shows when the thread's log has it,
+as the user's message (an envelope `from="user" words="verbatim"` is drawn as their bubble, its
+text from the message file). `/threads?program=<program>&from=<task>` is the coordinator's threads
+by state (`GET /api/threads`, what `agents threads` says of the program), in the same tab; ↑/↓ and
+Return, or a click, open one.

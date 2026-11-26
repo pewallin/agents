@@ -270,3 +270,75 @@ export function connectSession(options: {
     close: () => connection.close(),
   };
 }
+
+
+/** A thread to show from its session log: a worker's (all its sessions, in order) or one session. */
+export interface MirrorTarget {
+  session: string;
+  task?: string;
+  program?: string;
+}
+
+/** What the app answers a reply sent from a mirror: whether it went, and where it waits. */
+export interface MirrorReply { ok: boolean; state?: string; message?: string }
+
+/**
+ * A view of a session another pane has, drawn from its session log (the host's /api/log): no
+ * agent of its own, so never a second writer. What the user writes goes to the app, which sends
+ * it to the thread as theirs (`agent send --from user`); it shows once the thread's log has it.
+ */
+export function connectMirror(options: {
+  token: string;
+  target: MirrorTarget;
+  dispatch: (action: SessionAction) => void;
+  send: (text: string) => Promise<MirrorReply>;
+  onReply?: (reply: MirrorReply) => void;
+}): AcpSession {
+  const { dispatch } = options;
+  let events: EventSource | undefined;
+  let closeConnection: () => void = () => {};
+  const closed = new Promise<void>((resolve) => { closeConnection = resolve; });
+  const query = new URLSearchParams({ session: options.target.session, ...(options.target.task ? { task: options.target.task } : {}), ...(options.target.program ? { program: options.target.program } : {}) });
+  const refuse = async () => { throw new Error("This thread is shown from its log: write in the field to send it a message."); };
+  return {
+    async load() {
+      dispatch({ type: "loading" });
+      const response = await fetch(`/api/log?${query}`, { headers: { Authorization: `Bearer ${options.token}` } });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({})) as { message?: string }).message ?? `the host answered ${response.status}`);
+      const log = await response.json() as { session: string; n: number; title?: string; updates: SessionNotification["update"][]; meta?: { opened?: Record<string, unknown>; commands?: unknown[] } | null };
+      // The tab reads "Threads › <title>" (the app makes "Threads" its way to the list).
+      if (log.title && typeof document !== "undefined") document.title = `Threads › ${log.title}`;
+      for (const update of log.updates) dispatch({ type: "update", update });
+      const opened = log.meta?.opened ?? {};
+      dispatch({ type: "loaded", modes: opened.modes as never, configOptions: opened.configOptions as never, models: opened.models as never });
+      events = new EventSource(`/api/log/events?session=${encodeURIComponent(log.session)}&after=${log.n}&token=${encodeURIComponent(options.token)}`);
+      events.addEventListener("updates", (event) => {
+        const { updates } = JSON.parse((event as MessageEvent<string>).data) as { updates: SessionNotification["update"][] };
+        const at = Date.now();
+        for (const update of updates) dispatch({ type: "update", update, at });
+      });
+      return { sessionId: log.session, modes: opened.modes, configOptions: opened.configOptions } as LoadSessionResponse & { sessionId: string };
+    },
+    async prompt(blocks) {
+      const text = blocks.filter((block) => block.type === "text").map((block) => (block as { text: string }).text).join("\n").trim();
+      if (!text) return;
+      const reply = await options.send(text);
+      options.onReply?.(reply);
+      if (!reply.ok) throw new Error(reply.message ?? "The message did not go.");
+    },
+    async steer(blocks) { await this.prompt(blocks); return "prompted"; },
+    async steering() { return false; },
+    async promptCapabilities() { return { image: false, embeddedContext: false }; },
+    cancel: refuse,
+    wake() {},
+    focus() {},
+    answerPermission() {},
+    setConfigOption: refuse,
+    setMode: refuse,
+    async allowAll() { return { offered: false, on: false }; },
+    async setAllowAll() { return { offered: false, on: false }; },
+    onAllowAll() {},
+    closed,
+    close() { events?.close(); closeConnection(); },
+  };
+}

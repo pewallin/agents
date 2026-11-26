@@ -91,6 +91,14 @@ export function DeliveryRow({ summary, file, at }: { summary: string; file?: str
   );
 }
 
+/** The user's own words a message file holds (an envelope from="user"): the message without
+ *  the line the CLI put before it ("From the user: …"); the summary until the file is read. */
+export function useUserWords(file: string | undefined, summary: string): string {
+  const raw = useProgramText(file ?? null);
+  if (typeof raw !== "string") return summary;
+  return messageFileText(raw).split("\n\n")[0].replace(/^From (the )?user(, [^:]*)?:\s*/i, "").trim() || summary;
+}
+
 /** The text of a file the coordination wrote (a brief, a report), read through the view's host. */
 function useProgramText(path: string | null): string | null | undefined {
   const host = useContext(ChipHostContext);

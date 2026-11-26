@@ -846,3 +846,16 @@ button:disabled, select:disabled { cursor: default; }
 .trail .group-body { display: flex; flex-direction: column; gap: 3px; margin: 3px 0 4px 10px; padding-left: 10px; border-left: 1px solid var(--hair); }
 .trail.current-out.tail-out { margin-top: -6px; border-left: 0; padding-left: 0; }
 .trail .group > .ln .v { color: var(--dim); }
+
+/* A coordinator's threads in the place of a thread beside you (/threads). */
+.threads-page .col { gap: 14px; }
+.thread-group h2 { font-size: var(--fs); font-weight: 600; color: var(--dim); margin: 0 0 4px; }
+.thread-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: default; }
+.thread-row:hover:not(:disabled) { background: var(--tint); }
+.thread-row.selected { background: var(--tint2); }
+.thread-row:disabled { color: var(--faint); }
+.thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-mark { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.thread-mark.needs-you { background: var(--orange); }
+.thread-mark.done { background: var(--ok); }
+.thread-mark.working { background: var(--acc); }

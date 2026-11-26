@@ -11,7 +11,7 @@ import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock, SessionConfigOption } from "@agentclientprotocol/sdk";
-import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type AllowAll } from "./acp-connection";
+import { CannotLoadSession, OpenElsewhere, connectMirror, connectSession, type AcpSession, type AllowAll, type MirrorReply } from "./acp-connection";
 import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOptions, withModels } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
@@ -23,7 +23,7 @@ import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
 import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
-import { AgentEventLine, BriefRow, DeliveryRow, WorkerLine } from "./coordination-view";
+import { AgentEventLine, BriefRow, DeliveryRow, useUserWords, WorkerLine } from "./coordination-view";
 import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
@@ -802,6 +802,8 @@ function YouMessage({ text, pending, at, attachments = [] }: { text: string; pen
  *  or a turn started in the terminal (with its text when the agents CLI passed it on). */
 function UserItem({ user }: { user: NonNullable<Turn["user"]> }) {
   const delivery = parseDelivery(user.text);
+  // Your own words the app sent for you (from a thread beside you): your message, as typed here.
+  if (delivery?.from === "user" && delivery.words === "verbatim") return <UserWords file={delivery.file} summary={delivery.summary} at={user.at} />;
   if (delivery) return <DeliveryRow summary={delivery.summary} file={delivery.file} at={user.at} />;
   const brief = parseWorkerPrompt(user.text);
   if (brief) return <BriefRow task={brief.task} brief={brief.brief} prompt={user.text} respawn={brief.respawn} />;
@@ -811,6 +813,10 @@ function UserItem({ user }: { user: NonNullable<Turn["user"]> }) {
       : <div className="you external">Sent from the terminal</div>;
   }
   return <SentMessage user={user} />;
+}
+
+function UserWords({ file, summary, at }: { file?: string; summary: string; at?: number }) {
+  return <YouMessage text={useUserWords(file, summary)} at={at} />;
 }
 
 /** A message of ours, with what it attaches under it. */
@@ -1668,7 +1674,7 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
             className="input"
             value={draft}
             rows={1}
-            placeholder={busy ? (steerWay === "none" ? `Queue a message for when ${agentName} is done` : `Steer ${agentName} while it works`) : `Ask ${agentName}, @ for files and panes, / for commands`}
+            placeholder={MIRROR ? `Answer ${agentName}` : busy ? (steerWay === "none" ? `Queue a message for when ${agentName} is done` : `Steer ${agentName} while it works`) : `Ask ${agentName}, @ for files and panes, / for commands`}
             onChange={(event) => {
               setDraft(event.target.value);
               // A resting agent starts as the user begins to write.
@@ -1723,17 +1729,18 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
             }}
           />
           <div className="row">
-            <button className="icon" type="button" aria-label="Add a file" onClick={() => {
+            {/* A thread beside you has a plain reply field (A2): no files, no session choices. */}
+            {!MIRROR && <button className="icon" type="button" aria-label="Add a file" onClick={() => {
               const next = draft.endsWith(" ") || !draft ? `${draft}@` : `${draft} @`;
               setDraft(next);
               setMention({ start: next.length - 1, query: "" });
               input.current?.focus();
             }}>
               <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-            </button>
+            </button>}
             {/* While the agent still opens the session its history shows above, and the row says
                 so where the session's choices come once it is open. */}
-            {opening ? <span className="opening-line" role="status"><i className="pulse" />{opening}</span> : <>
+            {opening ? <span className="opening-line" role="status"><i className="pulse" />{opening}</span> : MIRROR ? null : <>
               {showModes && (
                 <label className="opt" title={modesLabel(info.agent.id)}>
                   <span className="lb">{modesLabel(info.agent.id)}</span>
@@ -2145,6 +2152,8 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   }, [session, toEnd]);
 
   useEffect(() => {
+    // A thread beside you keeps the title its log gave it ("Threads › <title>").
+    if (MIRROR) return;
     document.title = title ? `${title} – ${info.agent.name}` : info.agent.name;
   }, [title, info.agent.name]);
   // Follow the conversation while it is read at the bottom; stay put while reading higher up.
@@ -2522,6 +2531,21 @@ function useHistoryCameIn(session: AcpSession | null, watching: boolean): boolea
   return session !== null && cameIn === session;
 }
 
+/** A thread shown from its log beside you (?mirror=1, with its worker's task and program). */
+const MIRROR: { task?: string; program?: string } | null = (() => {
+  const params = new URLSearchParams(location.search);
+  if (params.get("mirror") !== "1") return null;
+  return { ...(params.get("task") ? { task: params.get("task")! } : {}), ...(params.get("program") ? { program: params.get("program")! } : {}) };
+})();
+
+/** The app sends a reply from a mirror as the user's (agent send --from user). */
+function sendThreadReply(target: { session: string; task?: string; program?: string }, text: string): Promise<MirrorReply> {
+  const app = appHandler(APP_HANDLERS.threadReply);
+  if (!app) return Promise.resolve({ ok: false, message: "Answering a thread from here works in Agents Next." });
+  return Promise.resolve(app.postMessage({ ...target, text }) as Promise<MirrorReply | undefined>)
+    .then((reply) => reply ?? { ok: false, message: "The app did not answer." }, (error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : String(error) }));
+}
+
 /** The session, loaded and followed live; with no session given, one the view starts. */
 function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | null }) {
   const dispatch = useSession((s) => s.dispatch);
@@ -2532,13 +2556,14 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
   const [takeOvers, setTakeOvers] = useState(0);
   const takeOverHere = () => setTakeOvers((count) => count + 1);
   const opening = useOpeningConversation((s) => s.text);
-  const session = useMemo(() => token
-    ? connectSession({
+  const session = useMemo(() => !token ? null : MIRROR && sessionId
+    // A thread another pane has, beside you: drawn from its log; what you write goes as yours.
+    ? connectMirror({ token, target: { session: sessionId, ...MIRROR }, dispatch, send: (text) => sendThreadReply({ session: sessionId, ...MIRROR }, text) })
+    : connectSession({
       url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`,
       sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, takeOver: takeOvers > 0,
       onTakenOver: () => send({ type: "taken-over" }),
-    })
-    : null, [info.cwd, info.agent.id, dispatch, takeOvers, reconnects]);
+    }), [info.cwd, info.agent.id, dispatch, takeOvers, reconnects]);
 
   useEffect(() => {
     if (!session) return;
@@ -2664,6 +2689,75 @@ const OPEN_REVIEW_BESIDE = new URLSearchParams(location.search).get("agents-next
 const reviewId = decodeURIComponent(location.pathname.match(/^\/review\/([^/]+)/)?.[1] ?? "") || null;
 const beadId = decodeURIComponent(location.pathname.match(/^\/bead\/([^/]+)/)?.[1] ?? "") || null;
 const outputId = decodeURIComponent(location.pathname.match(/^\/output\/([^/]+)/)?.[1] ?? "") || null;
+/** A coordinator's threads, in the place of a thread beside you (/threads?program=&from=). */
+const threadsOf = location.pathname === "/threads" ? new URLSearchParams(location.search).get("program") : null;
+
+interface ListedThread { task: string; title: string; state: string; session: string | null }
+/** The list's groups, by where each thread stands (a stopped thread waits for a look too). */
+const THREAD_GROUPS: Array<{ title: string; states: string[] }> = [
+  { title: "Needs you", states: ["needs-you"] },
+  { title: "Ready for review", states: ["done", "stopped"] },
+  { title: "Working", states: ["working"] },
+  { title: "Resolved", states: ["resolved"] },
+];
+
+/** The page of a thread, beside you, drawn from its log. */
+function mirrorAddress(thread: ListedThread, program: string): string {
+  const query = new URLSearchParams({ "agents-next": "acp-page", mirror: "1", task: thread.task, program });
+  return `/thread/${encodeURIComponent(thread.session ?? "")}?${query}${location.hash}`;
+}
+
+/** The coordinator's threads by state, in the tab where a thread was: a row opens that thread
+ *  here, and the thread you came from is the selected one, so Return goes back to it. */
+function ThreadsPage({ program }: { program: string }) {
+  const from = new URLSearchParams(location.search).get("from");
+  const [listing, setListing] = useState<{ name: string; threads: ListedThread[] } | null | undefined>(undefined);
+  const [selected, setSelected] = useState<string | null>(from);
+  useEffect(() => {
+    hostJson<{ name: string; threads: ListedThread[] }>(`/api/threads?program=${encodeURIComponent(program)}`)
+      .then((value) => { setListing(value); document.title = `${value.name} › Threads`; }, () => setListing(null));
+  }, [program]);
+  const ordered = useMemo(() => THREAD_GROUPS.flatMap((group) => (listing?.threads ?? []).filter((thread) => group.states.includes(thread.state))), [listing]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!ordered.length) return;
+      const at = ordered.findIndex((thread) => thread.task === selected);
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const next = event.key === "ArrowDown" ? Math.min(ordered.length - 1, at + 1) : Math.max(0, at < 0 ? 0 : at - 1);
+        setSelected(ordered[next].task);
+      } else if (event.key === "Enter" && at >= 0 && ordered[at].session) {
+        event.preventDefault();
+        location.assign(mirrorAddress(ordered[at], program));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [ordered, selected, program]);
+  if (listing === undefined) return <Notice>Opening the threads…</Notice>;
+  if (listing === null) return <Notice>The threads could not be read.</Notice>;
+  return (
+    <div className="view threads-page"><div className="main"><div className="scroll"><div className="col">
+      {THREAD_GROUPS.map((group) => {
+        const threads = listing.threads.filter((thread) => group.states.includes(thread.state));
+        if (threads.length === 0) return null;
+        return (
+          <section key={group.title} className="thread-group">
+            <h2>{group.title}</h2>
+            {threads.map((thread) => (
+              <button key={thread.task} type="button" className={`thread-row${thread.task === selected ? " selected" : ""}`}
+                disabled={!thread.session} title={thread.session ? undefined : "This thread has no session log to show"}
+                onClick={() => { setSelected(thread.task); if (thread.session) location.assign(mirrorAddress(thread, program)); }}>
+                <span className={`thread-mark ${thread.state}`} aria-hidden="true" />
+                <span className="thread-title">{thread.title || thread.task}</span>
+              </button>
+            ))}
+          </section>
+        );
+      })}
+    </div></div></div></div>
+  );
+}
 
 /** A command's output, opened beside its pane (/output/<id>). */
 function OutputPage({ id }: { id: string }) {
@@ -2716,6 +2810,7 @@ function App() {
   if (reviewId) return <ReviewPage id={reviewId} />;
   if (beadId) return <BeadPage id={beadId} />;
   if (outputId) return <OutputPage id={outputId} />;
+  if (threadsOf) return <ThreadsPage program={threadsOf} />;
   if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
   if (!info) return <Opening />;
   return <SessionGate info={info} />;

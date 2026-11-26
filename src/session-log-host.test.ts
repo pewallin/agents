@@ -64,6 +64,29 @@ describe("the ACP host's session log", () => {
     expect(kinds()).toEqual([["start", null], ["user", "Hi"], ["agent", "Hello"], ["turnEnd", null]]);
   });
 
+  it("draws a worker's thread from its log for a view beside you, and follows it as it grows", async () => {
+    host = await start();
+    expect(await host.startHostedSession()).toBe("fake-1");
+    await host.hostedPrompt("The brief");
+    const program = join(dir, "program");
+    mkdirSync(join(program, "tasks", "fix"), { recursive: true });
+    writeFileSync(join(program, "tasks", "fix", "task.json"), JSON.stringify({ title: "Fix the login" }));
+    writeFileSync(join(program, "tasks", "fix", "sessions.jsonl"), `${JSON.stringify({ at: "x", via: "spawn", agent: "claude", session: "fake-1" })}\n`);
+    const auth = { headers: { Authorization: `Bearer ${host.token}` } };
+    // The sessions root is the test's: the host's log reader is given it through the environment.
+    const log = await (await fetch(`${host.url}/api/log?session=fake-1&task=fix&program=${encodeURIComponent(program)}`, auth)).json() as { session: string; title: string; n: number; updates: Array<{ sessionUpdate: string; content?: { text?: string } }> };
+    expect(log).toMatchObject({ session: "fake-1", title: "Fix the login" });
+    expect(log.updates.map((update) => `${update.sessionUpdate}:${update.content?.text ?? ""}`)).toEqual(["user_message_chunk:The brief", "agent_message_chunk:Hello"]);
+    const events = await fetch(`${host.url}/api/log/events?session=fake-1&after=${log.n}&token=${encodeURIComponent(host.token)}`);
+    const reader = events.body!.getReader();
+    await host.hostedPrompt("And then");
+    let text = "";
+    for (let i = 0; i < 40 && !text.includes("And then"); i++) text += new TextDecoder().decode((await reader.read()).value);
+    expect(text).toContain("event: updates");
+    expect(text).toContain("And then");
+    await reader.cancel();
+  });
+
   it("writes the host's own session, its prompts included", async () => {
     host = await start();
     expect(await host.startHostedSession()).toBe("fake-1");

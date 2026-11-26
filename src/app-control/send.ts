@@ -10,16 +10,25 @@ import { programDirectories } from "./coordinator.js";
 import { deliveryState, messageRecordFile, newMessageID, noteDelivery, pruneMessageRecords, readMessageRecord, writeMessageRecord } from "./delivery.js";
 import { shellQuote } from "./launch.js";
 import { deliveryReminder, enqueueMessage, enqueueRider, queueNames, readQueued } from "./messages.js";
-import { appInputState, userIsWriting } from "./supervisor.js";
+import { appInputState, appRequestIfRunning, userIsWriting } from "./supervisor.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, paneIDFromRef } from "./panes.js";
 import { oneLine, paneRunsAgent } from "./processes.js";
 import { coordinationPaneRecords, ensurePaneUUID, ownCoordinationRecord, readJSON, slug, taskPaths, writeFileAtomic } from "./program.js";
-import { answerQuestion, claimWaitingAsk, openQuestionsFor, questionView, readQuestion, writeQuestion } from "./questions.js";
+import { answerQuestion, answerUserQuestions, claimWaitingAsk, openQuestionsFor, questionView, readQuestion, writeQuestion } from "./questions.js";
 import { hostsSession, promptHosted } from "./spawn-support.js";
 import { confirmSteer, findSteered, followOffer, settleOffer, steerCodex, steerThroughInbox } from "./steer.js";
 import { agentStatuses, ensureSupervisor, readFileOr } from "./supervisor-control.js";
 import { isFinished, markUnresolved } from "./threads.js";
+import { appendThreadMessage } from "./conversation.js";
+
+// The app runs `agent send --from user` with a token of its own (AGENTS_USER_ACT) and confirms it
+// over its control socket; anything else that claims to be the user is refused.
+async function requireUserAct() {
+  const act = process.env.AGENTS_USER_ACT || "";
+  const answer = act ? await appRequestIfRunning("user.act.verify", { act }) : undefined;
+  if (answer?.verified !== true) fail(2, "userActRefused", "Only Agents Next sends a message as the user's; nothing was sent.");
+}
 import { closerOf, recordReopen } from "./report.js";
 
 // Longer than this, a message waits in a file and the line typed into the prompt points at it.
@@ -43,7 +52,14 @@ export async function runAgentSend(command) {
     if (raw === undefined) fail(2, "fileUnavailable", `Could not read ${params.file}.`);
   }
   if (!params.to) fail(64, "usage", "agent send requires --to parent, --to <task> or --to <pane>.");
-  const own = ownCoordinationRecord(params, "agent send");
+  // The user's own words, from the app (a thread's reply field): only the app can vouch for them.
+  const fromUser = params.from === "user";
+  if (params.from !== undefined && !fromUser) fail(64, "usage", "agent send --from takes user, and only from Agents Next.");
+  if (fromUser) await requireUserAct();
+  if (fromUser && (!params.program || params.to === "parent")) fail(64, "usage", "agent send --from user needs --program and a task, pane or agent uuid in --to.");
+  const own = fromUser
+    ? { fromUser: true, role: "user", program: path.resolve(params.program), paneID: "the app" }
+    : ownCoordinationRecord(params, "agent send");
   const records = coordinationPaneRecords();
   let target;
   let resolvedTo;
@@ -94,7 +110,7 @@ export async function runAgentSend(command) {
     } else {
       fail(2, "messageUnavailable", `No message has id ${params["reply-to"]}; nothing was sent.`);
     }
-  } else if (wake) {
+  } else if (wake && !fromUser) {
     const open = openQuestionsFor(program, target, own);
     if (open.length === 1) question = open[0];
     if (open.length > 1) unthreaded = open.map(item => questionView(item));
@@ -266,7 +282,11 @@ export async function runAgentSend(command) {
       };
     }
 
-    const summary = question ? `Answer from ${senderName(own)}` : late ? `Late reply from ${senderName(own)}` : `Message from ${senderName(own)}`;
+    // The user writing to a thread answers what it asked them; to a coordinator, it is a message of
+    // its conversation (conversation.ts).
+    const answeredUser = fromUser ? answerUserQuestions(program, target, new Date().toISOString()) : [];
+    if (fromUser && target.role === "coordinator") appendThreadMessage(program, { text: raw || "", via: "app" });
+    const summary = question || answeredUser.length ? `Answer from ${senderName(own)}` : late ? `Late reply from ${senderName(own)}` : `Message from ${senderName(own)}`;
     enqueueMessage(program, targetUUID, line, summary, id, { event: { kind: question ? "answer" : "message", from: senderFrom(own), thread: target.task || own.task, replyTo: question?.id || late?.id || repliesTo } });
     const queuedRecord = writeMessageRecord(program, record, "queued", `for the prompt of pane ${target.paneID}`, { reason: undefined });
     answered("prompt");
@@ -343,6 +363,7 @@ export function senderFrom(own) {
 }
 
 export function senderName(own) {
+  if (own.fromUser) return "the user";
   return own.task || (own.role === "coordinator" ? "coordinator" : `pane ${own.paneID}`);
 }
 

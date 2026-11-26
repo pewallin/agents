@@ -27,7 +27,7 @@ import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { TerminalReader } from "./terminal-question.js";
 import { appendThreadMessage, appendThreadTurn, readThread, takeNextRun, threadUpdates } from "./app-control/conversation.js";
 import { parseEnvelopeLine } from "./agent-envelope.js";
-import { markSessionLogInTui, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions, type SessionLogTurn } from "./session-log.js";
+import { findSessionLog, markSessionLogInTui, sessionLogEntries, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions, type SessionLogTurn } from "./session-log.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween, workRoots } from "./acp-peek.js";
 
@@ -621,6 +621,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         (await options.currentSession?.().catch(() => undefined))?.id,
       )),
       terminal: options.handoff?.inView() ? undefined : terminal,
+      logRoot: options.sessionLog?.root,
       log,
     })) return;
     handleHttp(request, response, {
@@ -1268,6 +1269,20 @@ function projectFiles(cwd: string): Promise<string[]> {
 }
 
 /** Files whose name starts with the query first, then those whose path holds it. */
+/** A worker thread's sessions in order (sessions.jsonl, app-control/threads.ts writes it). */
+function readTaskSessions(file: string): Array<{ session: string; via?: string }> {
+  try {
+    return readFileSync(file, "utf8").split("\n").flatMap((line) => {
+      try {
+        const entry = JSON.parse(line) as { session?: unknown; via?: unknown };
+        return typeof entry.session === "string" ? [{ session: entry.session, ...(typeof entry.via === "string" ? { via: entry.via } : {}) }] : [];
+      } catch { return []; }
+    });
+  } catch {
+    return [];
+  }
+}
+
 export function rankFiles(files: string[], query: string): string[] {
   if (!query) return files.slice(0, 50);
   const scored: Array<[number, string]> = [];
@@ -1328,6 +1343,8 @@ function handleBridge(
     history?: (limit: number) => Promise<PaneHistory>;
     /** The pane's screen, while a TUI or a shell runs in it. */
     terminal: TerminalReader | undefined;
+    /** Where the session logs are (session-log.ts); the default root when not given. */
+    logRoot?: string;
     log: (message: string) => void;
   },
 ): boolean {
@@ -1336,7 +1353,7 @@ function handleBridge(
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
     || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
     || path === "/api/session/first-turn" || path === "/api/steer" || path === "/api/queue" || path.startsWith("/api/queue/")
-    || path === "/api/history" || path === "/api/terminal-question"
+    || path === "/api/history" || path === "/api/terminal-question" || path === "/api/log" || path === "/api/log/events" || path === "/api/threads"
     || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
@@ -1423,6 +1440,89 @@ function handleBridge(
   if (path === "/api/history" && request.method === "GET") {
     if (!context.history) { sendJson(response, 404, { message: `${context.agentName}'s conversations are not known here.` }); return true; }
     context.history(Number(url.searchParams.get("limit") ?? 30) || 30).then((history) => sendJson(response, 200, history), fail(502));
+    return true;
+  }
+  // A thread drawn from its session log (a view of a session another pane has: /thread/<id>?mirror=1):
+  // the sessions of its chain, or of a worker's thread, as the updates a view draws, then each
+  // line the log gets as it comes (/api/log/events).
+  if (path === "/api/log" && request.method === "GET") {
+    const task = url.searchParams.get("task");
+    const program = url.searchParams.get("program");
+    const session = url.searchParams.get("session");
+    let sessions: Array<{ session: string; via?: string }> = session ? [{ session }] : [];
+    if (task && program && /^[\w.-]{1,120}$/.test(task)) {
+      const lines = readTaskSessions(join(program, "tasks", task, "sessions.jsonl"));
+      if (lines.length > 0) sessions = lines;
+    }
+    if (sessions.length === 0) { sendJson(response, 400, { message: "A session or a thread is needed." }); return true; }
+    const root = context.logRoot;
+    const entries = sessionLogEntries(sessions, { root });
+    const last = [...entries].reverse().find((entry) => !entry.missing);
+    if (!last) { sendJson(response, 404, { message: "That thread has no session log." }); return true; }
+    const updates = entries.flatMap((entry) => {
+      const found = entry.missing ? undefined : findSessionLog(entry.session, root);
+      return found ? sessionLogUpdates(entry.lines, found.path) : [];
+    });
+    const lastPath = findSessionLog(last.session, root)?.path;
+    let title: string | undefined;
+    if (task && program) {
+      try { title = (JSON.parse(readFileSync(join(program, "tasks", task, "task.json"), "utf8")) as { title?: unknown }).title as string | undefined; } catch { /* untitled */ }
+    }
+    sendJson(response, 200, {
+      session: last.session,
+      harness: last.harness,
+      ...(typeof title === "string" && title ? { title } : {}),
+      n: last.lines.at(-1)?.n ?? -1,
+      updates,
+      meta: lastPath ? readSessionLogMeta(lastPath) ?? null : null,
+    });
+    return true;
+  }
+  // A coordinator's threads, for the list a thread beside you shows in its place (/threads): what
+  // `agents threads` says of the program, run as its own process.
+  if (path === "/api/threads" && request.method === "GET") {
+    const program = url.searchParams.get("program") ?? "";
+    let folder: string | undefined;
+    try { folder = (JSON.parse(readFileSync(join(program, "program.json"), "utf8")) as { folder?: unknown }).folder as string | undefined; } catch { /* none */ }
+    if (!program || typeof folder !== "string") { sendJson(response, 404, { message: "That program is not known here." }); return true; }
+    const [command, ...prefix] = getSelfArgv();
+    execFile(command, [...prefix, "threads", "--json", "--cwd", folder], { encoding: "utf8", timeout: 30_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, AGENTS_NO_AUTO_SETUP: "1" } }, (error, stdout) => {
+      if (error) { sendJson(response, 502, { message: `agents threads failed: ${error.message}` }); return; }
+      try {
+        const listing = JSON.parse(stdout) as { programs?: Array<{ program?: string; name?: string; threads?: Array<Record<string, unknown>> }> };
+        const entry = listing.programs?.find((item) => item.program === program);
+        if (!entry) { sendJson(response, 404, { message: "That program has no threads." }); return; }
+        sendJson(response, 200, {
+          program,
+          name: entry.name ?? program.split("/").pop(),
+          threads: (entry.threads ?? []).map((thread) => ({
+            task: thread.task, title: thread.title, state: thread.state,
+            session: Array.isArray(thread.sessions) ? (thread.sessions[0] as { session?: unknown } | undefined)?.session ?? null : null,
+          })),
+        });
+      } catch (failure) {
+        fail(502)(failure);
+      }
+    });
+    return true;
+  }
+  if (path === "/api/log/events" && request.method === "GET") {
+    const session = url.searchParams.get("session") ?? "";
+    const found = findSessionLog(session, context.logRoot);
+    if (!found) { response.writeHead(404, { "Cache-Control": "no-store" }).end(); return true; }
+    let after = Number(url.searchParams.get("after") ?? -1);
+    response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+    response.write(": connected\n\n");
+    const send = () => {
+      const log = readSessionLog(session, { after, root: context.logRoot });
+      if (!log || log.lines.length === 0) return;
+      after = log.lines.at(-1)!.n;
+      response.write(`event: updates\ndata: ${JSON.stringify({ n: after, updates: sessionLogUpdates(log.lines, found.path) })}\n\n`);
+    };
+    send();
+    watchFile(found.path, { interval: 500 }, send);
+    const ping = setInterval(() => response.write(": ping\n\n"), 25_000);
+    request.on("close", () => { clearInterval(ping); unwatchFile(found.path, send); });
     return true;
   }
   if (path === "/api/events" && request.method === "GET") {
