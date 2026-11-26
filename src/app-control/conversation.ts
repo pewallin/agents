@@ -210,3 +210,106 @@ export function threadUpdates(entries: ThreadEntry[]): Array<Record<string, unkn
   }
   return updates;
 }
+
+/** A session log's lines as the seed needs them (session-log.ts SessionLogLine). */
+interface SeedLine { kind: string; at?: string; text?: unknown; title?: unknown; toolKind?: unknown; status?: unknown }
+
+const ENVELOPE_START = /^<agents-event\b[^>]*>/;
+const EARLIER_LINE = "⟢ agents · ";
+
+/** What a wake line says: its summary, envelope or the line from before it. */
+function wakeSummary(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (trimmed.startsWith(EARLIER_LINE)) return trimmed.slice(EARLIER_LINE.length).replace(/ · read \S+\s*$/, "").trim();
+  const opening = trimmed.match(ENVELOPE_START);
+  if (!opening) return undefined;
+  return trimmed.slice(opening[0].length).replace(/<\/agents-event>\s*$/, "").replace(/ · read \S+\s*$/, "").trim();
+}
+
+/**
+ * A coordinator's conversation as its sessions' logs hold it (P4, open once and write the log
+ * then): the user's messages, and per run what woke it, its steps and its answer (its last
+ * message). For the conversation from before thread.jsonl was written.
+ */
+export function conversationFromLogs(logs: SeedLine[][]): ThreadEntry[] {
+  const entries: ThreadEntry[] = [];
+  let turn: { startedAt: string; wokeBy?: string; steps: string[]; reply?: string } | undefined;
+  let count = 0;
+  const id = (kind: "m" | "t") => `${kind}-seed-${(count++).toString(36)}`;
+  const flush = (at: string) => {
+    if (turn && (turn.reply || turn.steps.length || turn.wokeBy)) {
+      entries.push({ kind: "turn", id: id("t"), at, startedAt: turn.startedAt, how: { start: "continue" }, ...(turn.wokeBy ? { wokeBy: turn.wokeBy } : {}), ...(turn.steps.length ? { steps: turn.steps.slice(-TURN_STEPS) } : {}), ...(turn.reply ? { reply: turn.reply } : {}) });
+    }
+    turn = undefined;
+  };
+  for (const lines of logs) {
+    for (const line of lines) {
+      const at = line.at ?? new Date(0).toISOString();
+      if (line.kind === "user" && typeof line.text === "string") {
+        flush(at);
+        const woke = wakeSummary(line.text);
+        if (woke === undefined && line.text.trim()) entries.push({ kind: "message", id: id("m"), at, from: "user", via: "session", text: line.text.trim() });
+        turn = { startedAt: at, ...(woke !== undefined ? { wokeBy: woke } : {}), steps: [] };
+      } else if (line.kind === "agent" && typeof line.text === "string" && line.text.trim()) {
+        turn ??= { startedAt: at, steps: [] };
+        turn.reply = line.text.trim();
+      } else if (line.kind === "tool") {
+        turn ??= { startedAt: at, steps: [] };
+        turn.steps.push(`${line.status === "failed" ? "✗ " : ""}${String(line.title ?? line.toolKind ?? "tool")}`);
+      } else if (line.kind === "turnEnd") {
+        flush(at);
+      }
+    }
+    flush(lines.at(-1)?.at ?? new Date(0).toISOString());
+  }
+  return entries;
+}
+
+/** What a reader sees of a conversation: the user's messages and the answers, by their words. */
+function said(entries: ThreadEntry[]): string[] {
+  return entries.flatMap((entry) => entry.kind === "message" ? [`m:${entry.text}`] : entry.reply ? [`t:${entry.reply}`] : []);
+}
+
+export function seedMarker(program: string): string {
+  return path.join(program, ".run", "thread-seeded.json");
+}
+
+/**
+ * Seeds thread.jsonl once with the conversation from before it was written, from the
+ * coordinator's session logs (`logs`, oldest first): what thread.jsonl has already stays after it,
+ * and what both hold is kept once (the seed ends where thread.jsonl's first entry is found in it).
+ * Returns whether it seeded. A thread that would show less than the logs is not written.
+ */
+export function seedThread(program: string, logs: SeedLine[][], sessions: string[]): boolean {
+  if (fs.existsSync(seedMarker(program))) return false;
+  const seeded = conversationFromLogs(logs);
+  if (seeded.length === 0) return false;
+  return withThreadLock(program, () => {
+    const existing = readThread(program);
+    let upTo = seeded.length;
+    const first = existing.find((entry) => entry.kind === "message" || entry.reply);
+    if (first) {
+      const key = said([first])[0];
+      for (let index = seeded.length - 1; index >= 0; index--) {
+        if (said([seeded[index]])[0] === key) { upTo = index; break; }
+      }
+    }
+    const merged = [...seeded.slice(0, upTo), ...existing];
+    // Never less: everything the logs say is in the seeded conversation.
+    const shown = new Set(said(merged));
+    if (!said(seeded).every((line) => shown.has(line))) return false;
+    const file = threadFile(program);
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, merged.map((entry) => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600 });
+    fs.renameSync(temporary, file);
+    fs.mkdirSync(path.dirname(seedMarker(program)), { recursive: true });
+    fs.writeFileSync(seedMarker(program), `${JSON.stringify({ at: new Date().toISOString(), sessions })}\n`, { mode: 0o600 });
+    return true;
+  });
+}
+
+/** Whether a conversation shows at least what the session history it stands for shows. */
+export function showsAtLeast(thread: ThreadEntry[], logs: SeedLine[][]): boolean {
+  const shown = new Set(said(thread));
+  return said(conversationFromLogs(logs)).every((line) => shown.has(line));
+}

@@ -413,7 +413,12 @@ prompt's turn end writes a `turn` with the turn's steps and its last message as 
 sessions the pane went on from above it (a run that started fresh, from their logs). It was given
 thread.jsonl in its place for a few hours on 2026-11-26, and a coordinator's pane lost its history
 after a wake: thread.jsonl begins with that build, so it is a record beside the session, never what
-the pane draws on its own. A Codex coordinator (its prompts go to its TUI) is not covered.
+the pane draws on its own. Since then the host seeds thread.jsonl once from the logs of the pane's
+sessions (`seedThread`: the user's messages, and per run what woke it, its steps and its last
+message; what thread.jsonl already held stays once after the seed; `.run/thread-seeded.json` marks
+it), and draws the pane from thread.jsonl only when it shows at least every message and answer
+those logs hold (`showsAtLeast`); otherwise from the sessions. A Codex coordinator (its prompts go to
+its TUI) is not covered.
 
 ## A thread beside you, drawn from its log (2026-11-26)
 

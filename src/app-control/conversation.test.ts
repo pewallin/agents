@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendThreadMessage, appendThreadTurn, nextRunStart, readThread, REPLY_INLINE_BYTES, threadFile } from "./conversation.js";
+import { appendThreadMessage, appendThreadTurn, conversationFromLogs, nextRunStart, readThread, REPLY_INLINE_BYTES, seedMarker, seedThread, showsAtLeast, threadFile } from "./conversation.js";
 
 describe("a coordinator's conversation", () => {
   let program: string;
@@ -42,5 +42,46 @@ describe("a coordinator's conversation", () => {
     appendThreadTurn(program, { startedAt: new Date(now - 60_000).toISOString(), how: { start: "continue" } }, new Date(now - 30_000));
     expect(nextRunStart(program, { session: "s", context: 0.2 }, now)).toEqual({ start: "continue", why: "its session is warm" });
     expect(nextRunStart(program, { session: "s", context: 0.6 }, now)).toEqual({ start: "fresh", why: "its context was 60 % full" });
+  });
+
+  const logs = [[
+    { kind: "start", at: "2026-11-25T09:00:00Z" },
+    { kind: "user", at: "2026-11-25T09:00:00Z", text: "Plan the release" },
+    { kind: "tool", at: "2026-11-25T09:01:00Z", title: "Read OVERVIEW.md", status: "completed" },
+    { kind: "agent", at: "2026-11-25T09:02:00Z", text: "I started a worker." },
+    { kind: "user", at: "2026-11-25T10:00:00Z", text: "⟢ agents · Worker ui is done · read /p/messages/20261125T100000-ab12.md" },
+    { kind: "agent", at: "2026-11-25T10:01:00Z", text: "ui is done." },
+    { kind: "user", at: "2026-11-26T09:00:00Z", text: '<agents-event kind="wake" from="agents" words="data">Worker api is done · read /p/m.md</agents-event>' },
+    { kind: "tool", at: "2026-11-26T09:00:10Z", title: "Read report.md", status: "failed" },
+    { kind: "turnEnd", at: "2026-11-26T09:00:20Z" },
+    { kind: "user", at: "2026-11-26T11:00:00Z", text: "Ship it" },
+    { kind: "agent", at: "2026-11-26T11:01:00Z", text: "Shipped." },
+  ]];
+
+  it("reads a coordinator's conversation from its sessions' logs: messages, and per run what woke it, its steps and its answer", () => {
+    const entries = conversationFromLogs(logs);
+    expect(entries.map((entry) => entry.kind === "message" ? `m:${entry.text}` : `t:${entry.wokeBy ?? ""}|${(entry.steps ?? []).join(",")}|${entry.reply ?? ""}`)).toEqual([
+      "m:Plan the release",
+      "t:|Read OVERVIEW.md|I started a worker.",
+      "t:Worker ui is done||ui is done.",
+      "t:Worker api is done|✗ Read report.md|",
+      "m:Ship it",
+      "t:||Shipped.",
+    ]);
+  });
+
+  it("seeds thread.jsonl once from the logs, keeps what it had after the seed once, and never shows less", () => {
+    // thread.jsonl began today, with the last message and answer the logs also hold.
+    appendThreadMessage(program, { text: "Ship it", via: "pane" });
+    appendThreadTurn(program, { startedAt: "x", how: { start: "continue" }, reply: "Shipped." });
+    expect(showsAtLeast(readThread(program), logs)).toBe(false);
+    expect(seedThread(program, logs, ["s1"])).toBe(true);
+    const thread = readThread(program);
+    expect(thread.filter((entry) => entry.kind === "message").map((entry) => (entry as { text: string }).text)).toEqual(["Plan the release", "Ship it"]);
+    expect(thread.filter((entry) => entry.kind === "turn" && entry.reply === "Shipped.")).toHaveLength(1);
+    expect(showsAtLeast(thread, logs)).toBe(true);
+    expect(fs.existsSync(seedMarker(program))).toBe(true);
+    // Once only.
+    expect(seedThread(program, logs, ["s1"])).toBe(false);
   });
 });

@@ -153,4 +153,34 @@ describe("a coordinator's pane", () => {
     expect(texts).toContain("Now");
     ws.close();
   }, 20_000);
+
+  it("draws the pane from its conversation once seeded from the session's log, never with less than the log", async () => {
+    const root = join(dir, "sessions");
+    mkdirSync(join(root, "test"), { recursive: true });
+    writeFileSync(join(root, "test", "fake-1.jsonl"), [
+      { v: 1, n: 0, at: "x", kind: "start", session: "fake-1", harness: "test" },
+      { v: 1, n: 1, at: "x", kind: "user", text: "Earlier question" },
+      { v: 1, n: 2, at: "x", kind: "agent", text: "Earlier answer" },
+      { v: 1, n: 3, at: "x", kind: "user", text: "⟢ agents · Worker ui is done · read /p/messages/20261125T100000-ab12.md" },
+      { v: 1, n: 4, at: "x", kind: "agent", text: "ui is done." },
+    ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+    host = await startAcpHost({
+      paneId: "%8", agent: { id: "test-acp", name: "Test" }, runtimeTempDir: join(dir, "rt"), webRoot: join(dir, "web"), cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", AGENT(dir)], env: process.env },
+      sessionLog: { harness: "test", root },
+      coordinatorProgram: () => program,
+    });
+    await host.startHostedSession("fake-1");
+    const ws = new WebSocket(`${host.url.replace("http", "ws")}/acp?token=${encodeURIComponent(host.token)}`, { headers: { Origin: host.url } });
+    const seen: Array<Record<string, unknown>> = [];
+    ws.on("message", (data) => seen.push(JSON.parse(String(data))));
+    await new Promise((resolve) => ws.once("open", resolve));
+    ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+    ws.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/load", params: { sessionId: "fake-1", cwd: dir, mcpServers: [] } }));
+    await until(() => seen.some((m) => m.id === 2 && m.method === undefined));
+    const texts = seen.filter((m) => m.method === "session/update").map((m) => (m.params as { update: { content?: { text?: string } } }).update.content?.text);
+    expect(texts).toEqual(["Earlier question", "Earlier answer", '<agents-event kind="wake" from="agents" words="data">Worker ui is done</agents-event>', "ui is done."]);
+    expect(readThread(program).length).toBe(3);
+    ws.close();
+  }, 20_000);
 });
