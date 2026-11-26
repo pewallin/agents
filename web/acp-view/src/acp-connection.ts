@@ -30,6 +30,11 @@ export interface AcpSession {
   /** What a prompt may hold besides text and links (initialize's promptCapabilities). */
   promptCapabilities(): Promise<{ image: boolean; embeddedContext: boolean }>;
   cancel(): Promise<void>;
+  /** The user began typing: an agent that rests (its pane opened from the session log) starts
+   *  now, so it is mostly ready when the message goes. Sent at most every few seconds. */
+  wake(): void;
+  /** Whether the view has the focus: the host does not rest the agent of the pane in front. */
+  focus(focused: boolean): void;
   answerPermission(id: string, optionId: string | null): void;
   setConfigOption(configId: string, value: string | boolean): Promise<void>;
   setMode(modeId: string): Promise<void>;
@@ -70,6 +75,9 @@ export class CannotLoadSession extends Error {
   }
 }
 
+/** How often typing tells the host again that the user is writing (`_agents/wake`). */
+const WAKE_EVERY_MS = 5_000;
+
 let ownViewId: string | undefined;
 function viewId(): string {
   if (ownViewId) return ownViewId;
@@ -103,6 +111,8 @@ export function connectSession(options: {
   const answers = new Map<string, (response: RequestPermissionResponse) => void>();
   let nextPermission = 1;
   let allowAllListener: ((state: AllowAll) => void) | undefined;
+  let lastWake = 0;
+  let lastFocus: boolean | undefined;
 
   const app = client({})
     .onNotification("session/update", ({ params }) => {
@@ -206,6 +216,17 @@ export function connectSession(options: {
       const initialized = await ready.catch(() => undefined);
       const meta = (initialized as { _meta?: { steering?: { supported?: unknown } } } | undefined)?._meta;
       return meta?.steering?.supported === true || options.agentId === "codex-acp";
+    },
+    wake() {
+      const now = Date.now();
+      if (now - lastWake < WAKE_EVERY_MS) return;
+      lastWake = now;
+      void ready.then(() => agent.notify("_agents/wake" as never, {} as never)).catch(() => undefined);
+    },
+    focus(focused) {
+      if (focused === lastFocus) return;
+      lastFocus = focused;
+      void ready.then(() => agent.notify("_agents/focus" as never, { focused } as never)).catch(() => undefined);
     },
     async cancel() {
       // Codex interrupts the thread's turn, whichever client started it (the pane's TUI too).

@@ -23,7 +23,7 @@
 // torn last line). Lines are only appended. A session from before the log gets one when it is
 // first opened through its harness: the host writes what the agent replays (P4), once.
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getSharedAgentsHome } from "./paths.js";
 
@@ -67,6 +67,118 @@ export function sessionLogPath(harness: string, sessionId: string, root = sessio
 /** The folder of a log's pictures: `<session>.files/<sha256>.<ext>`. */
 export function sessionLogFilesDir(logPath: string): string {
   return logPath.replace(/\.jsonl$/, ".files");
+}
+
+/**
+ * What a view needs to open a session from its log without the agent: the agent's initialize
+ * answer, the session's choices as it last had them (modes, config options, models), its commands
+ * and its last usage. Written beside the log, `<session>.meta.json`, as they change.
+ */
+export interface SessionLogMeta {
+  initialize?: Record<string, unknown>;
+  opened?: Record<string, unknown>;
+  commands?: unknown[];
+  usage?: Record<string, unknown>;
+  /** The pane's TUI has had the session since: the log may lack its turns, so the session opens
+   *  through its harness next time (whose replay fills them in), not from the log. */
+  tui?: boolean;
+  at?: string;
+}
+
+/** The session went back to its TUI: it opens through its harness next time (SessionLogMeta.tui). */
+export function markSessionLogInTui(harness: string, sessionId: string, root = sessionLogsRoot()): void {
+  try {
+    const path = sessionLogPath(harness, sessionId, root);
+    const meta = readSessionLogMeta(path);
+    if (meta && !meta.tui) writeSessionLogMeta(path, { ...meta, tui: true });
+  } catch {
+    // It then opens from the log, without what the TUI did.
+  }
+}
+
+export function sessionLogMetaPath(logPath: string): string {
+  return logPath.replace(/\.jsonl$/, ".meta.json");
+}
+
+/** What to set again on a session its agent opened anew, from the meta: a request per choice. */
+export function sessionLogChoices(meta: SessionLogMeta | undefined): Array<{ method: string; params: Record<string, unknown> }> {
+  const opened = meta?.opened;
+  if (!opened) return [];
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  for (const option of Array.isArray(opened.configOptions) ? opened.configOptions as Array<Record<string, unknown>> : []) {
+    if (typeof option.id === "string" && (typeof option.currentValue === "string" || typeof option.currentValue === "boolean")) {
+      requests.push({ method: "session/set_config_option", params: { configId: option.id, value: option.currentValue } });
+    }
+  }
+  const modes = opened.modes as { currentModeId?: unknown } | undefined;
+  if (requests.length === 0 && typeof modes?.currentModeId === "string") requests.push({ method: "session/set_mode", params: { modeId: modes.currentModeId } });
+  const models = opened.models as { currentModelId?: unknown } | undefined;
+  if (!requests.some((request) => request.params.configId === "model") && typeof models?.currentModelId === "string") {
+    requests.push({ method: "session/set_model", params: { modelId: models.currentModelId } });
+  }
+  return requests;
+}
+
+export function readSessionLogMeta(logPath: string): SessionLogMeta | undefined {
+  try {
+    const value = JSON.parse(readFileSync(sessionLogMetaPath(logPath), "utf8")) as SessionLogMeta;
+    return value && typeof value === "object" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeSessionLogMeta(logPath: string, meta: SessionLogMeta): void {
+  const path = sessionLogMetaPath(logPath);
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ ...meta, at: new Date().toISOString() }), { mode: 0o600 });
+  renameSync(temporary, path);
+}
+
+/**
+ * A log as the ACP updates a view draws it from: what the agent would replay on `session/load`.
+ * A picture is read back from beside the log; one gone is left out.
+ */
+export function sessionLogUpdates(lines: SessionLogLine[], logPath?: string): Array<Record<string, unknown>> {
+  const files = logPath ? sessionLogFilesDir(logPath) : undefined;
+  const picture = (value: unknown): Record<string, unknown> | undefined => {
+    const image = value as { type?: unknown; ref?: unknown; mimeType?: unknown; uri?: unknown; name?: unknown } | undefined;
+    if (image?.type === "file" && typeof image.uri === "string") return { type: "resource_link", uri: image.uri, name: typeof image.name === "string" ? image.name : image.uri.split("/").pop() ?? image.uri };
+    if (image?.type !== "image" || typeof image.ref !== "string" || !files || /[\\/]/.test(image.ref)) return undefined;
+    try {
+      return { type: "image", mimeType: typeof image.mimeType === "string" ? image.mimeType : "image/png", data: readFileSync(join(files, image.ref)).toString("base64") };
+    } catch {
+      return undefined;
+    }
+  };
+  const updates: Array<Record<string, unknown>> = [];
+  const blocks = (kind: string, text: unknown, extra: unknown) => {
+    if (typeof text === "string" && text) updates.push({ sessionUpdate: kind, content: { type: "text", text } });
+    for (const item of Array.isArray(extra) ? extra : []) {
+      const content = picture(item);
+      if (content) updates.push({ sessionUpdate: kind, content });
+    }
+  };
+  for (const line of lines) {
+    if (line.kind === "user") blocks("user_message_chunk", line.text, line.attachments);
+    else if (line.kind === "agent") blocks("agent_message_chunk", line.text, line.images);
+    else if (line.kind === "thought") blocks("agent_thought_chunk", line.text, undefined);
+    else if (line.kind === "plan") updates.push({ sessionUpdate: "plan", entries: Array.isArray(line.entries) ? line.entries : [] });
+    else if (line.kind === "tool") {
+      updates.push({
+        sessionUpdate: "tool_call",
+        toolCallId: line.id,
+        title: typeof line.title === "string" ? line.title : "",
+        ...(typeof line.toolKind === "string" ? { kind: line.toolKind } : {}),
+        status: line.status,
+        ...(Array.isArray(line.locations) ? { locations: line.locations } : {}),
+        ...(line.rawInput !== undefined ? { rawInput: line.rawInput } : {}),
+        ...(Array.isArray(line.content) ? { content: (line.content as Array<Record<string, unknown>>).filter((block) => !(block?.type === "content" && (block.content as { type?: unknown } | undefined)?.type === "image")) } : {}),
+        ...(line.rawOutput !== undefined ? { rawOutput: line.rawOutput } : {}),
+      });
+    }
+  }
+  return updates;
 }
 
 /** The lines of a log, those after `after` (an `n`) only; a line that does not parse is skipped. */
@@ -254,6 +366,7 @@ interface OpenLog {
   lastPlan?: string;
   /** How the session began (a respawn and why), for its first turn's line. */
   how?: { start: string; why?: string };
+  meta: SessionLogMeta;
 }
 
 export interface SessionLogTapOptions {
@@ -278,6 +391,8 @@ export class SessionLogTap {
    *  and the agent's permission questions). */
   private readonly requests = new Map<string, { method: string; sessionId?: string; prompt?: unknown[]; toolCallId?: string; options?: unknown[] }>();
 
+  /** Per stream: the agent's initialize answer, for the meta of the sessions it opens. */
+  private readonly initialized = new Map<string, Record<string, unknown>>();
   /** Sessions being loaded that have no log yet: one is made when the agent shows it has them. */
   private readonly loading = new Set<string>();
 
@@ -316,12 +431,13 @@ export class SessionLogTap {
   /** A stream ended (its view closed, its agent exited): what it streamed is written. */
   streamGone(stream: string): void {
     for (const key of [...this.requests.keys()]) if (key.startsWith(`${stream}\u0000`)) this.requests.delete(key);
-    for (const open of this.logs.values()) this.flushAll(open);
+    this.initialized.delete(stream);
+    for (const open of this.logs.values()) { this.flushAll(open); this.saveMeta(open); }
   }
 
   /** Everything still being streamed, written now (the host closes). */
   flush(): void {
-    for (const open of this.logs.values()) this.flushAll(open);
+    for (const open of this.logs.values()) { this.flushAll(open); this.saveMeta(open); }
   }
 
   /** The log of a session this tap writes, if it has opened one. */
@@ -363,7 +479,7 @@ export class SessionLogTap {
       });
       how = origin.how;
     }
-    const open: OpenLog = { file: writer, writer, replaying: undefined, tools: new Map(), config: {}, ...(how ? { how } : {}) };
+    const open: OpenLog = { file: writer, writer, replaying: undefined, tools: new Map(), config: {}, meta: readSessionLogMeta(path) ?? {}, ...(how ? { how } : {}) };
     this.logs.set(sessionId, open);
     this.options.onSession?.(sessionId);
     return open;
@@ -395,7 +511,9 @@ export class SessionLogTap {
       return;
     }
     if (id === undefined || id === null) return;
-    if (message.method === "session/new") {
+    if (message.method === "initialize") {
+      this.requests.set(this.key(stream, id), { method: "initialize" });
+    } else if (message.method === "session/new") {
       this.requests.set(this.key(stream, id), { method: "session/new" });
     } else if ((message.method === "session/load" || message.method === "session/resume") && sessionId) {
       this.requests.set(this.key(stream, id), { method: "session/load", sessionId });
@@ -421,13 +539,25 @@ export class SessionLogTap {
       }
     } else if (message.method === "session/set_config_option" && sessionId && typeof params.configId === "string" && typeof params.value === "string") {
       const open = this.logs.get(sessionId);
-      if (open) open.config[params.configId] = params.value;
+      if (!open) return;
+      open.config[params.configId] = params.value;
+      // An agent does not say a value its client set: the meta keeps it for a view and a resume.
+      const opened = open.meta.opened;
+      if (opened && Array.isArray(opened.configOptions)) {
+        opened.configOptions = (opened.configOptions as Array<Record<string, unknown>>).map((option) => option.id === params.configId ? { ...option, currentValue: params.value } : option);
+      }
     } else if (message.method === "session/set_mode" && sessionId && typeof params.modeId === "string") {
       const open = this.logs.get(sessionId);
-      if (open) open.config.mode = params.modeId;
+      if (!open) return;
+      open.config.mode = params.modeId;
+      const modes = open.meta.opened?.modes as Record<string, unknown> | undefined;
+      if (open.meta.opened && modes) open.meta.opened.modes = { ...modes, currentModeId: params.modeId };
     } else if (message.method === "session/set_model" && sessionId && typeof params.modelId === "string") {
       const open = this.logs.get(sessionId);
-      if (open) open.config.model = params.modelId;
+      if (!open) return;
+      open.config.model = params.modelId;
+      const models = open.meta.opened?.models as Record<string, unknown> | undefined;
+      if (open.meta.opened && models) open.meta.opened.models = { ...models, currentModelId: params.modelId };
     }
   }
 
@@ -472,11 +602,13 @@ export class SessionLogTap {
     const asked = this.requests.get(key);
     if (!asked) return;
     this.requests.delete(key);
-    if (asked.method === "session/new") {
+    if (asked.method === "initialize") {
+      if (message.result) this.initialized.set(stream, message.result);
+    } else if (asked.method === "session/new") {
       const sessionId = message.result?.sessionId;
       if (typeof sessionId !== "string") return;
       const open = this.open(sessionId);
-      if (open) this.followOpened(open, message.result);
+      if (open) this.opened(open, stream, message.result);
     } else if (asked.method === "session/load" && asked.sessionId) {
       if (message.error) this.loading.delete(asked.sessionId);
       const open = message.error ? this.logs.get(asked.sessionId) : this.loaded(asked.sessionId);
@@ -485,7 +617,7 @@ export class SessionLogTap {
       if (open.writer instanceof ReplayBuffer) this.reconcile(open, open.writer);
       open.writer = open.file;
       open.replaying = undefined;
-      if (!message.error) this.followOpened(open, message.result);
+      if (!message.error) this.opened(open, stream, message.result);
     } else if (asked.method === "_session/steering" && asked.sessionId) {
       const open = this.logs.get(asked.sessionId);
       const outcome = message.result?.outcome;
@@ -507,6 +639,30 @@ export class SessionLogTap {
         ...(open.how ? { how: open.how } : {}),
       });
       open.how = undefined;
+      this.saveMeta(open);
+    }
+  }
+
+  /** A session the agent opened on `stream`: its choices, and the meta a view opens it with. */
+  private opened(open: OpenLog, stream: string, result: Record<string, unknown> | undefined): void {
+    this.followOpened(open, result);
+    // The agent replayed it (a load) or made it: the log is whole again.
+    delete open.meta.tui;
+    const initialize = this.initialized.get(stream);
+    if (initialize) open.meta.initialize = initialize;
+    if (result) {
+      const { sessionId: _sessionId, ...opened } = result;
+      open.meta.opened = opened;
+    }
+    this.saveMeta(open);
+  }
+
+  private saveMeta(open: OpenLog): void {
+    if (!open.meta.initialize && !open.meta.opened) return;
+    try {
+      writeSessionLogMeta(open.file.path, open.meta);
+    } catch (error) {
+      this.fail(error);
     }
   }
 
@@ -545,8 +701,21 @@ export class SessionLogTap {
   }
 
   private followConfig(open: OpenLog, update: Record<string, unknown> | undefined): void {
-    if (update?.sessionUpdate === "current_mode_update" && typeof update.currentModeId === "string") open.config.mode = update.currentModeId;
-    else if (update?.sessionUpdate === "config_option_update" && Array.isArray(update.configOptions)) this.followOpened(open, { configOptions: update.configOptions });
+    const opened = open.meta.opened;
+    if (update?.sessionUpdate === "current_mode_update" && typeof update.currentModeId === "string") {
+      open.config.mode = update.currentModeId;
+      const modes = opened?.modes as Record<string, unknown> | undefined;
+      if (opened && modes) opened.modes = { ...modes, currentModeId: update.currentModeId };
+    } else if (update?.sessionUpdate === "config_option_update" && Array.isArray(update.configOptions)) {
+      this.followOpened(open, { configOptions: update.configOptions });
+      if (opened) opened.configOptions = update.configOptions;
+    } else if (update?.sessionUpdate === "available_commands_update" && Array.isArray(update.availableCommands)) {
+      open.meta.commands = update.availableCommands;
+      this.saveMeta(open);
+    } else if (update?.sessionUpdate === "usage_update") {
+      const { sessionUpdate: _kind, ...usage } = update;
+      open.meta.usage = usage;
+    }
   }
 
   private update(open: OpenLog, update: Record<string, unknown> | undefined, replay: boolean): void {

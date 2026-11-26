@@ -17,7 +17,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { dirname, join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost, type AcpHost } from "./acp-host.js";
-import { paneUsageReader, reportViewActivity, type AcpAgentEntry } from "./acp-host-cli.js";
+import { paneUsageReader, reportViewActivity, restIdleMs, type AcpAgentEntry } from "./acp-host-cli.js";
 import type { AcpLaunchSettings } from "./acp-launch-settings.js";
 import { getStateDir } from "./paths.js";
 import { paneSessionLog } from "./session-log-pane.js";
@@ -467,6 +467,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
     await transcript.drained();
     mode = "tui";
     const id = continued(sessionId ?? startedSession);
+    if (id) host?.sessionInTui(id);
     sessionId = undefined;
     startedSession = undefined;
     tuiSession = id;
@@ -655,6 +656,16 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
         historyAgent: agent.stateAgent,
         sessionLog: { harness: agent.stateAgent, ...paneSessionLog(paneId) },
+        // The agent's hooks may say it ended when it rests (Claude's SessionEnd): the pane keeps
+        // its agent, state and session as they were.
+        rest: agent.rests ? {
+          idleMs: restIdleMs(),
+          onRest: (id) => {
+            const before = (reportedAgentState(agent.stateAgent, paneId) as ReportedState | undefined) ?? "idle";
+            const again = () => { try { reportState(agent.stateAgent, paneId, before, { externalSessionId: id, activity: false }); } catch { /* the view works without it */ } };
+            return () => { again(); setTimeout(again, 2_000).unref(); };
+          },
+        } : undefined,
         sessionUsage: paneUsageReader(agent, paneId),
         onActivity: reportViewActivity(agent.stateAgent, paneId),
         handoff: { inView: () => mode === "view", handOff, giveBack },

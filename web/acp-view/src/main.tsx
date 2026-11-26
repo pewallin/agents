@@ -1671,6 +1671,8 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
             placeholder={busy ? (steerWay === "none" ? `Queue a message for when ${agentName} is done` : `Steer ${agentName} while it works`) : `Ask ${agentName}, @ for files and panes, / for commands`}
             onChange={(event) => {
               setDraft(event.target.value);
+              // A resting agent starts as the user begins to write.
+              if (event.target.value) session.wake();
               setCaret(event.target.selectionStart ?? event.target.value.length);
               setMention(mentionAt(event.target.value, event.target.selectionStart ?? event.target.value.length));
               setSelectedHit(0);
@@ -2562,6 +2564,21 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
     );
     return () => { cancelled = true; };
   }, [session, info.agent.name]);
+
+  // The host keeps the agent of the pane in front awake.
+  useEffect(() => {
+    if (!session) return;
+    const report = () => session.focus(document.hasFocus() && document.visibilityState === "visible");
+    report();
+    window.addEventListener("focus", report);
+    window.addEventListener("blur", report);
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      window.removeEventListener("focus", report);
+      window.removeEventListener("blur", report);
+      document.removeEventListener("visibilitychange", report);
+    };
+  }, [session]);
 
   const historyShown = useHistoryCameIn(session, phase.kind === "connecting");
 

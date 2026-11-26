@@ -63,6 +63,21 @@ describe("acp-host", () => {
     expect(existsSync(h.metadataPath)).toBe(false);
   });
 
+  it("keeps the view's notices for itself: an agent gets no focus or wake lines", async () => {
+    const h = await start();
+    const ws = connect(h);
+    const got: Array<{ id?: unknown; result?: { echo?: string } }> = [];
+    ws.on("message", (data) => got.push(JSON.parse(String(data))));
+    await new Promise((resolve) => ws.once("open", resolve));
+    ws.send(JSON.stringify({ jsonrpc: "2.0", method: "_agents/focus", params: { focused: true } }));
+    ws.send(JSON.stringify({ jsonrpc: "2.0", method: "_agents/wake", params: {} }));
+    ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+    for (let i = 0; i < 100 && got.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(got.map((message) => message.result?.echo)).toEqual(["initialize"]);
+    ws.close();
+  });
+
   it("serves the app shell for thread addresses and hashed assets as immutable", async () => {
     const h = await start();
     const shell = await fetch(`${h.url}/thread/abc`);

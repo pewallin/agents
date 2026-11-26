@@ -365,3 +365,39 @@ from 0:
 order, with each session's `via` from sessions.jsonl. A session with no log is listed as
 `missing`. It runs over SSH like `agents threads`. What the TUI does with a session while the
 view does not have it is not in the log until a view loads the session again.
+
+## Panes that open from their log, and agents that rest (2026-11-26)
+
+For an agent that rests (`rests` in src/acp-host-cli.ts: Claude, Kiro, OpenCode, the ones that
+take their session up again cleanly, above), the host's own session (a pane in its view, a
+worker) needs no agent process to be shown:
+
+- **Opening from the log.** `startHostedSession(id)` of a session whose log has its meta beside it
+  (`<session>.meta.json`: the agent's initialize answer, the session's modes, config options and
+  models as it last had them, its commands and its last usage) starts no agent: the host keeps
+  the session resting. A view's `initialize` and `session/load` are answered from the meta and the
+  log (`sessionLogUpdates`), with the commands and usage after the history, so it draws what it
+  drew before, as fast as the page can.
+- **Starting on typing.** The view sends `_agents/wake` as the user begins to write (at most every
+  5 s, acp-connection `wake`), and anything else for the agent (a prompt, a mode, a cancel) wakes
+  it too and waits for it. The agent starts and loads the session; its replay goes nowhere (the
+  view shows the log already), and the mode, model and other choices of the meta are set again
+  where the agent opened the session with others (Claude forgets a model, Codex its mode). A
+  prompt sent before the agent is ready goes once it has the session. `POST /api/prompt` and the
+  host's own prompts (a worker's next message) wake it the same way.
+- **Resting.** The host stops the agent after 30 minutes at its prompt (`AGENTS_ACP_REST_IDLE_MS`),
+  counted from the last thing it did or was asked, and when the app asks (`POST /api/rest`: Agents
+  Next asks every host of its panes as it quits). Never while a prompt runs, a permission waits, a
+  message waits in the queue, or while a view of it says it has the focus (`_agents/focus
+  {focused}`, from the page's focus and visibility). A question for the user (`agent ask --user`)
+  is the CLI's, not the process's: a pane whose question waits may rest. The warm spare stops too.
+  The agent's hooks may report that it ended (Claude's SessionEnd); the host reports the pane's
+  state and session again as they were, so the app keeps the pane as it was. `/api/state` says
+  `resting: true` meanwhile.
+- **A session the TUI had.** When the view gives the session back to the pane's TUI, the meta is
+  marked (`tui`): the TUI's turns are not in the log, so the next view opens the session through its
+  harness again, whose replay fills the log in, and the mark goes.
+
+Codex shares its thread with its TUI live through the pane's app-server and does not rest: its
+pane's agent is the TUI. Pi and Copilot stay as they were (Pi unchecked here, Copilot cannot load a
+session).

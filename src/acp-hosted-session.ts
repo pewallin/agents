@@ -117,8 +117,17 @@ export class HostedSession {
     return this.child.exitCode === null && this.child.signalCode === null;
   }
 
-  /** Initializes the agent and starts a session in `cwd`, or loads `existing`. */
-  async start(cwd: string, existing?: string): Promise<string> {
+  /** While the agent replays a session its views already show (a resume from the session log):
+   *  the replay goes nowhere. */
+  private quietReplay = false;
+
+  /**
+   * Initializes the agent and starts a session in `cwd`, or loads `existing`. A `resume` takes up a
+   * session its views show from its log: the agent's replay is not shown again (views are given
+   * `resume.history`), and the session's choices as the view last had them are set again where
+   * the agent opened it otherwise (an agent may not keep a model or mode).
+   */
+  async start(cwd: string, existing?: string, resume?: { history: string[]; choices: Array<{ method: string; params: Record<string, unknown> }> }): Promise<string> {
     // A view that attaches while the session opens waits for these (fromView).
     if (existing) this.sessionId = existing;
     const initialize = this.request("initialize", {
@@ -130,9 +139,18 @@ export class HostedSession {
     this.initialized = await initialize;
     if (existing) {
       // The load replays the session: its updates are the history a view is given.
+      if (resume) this.quietReplay = true;
       const load = this.request("session/load", { sessionId: existing, cwd, mcpServers: [] }, 90_000);
       this.opening = settled(load);
-      this.opened = { ...await load, sessionId: existing };
+      try {
+        this.opened = { ...await load, sessionId: existing };
+      } finally {
+        this.quietReplay = false;
+      }
+      if (resume) {
+        this.history.splice(0, this.history.length, ...resume.history);
+        await this.restoreChoices(existing, resume.choices);
+      }
       return existing;
     }
     this.opened = await this.request("session/new", { cwd, mcpServers: [] }, 60_000);
@@ -140,6 +158,36 @@ export class HostedSession {
     if (typeof sessionId !== "string" || !sessionId) throw new Error("the agent started no session");
     this.sessionId = sessionId;
     return sessionId;
+  }
+
+  /** Sets again the choices the session had (config options, mode, model) where the agent opened
+   *  it with others. One the agent refuses stays as it opened. */
+  private async restoreChoices(sessionId: string, choices: Array<{ method: string; params: Record<string, unknown> }>): Promise<void> {
+    for (const choice of choices) {
+      const opened = this.opened ?? {};
+      if (choice.method === "session/set_config_option") {
+        const options = Array.isArray(opened.configOptions) ? opened.configOptions as Array<Record<string, unknown>> : [];
+        const option = options.find((entry) => entry.id === choice.params.configId);
+        if (!option || option.currentValue === choice.params.value) continue;
+        const answer = await this.request(choice.method, { sessionId, ...choice.params }, 15_000).catch(() => undefined);
+        if (!answer) continue;
+        const configOptions = Array.isArray(answer.configOptions) ? answer.configOptions
+          : options.map((entry) => entry.id === choice.params.configId ? { ...entry, currentValue: choice.params.value } : entry);
+        this.opened = { ...this.opened, configOptions };
+      } else if (choice.method === "session/set_mode") {
+        const modes = opened.modes as Record<string, unknown> | undefined;
+        if (!modes || modes.currentModeId === choice.params.modeId) continue;
+        if (await this.request(choice.method, { sessionId, ...choice.params }, 15_000).catch(() => undefined)) {
+          this.opened = { ...this.opened, modes: { ...modes, currentModeId: choice.params.modeId } };
+        }
+      } else if (choice.method === "session/set_model") {
+        const models = opened.models as Record<string, unknown> | undefined;
+        if (!models || models.currentModelId === choice.params.modelId) continue;
+        if (await this.request(choice.method, { sessionId, ...choice.params }, 15_000).catch(() => undefined)) {
+          this.opened = { ...this.opened, models: { ...models, currentModelId: choice.params.modelId } };
+        }
+      }
+    }
   }
 
   /** Prompts the agent with `text`, as typed into its TUI; resolves when its turn ends. */
@@ -174,9 +222,10 @@ export class HostedSession {
 
   /** A view of the session: it gets the agent's messages, and its own pass through. The view that
    *  attaches last has the session; one before it is let go (`replaced`). */
-  attach(send: (line: string) => void, replaced?: () => void): HostedView {
+  attach(send: (line: string) => void, replaced?: () => void, synced = false): HostedView {
     const previous = this.view;
-    const view: AttachedView = { send, ids: new Map<string, Id>(), synced: false };
+    // A view that shows the session from its log already (it opened while the agent rested).
+    const view: AttachedView = { send, ids: new Map<string, Id>(), synced };
     this.view = view;
     if (previous) replaced?.();
     return {
@@ -278,6 +327,8 @@ export class HostedSession {
     }
     if (key !== undefined) this.asks.set(key, line);
     else if (message.method === "session/update" && message.params?.sessionId === this.sessionId) {
+      // The agent's replay of a session its views show from the log: drawn already.
+      if (this.quietReplay && (message.params?.update as { sessionUpdate?: unknown } | undefined)?.sessionUpdate !== "available_commands_update") return;
       this.history.push(line);
       // A view not given the history yet gets this update with it.
       if (!this.view?.synced) return;

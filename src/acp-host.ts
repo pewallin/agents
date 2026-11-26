@@ -25,7 +25,7 @@ import { AcpCompaction, compactionWay } from "./acp-compaction.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { TerminalReader } from "./terminal-question.js";
-import { SessionLogTap, type SessionLogTapOptions } from "./session-log.js";
+import { markSessionLogInTui, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions } from "./session-log.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween, workRoots } from "./acp-peek.js";
 
@@ -100,6 +100,14 @@ export interface AcpHostOptions {
   /** The agent name of the pane's conversations in `agents history` (its state agent: claude,
    *  kiro, …), for the view's /resume. */
   historyAgent?: string;
+  /**
+   * The agent may rest (it takes its session up again cleanly, docs/acp-view-client.md): the
+   * host's own session is opened from its session log with no agent process, the agent starts
+   * when a view asks it for anything (the first keystroke), and stops after `idleMs` at its
+   * prompt, or when the app asks (`POST /api/rest`, as it quits), unless it works, a permission
+   * waits, or a view of it has the focus. Needs `sessionLog`.
+   */
+  rest?: { idleMs: number; /** Called as the agent is about to stop; what it returns, once it has. */ onRest?: (sessionId: string) => (() => void) | void };
   /** Writes the session logs of what the views and the host's own session draw (session-log.ts):
    *  the agent's harness name, and where a session's chain goes on from. */
   sessionLog?: Omit<SessionLogTapOptions, "cwd" | "log">;
@@ -282,6 +290,8 @@ export interface AcpHost {
   readonly metadataPath: string;
   /** Ends every client and its adapter process; the host and its warm spare stay. */
   closeClients(): void;
+  /** The session went back to the pane's TUI: it opens through its harness next time. */
+  sessionInTui(sessionId: string): void;
   close(): Promise<void>;
   /** Starts a session the host holds itself (acp-hosted-session.ts): a view of the pane then
    *  attaches to it, and prompts (POST /api/prompt) go to it. Resolves with its id. */
@@ -406,6 +416,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   let lastWaitingOn = activity.waitingOn;
   const activityChanged = () => {
     const state = activity.state;
+    lastBusyAt = Date.now();
     const waitingOn = activity.waitingOn;
     if (state === lastActivity && waitingOn === lastWaitingOn) return;
     const stateChanged = state !== lastActivity;
@@ -453,15 +464,24 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   let spare: ChildProcess | undefined;
   let closed = false;
   let hosted: HostedSession | undefined;
-  let hostedView: { ws: WebSocket; viewId?: string } | undefined;
+  /** The view of the host's own session (one at a time): attached to the agent while it runs,
+   *  answered from the session log while it rests. */
+  let hostedView: HostedViewConnection | undefined;
+  /** The host's own session while its agent rests: no process, the log has it. */
+  let resting: { sessionId: string } | undefined;
+  let waking: Promise<HostedSession> | undefined;
+  /** When the host's own session last did anything or was asked anything (rest counts from it). */
+  let lastBusyAt = Date.now();
   const attachWaiters = new Set<() => void>();
   // One turn at a time: a line that comes while the agent works waits for its turn to end, as a
   // line typed into its TUI would.
   let hostedTurns: Promise<void> = Promise.resolve();
   const hostedPrompt = (text: string): Promise<void> => {
-    const session = hosted;
-    if (!session?.alive) return Promise.reject(new Error("the host holds no session"));
+    if (!hosted?.alive && !resting) return Promise.reject(new Error("the host holds no session"));
+    lastBusyAt = Date.now();
     const turn = hostedTurns.then(async () => {
+      // A resting agent starts for it.
+      const session = hosted?.alive ? hosted : await wake();
       if (!session.alive) throw new Error("the agent exited");
       const stopReason = await session.prompt(text);
       log(`hosted turn ended (${stopReason ?? "no reason"})`);
@@ -501,6 +521,16 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       handleControl(request, response, token, options.handoff);
       return;
     }
+    // The app quits: an agent that can rest does, unless it works or waits on a permission.
+    if (request.method === "POST" && request.url === "/api/rest") {
+      const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+      if (!tokensMatch(token, auth)) {
+        response.writeHead(401, { "Cache-Control": "no-store" }).end();
+        return;
+      }
+      void rest(true).then((rested) => sendJson(response, 200, { rested, resting: resting !== undefined }));
+      return;
+    }
     // A line for the agent, as typed into its TUI: the host's own session takes it as a prompt.
     if (request.method === "POST" && request.url === "/api/prompt") {
       const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -511,7 +541,8 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       readJson(request).then(async (body) => {
         const { text, steer } = (body ?? {}) as { text?: unknown; steer?: unknown };
         if (typeof text !== "string" || !text.trim()) { sendJson(response, 400, { message: "A prompt is needed." }); return; }
-        const session = hosted;
+        // A resting agent starts for it: the prompt goes once it has its session.
+        const session = !hosted?.alive && resting ? await wake().catch(() => undefined) : hosted;
         if (!session?.alive || !session.sessionId) { sendJson(response, 409, { message: "The host holds no session of the agent to prompt." }); return; }
         const prompt = (state: "prompted" | "queued") => {
           void hostedPrompt(text).catch((error: unknown) => log(`hosted prompt failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -556,7 +587,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       cwd: options.cwd,
       agent: options.agent,
       currentSession: options.currentSession,
-      state: () => ({ state: activity.state, agentState: agentState ?? null, mode: options.handoff ? "handoff" : "live", inView: options.handoff?.inView() ?? true, clients: wss.clients.size }),
+      state: () => ({ state: activity.state, agentState: agentState ?? null, mode: options.handoff ? "handoff" : "live", inView: options.handoff?.inView() ?? true, clients: wss.clients.size, ...(resting ? { resting: true } : {}) }),
       diagnostics: () => ({
         agent: options.agent,
         pane: options.paneId,
@@ -596,6 +627,144 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const views = new Map<number, OpenView>();
   const holders = (client: number, sessionId: string) =>
     [...views].filter(([other, view]) => other !== client && view.sessions.has(sessionId));
+  /** A line from the view of the host's own session: to the agent while it runs; while it rests,
+   *  answered from the session log, or kept for the agent, which it wakes. */
+  const viewLine = (connection: HostedViewConnection, line: string) => {
+    const own = hostRequest(line);
+    if (own) { connection.send(own); return; }
+    const message = parseJson(line);
+    if (!message) return;
+    if (message.method === VIEW_FOCUS_METHOD) {
+      connection.focused = (message.params as { focused?: unknown } | undefined)?.focused === true;
+      if (connection.focused) lastBusyAt = Date.now();
+      return;
+    }
+    lastBusyAt = Date.now();
+    if (message.method === WAKE_METHOD) {
+      if (resting) void wake().catch(() => undefined);
+      return;
+    }
+    if (connection.live) {
+      if (isPromptLine(line)) recordViewPrompt(promptPath);
+      connection.live.fromView(line);
+      return;
+    }
+    if (!resting) return;
+    const id = message?.id;
+    const answerable = id !== undefined && id !== null && (typeof id === "string" || typeof id === "number");
+    if (answerable && message?.method === "initialize") {
+      const meta = restingMeta();
+      if (meta?.initialize) { connection.send(JSON.stringify({ jsonrpc: "2.0", id, result: meta.initialize })); return; }
+    }
+    if (answerable && (message?.method === "session/load" || message?.method === "session/resume")
+      && (message.params as { sessionId?: unknown } | undefined)?.sessionId === resting.sessionId) {
+      const opened = restingHistory();
+      if (opened) {
+        for (const update of opened.history) connection.send(update);
+        connection.send(JSON.stringify({ jsonrpc: "2.0", id, result: opened.result }));
+        connection.synced = true;
+        return;
+      }
+    }
+    // Anything else is for the agent: it starts, and the line goes once it has the session.
+    connection.pending.push(line);
+    void wake().catch(() => undefined);
+  };
+
+  /** The resting session's log and meta (what a view opens it with). */
+  const restingMeta = () => {
+    if (!resting || !options.sessionLog) return undefined;
+    try { return readSessionLogMeta(sessionLogPath(options.sessionLog.harness, resting.sessionId, options.sessionLog.root)); } catch { return undefined; }
+  };
+  const restingHistory = (): { history: string[]; result: Record<string, unknown> } | undefined => {
+    if (!resting || !options.sessionLog) return undefined;
+    const sessionId = resting.sessionId;
+    const meta = restingMeta();
+    const log = readSessionLog(sessionId, { root: options.sessionLog.root });
+    if (!meta?.opened || !log) return undefined;
+    const notification = (update: Record<string, unknown>) => JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } });
+    const history = sessionLogUpdates(log.lines, log.path).map(notification);
+    if (Array.isArray(meta.commands)) history.push(notification({ sessionUpdate: "available_commands_update", availableCommands: meta.commands }));
+    if (meta.usage) history.push(notification({ sessionUpdate: "usage_update", ...meta.usage }));
+    return { history, result: meta.opened };
+  };
+  /** Whether a session can open from its log: it has one, with what a view needs. */
+  const opensFromLog = (sessionId: string) => {
+    if (!options.rest || !options.sessionLog) return false;
+    try {
+      const path = sessionLogPath(options.sessionLog.harness, sessionId, options.sessionLog.root);
+      const meta = readSessionLogMeta(path);
+      return Boolean(meta?.initialize && meta.opened && !meta.tui && (readSessionLog(sessionId, { root: options.sessionLog.root })?.lines.length ?? 0) > 1);
+    } catch {
+      return false;
+    }
+  };
+
+  /** Starts the resting session's agent; the view of it goes on live once the agent has it. */
+  const wake = (): Promise<HostedSession> => {
+    if (hosted?.alive) return Promise.resolve(hosted);
+    if (!resting) return Promise.reject(new Error("the host holds no session"));
+    if (waking) return waking;
+    const sessionId = resting.sessionId;
+    const started = Date.now();
+    waking = (async () => {
+      const opened = restingHistory();
+      const meta = restingMeta();
+      log(`waking the agent for session ${sessionId}`);
+      try {
+        await startHosted(sessionId, opened ? { history: opened.history, choices: sessionLogChoices(meta) } : undefined);
+      } catch (error) {
+        hosted = undefined;
+        const reason = error instanceof Error ? error.message : String(error);
+        log(`the agent did not wake: ${reason}`);
+        const connection = hostedView;
+        for (const line of connection?.pending.splice(0) ?? []) {
+          const id = parseJson(line)?.id;
+          if (id !== undefined && id !== null) connection?.send(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: `The agent did not start: ${reason}` } }));
+        }
+        throw error;
+      }
+      resting = undefined;
+      lastBusyAt = Date.now();
+      log(`the agent is awake for session ${sessionId} (${Date.now() - started} ms)`);
+      const session = hosted!;
+      const connection = hostedView;
+      if (connection) {
+        connection.live = session.attach(connection.send, undefined, connection.synced === true);
+        for (const line of connection.pending.splice(0)) {
+          if (isPromptLine(line)) recordViewPrompt(promptPath);
+          connection.live.fromView(line);
+        }
+      }
+      return session;
+    })().finally(() => { waking = undefined; });
+    return waking;
+  };
+
+  /** Stops the agent of the host's own session; the view keeps it, from the log, and the next
+   *  thing asked of it wakes the agent. `now` rests whenever it can (the app quits). */
+  const rest = async (now: boolean): Promise<boolean> => {
+    const session = hosted;
+    if (!options.rest || !session?.alive || !session.sessionId || waking) return false;
+    if (activity.state !== "idle" || queue.list().some((item) => item.state !== "queued")) return false;
+    if (!now && (hostedView?.focused || Date.now() - lastBusyAt < options.rest.idleMs)) return false;
+    if (!opensFromLog(session.sessionId)) return false;
+    const sessionId = session.sessionId;
+    sessionLog?.flush();
+    log(`resting: the agent of session ${sessionId} stops${now ? " (asked)" : " (idle)"}`);
+    hostedView?.live?.detach();
+    if (hostedView) { hostedView.live = undefined; hostedView.synced = true; }
+    hosted = undefined;
+    resting = { sessionId };
+    if (spare) { children.delete(spare); spare.stdin?.end(); spare.kill("SIGTERM"); spare = undefined; }
+    const stopped = options.rest.onRest?.(sessionId);
+    await session.stop();
+    stopped?.();
+    return true;
+  };
+  const restTimer = options.rest ? setInterval(() => { void rest(false); }, Math.max(1_000, Math.min(60_000, Math.floor(options.rest.idleMs / 10)))) : undefined;
+  restTimer?.unref();
+
   server.on("upgrade", (request, socket, head) => {
     const port = (server.address() as { port: number }).port;
     const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
@@ -620,38 +789,35 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     const takesOver = url.searchParams.get("takeover") === "1";
     // A view's own id, the same across reloads of its page: a view that loads again is not another.
     const viewId = url.searchParams.get("view") ?? undefined;
-    if (hosted?.alive) {
-      const session = hosted;
+    if (hosted?.alive || resting) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         const client = nextClient++;
-        log(`view ${client} attached to the host's session`);
+        log(`view ${client} attached to the host's session${resting ? " (resting: from its log)" : ""}`);
         for (const waiter of [...attachWaiters]) waiter();
         const previous = hostedView;
-        hostedView = { ws, viewId };
-        const attached: HostedView = session.attach(
-          (line) => { if (ws.readyState === ws.OPEN) ws.send(line); },
-          () => {
-            if (!previous || previous.ws.readyState !== previous.ws.OPEN) return;
+        const connection: HostedViewConnection = { ws, viewId, client, pending: [], focused: false, send: (line) => { if (ws.readyState === ws.OPEN) ws.send(line); } };
+        hostedView = connection;
+        if (previous) {
+          previous.live?.detach();
+          previous.live = undefined;
+          if (previous.ws.readyState === previous.ws.OPEN) {
             // The same view loading again is not told; another is told its session went elsewhere.
             if (previous.viewId === undefined || previous.viewId !== viewId) {
               previous.ws.send(JSON.stringify({ jsonrpc: "2.0", method: TAKEN_OVER_METHOD, params: {} }));
             }
             previous.ws.close(TAKEN_OVER_CLOSE_CODE, "the session is open in another view");
-          },
-        );
+          }
+        }
+        if (hosted?.alive) connection.live = hosted.attach(connection.send, undefined);
         ws.on("message", (data, isBinary) => {
           if (isBinary) return;
-          const own = hostRequest(data.toString());
-          if (own) ws.send(own);
-          else {
-            if (isPromptLine(data.toString())) recordViewPrompt(promptPath);
-            attached.fromView(data.toString());
-          }
+          viewLine(connection, data.toString());
         });
         ws.on("close", (code) => {
           log(`view ${client} closed (${code})`);
-          attached.detach();
-          if (hostedView?.ws === ws) hostedView = undefined;
+          connection.live?.detach();
+          connection.live = undefined;
+          if (hostedView === connection) hostedView = undefined;
         });
         ws.on("error", (error) => log(`client error: ${error.message}`));
       });
@@ -760,8 +926,9 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   log(`listening on ${url}`);
 
   const closeClients = () => {
-    const hadHosted = hosted !== undefined;
+    const hadHosted = hosted !== undefined || resting !== undefined;
     hosted = undefined;
+    resting = undefined;
     hostedView = undefined;
     // Its turns end with it: the pane is not left working.
     activity.clientGone(0);
@@ -775,11 +942,62 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     }
   };
 
+  async function startHosted(existing: string | undefined, resume?: { history: string[]; choices: Array<{ method: string; params: Record<string, unknown> }> }): Promise<string> {
+    // A process of its own, started now: a spare started beside the TUI can be stuck on the
+    // agent's store the TUI held (OpenCode answers no prompt then). And no spare beside it: the
+    // views attach to this one, and two of some agents starting at once fight over their store
+    // (OpenCode: "database is locked"). An agent whose spare holds nothing until a session
+    // opens (Claude) opens it in the spare, which has loaded already.
+    if (spare && !options.spareCanHost) {
+      children.delete(spare);
+      spare.stdin?.end();
+      spare.kill("SIGTERM");
+      spare = undefined;
+    }
+    const warm = spare;
+    const child = takeAgent(false);
+    // Each of the host's own sessions is a stream of its own: ids start again with its process.
+    const hostedStream = `host-${child.pid ?? nextClient++}`;
+    log(`the host starts a session of its own, agent ${child.pid}${child === warm ? " (started ahead)" : ""}`);
+    const session = new HostedSession(child, {
+      launchSettings,
+      kiroSteering: options.agent.id === "kiro",
+      compaction: compactionWay(options.agent.id),
+      sessionUsage: options.sessionUsage,
+      onAgentLine: (line) => {
+        diagnostics.message(0, "agent→host", line);
+        sessionLog?.agentLine(hostedStream, line);
+        plan.agentLine(line);
+        activity.agentLine(0, line);
+        activityChanged();
+        options.onAgentLine?.(line);
+      },
+      onClientLine: (line) => {
+        diagnostics.message(0, "host→agent", line);
+        sessionLog?.clientLine(hostedStream, line);
+        activity.clientLine(0, line);
+        activityChanged();
+        options.onClientLine?.(line);
+      },
+      log,
+    });
+    child.once("exit", (code, signal) => {
+      log(`agent ${child.pid} exited (${code ?? signal})`);
+      sessionLog?.streamGone(hostedStream);
+    });
+    hosted = session;
+    return await session.start(options.cwd, existing, resume);
+  }
+
   return {
     url,
     token,
     metadataPath,
     closeClients,
+    sessionInTui(sessionId) {
+      sessionLog?.flush();
+      if (options.sessionLog) markSessionLogInTui(options.sessionLog.harness, sessionId, options.sessionLog.root);
+    },
     hostedPrompt,
     viewAttached(timeoutMs) {
       if (hostedView) return Promise.resolve(true);
@@ -791,54 +1009,20 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       });
     },
     async startHostedSession(existing?: string) {
-      // A process of its own, started now: a spare started beside the TUI can be stuck on the
-      // agent's store the TUI held (OpenCode answers no prompt then). And no spare beside it: the
-      // views attach to this one, and two of some agents starting at once fight over their store
-      // (OpenCode: "database is locked"). An agent whose spare holds nothing until a session
-      // opens (Claude) opens it in the spare, which has loaded already.
-      if (spare && !options.spareCanHost) {
-        children.delete(spare);
-        spare.stdin?.end();
-        spare.kill("SIGTERM");
-        spare = undefined;
+      // A session with a log rests until a view asks its agent for something (or a prompt comes).
+      if (existing && options.rest && opensFromLog(existing)) {
+        if (spare) { children.delete(spare); spare.stdin?.end(); spare.kill("SIGTERM"); spare = undefined; }
+        resting = { sessionId: existing };
+        lastBusyAt = Date.now();
+        log(`the host's session ${existing} opens from its log; its agent starts when asked`);
+        return existing;
       }
-      const warm = spare;
-      const child = takeAgent(false);
-      // Each of the host's own sessions is a stream of its own: ids start again with its process.
-      const hostedStream = `host-${child.pid ?? nextClient++}`;
-      log(`the host starts a session of its own, agent ${child.pid}${child === warm ? " (started ahead)" : ""}`);
-      const session = new HostedSession(child, {
-        launchSettings,
-        kiroSteering: options.agent.id === "kiro",
-        compaction: compactionWay(options.agent.id),
-        sessionUsage: options.sessionUsage,
-        onAgentLine: (line) => {
-          diagnostics.message(0, "agent→host", line);
-          sessionLog?.agentLine(hostedStream, line);
-          plan.agentLine(line);
-          activity.agentLine(0, line);
-          activityChanged();
-          options.onAgentLine?.(line);
-        },
-        onClientLine: (line) => {
-          diagnostics.message(0, "host→agent", line);
-          sessionLog?.clientLine(hostedStream, line);
-          activity.clientLine(0, line);
-          activityChanged();
-          options.onClientLine?.(line);
-        },
-        log,
-      });
-      child.once("exit", (code, signal) => {
-        log(`agent ${child.pid} exited (${code ?? signal})`);
-        sessionLog?.streamGone(hostedStream);
-      });
-      hosted = session;
-      return await session.start(options.cwd, existing);
+      return await startHosted(existing);
     },
     async close() {
       if (closed) return;
       closed = true;
+      if (restTimer) clearInterval(restTimer);
       sessionLog?.flush();
       if (options.agentStateFile) unwatchFile(options.agentStateFile, agentStateChanged);
       queue.close();
@@ -854,6 +1038,33 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       await new Promise<void>((done) => server.close(() => done()));
     },
   };
+}
+
+/** The view of the host's own session. */
+interface HostedViewConnection {
+  ws: WebSocket;
+  viewId?: string;
+  client: number;
+  send: (line: string) => void;
+  /** Attached to the running agent; none while it rests. */
+  live?: HostedView;
+  /** What the view asked of a resting agent, sent once it has the session. */
+  pending: string[];
+  /** The view says it has the focus (`_agents/focus`): its agent does not rest. */
+  focused: boolean;
+  /** The view shows the session already (from its log): a wake gives it no history again. */
+  synced?: boolean;
+}
+
+/** A view's notice that it has or lost the focus (`{focused}`), and that the user began typing
+ *  (the resting agent starts). */
+export const VIEW_FOCUS_METHOD = "_agents/focus";
+export const WAKE_METHOD = "_agents/wake";
+
+function isViewNotice(line: string): boolean {
+  if (!line.includes("\"_agents/")) return false;
+  const method = parseJson(line)?.method;
+  return method === VIEW_FOCUS_METHOD || method === WAKE_METHOD;
 }
 
 interface OpenView {
@@ -963,6 +1174,8 @@ function bridge(
   ws.on("message", (data, isBinary) => {
     if (isBinary || finished) return;
     const text = data.toString();
+    // The view's notices for the host (its focus, typing): an agent of this kind never rests.
+    if (isViewNotice(text)) return;
     const reply = taps.onClientLine?.(text);
     if (reply !== undefined) {
       if (ws.readyState === ws.OPEN) ws.send(reply);

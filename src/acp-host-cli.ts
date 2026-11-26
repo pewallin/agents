@@ -102,6 +102,16 @@ export interface AcpAgentEntry {
   offersAllowAll?: boolean;
   /** The adapter sends usage_update itself (context, and cost where the agent has one). */
   reportsUsage?: boolean;
+  /** It takes its session up again in a new process with its context (checked per agent,
+   *  docs/acp-view-client.md "Resting and resuming"): its pane opens from the session log and
+   *  its agent rests when idle. */
+  rests?: boolean;
+}
+
+/** How long an agent waits at its prompt before it rests: 30 minutes, or AGENTS_ACP_REST_IDLE_MS. */
+export function restIdleMs(env: NodeJS.ProcessEnv = process.env): number {
+  const value = Number(env.AGENTS_ACP_REST_IDLE_MS);
+  return Number.isFinite(value) && value >= 1_000 ? value : 30 * 60_000;
 }
 
 
@@ -253,6 +263,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     tested: false,
     // Claude Code starts only when the adapter opens a session: a spare holds nothing.
     spareCanHost: true,
+    rests: true,
     // The adapter drives the user's own Claude Code, so it has the same login and settings.
     command({ tuiCommand }) {
       const claude = executableOf(tuiCommand, "claude");
@@ -285,6 +296,7 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     stateAgent: "opencode",
     reportsUsage: true,
     tested: true,
+    rests: true,
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "opencode"), args: ["acp"], env: { ...process.env } }),
     ...sessionOptions(["--session", "-s"], ["--continue", "-c", "--fork"], (id) => ["--session", id]),
     launchSettings: opencodeLaunchSettings,
@@ -319,6 +331,8 @@ export const ACP_AGENTS: Record<string, AcpAgentEntry> = {
     name: "Kiro",
     stateAgent: "kiro",
     tested: false,
+    // Kiro 3 (the v3 engine) checked; a v2 session copies itself on resume (kiroContinuedSession).
+    rests: true,
     command: ({ tuiCommand }) => ({ command: executableOf(tuiCommand, "kiro-cli"), args: kiroAcpArgs(tuiCommand), env: { ...process.env } }),
     ...sessionOptions(["--resume-id"], ["--resume"], (id) => ["--resume-id", id]),
     launchSettings: (tuiCommand) => kiroLaunchSettings(tuiCommand),
