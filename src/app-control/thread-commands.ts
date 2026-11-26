@@ -61,6 +61,11 @@ export async function runAgentResolve(command) {
   const { program, own } = commandProgram(params, "agent resolve");
   for (const task of command.tasks) knownTask(program, task);
   const who = closerOf(own);
+  // The user keeps a thread its coordinator proposed to close (T8): the proposal goes.
+  if (params["keep-open"]) {
+    for (const task of command.tasks) updateTaskMeta(program, task, meta => { delete meta.proposedClose; return meta; });
+    return { id: requestID("cli"), ok: true, result: { program, keptOpen: command.tasks } };
+  }
   if (params.propose !== undefined) {
     const why = oneLine(params.propose === true ? "" : params.propose, 300);
     if (!why) fail(64, "usage", "agent resolve --propose needs why, e.g. --propose \"The PR is merged and the build is out\".");

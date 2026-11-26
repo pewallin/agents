@@ -311,10 +311,10 @@ export function parseCommand(argv) {
   }
 
   if (command === "agent" && subcommand === "resolve") {
-    const { positional, params } = parseOptions(rest);
+    const { positional, params } = parseOptions(rest, new Set(["keep-open"]));
     if (positional.length === 0) fail(64, "usage", "agent resolve requires task names.");
-    const ways = ["dropped", "replaced-by", "propose"].filter(name => params[name] !== undefined);
-    if (ways.length > 1) fail(64, "usage", "agent resolve takes one of --dropped, --replaced-by or --propose.");
+    const ways = ["dropped", "replaced-by", "propose", "keep-open"].filter(name => params[name] !== undefined);
+    if (ways.length > 1) fail(64, "usage", "agent resolve takes one of --dropped, --replaced-by, --propose or --keep-open.");
     return { kind: "agent-resolve", tasks: positional, params };
   }
 

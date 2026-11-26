@@ -859,3 +859,7 @@ button:disabled, select:disabled { cursor: default; }
 .thread-mark.needs-you { background: var(--orange); }
 .thread-mark.done { background: var(--ok); }
 .thread-mark.working { background: var(--acc); }
+
+/* The coordinator's proposal to close a thread beside you: its last row (T8). */
+.close-card { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--edge); border-radius: 8px; background: var(--tint); }
+.close-actions { display: flex; gap: 8px; }

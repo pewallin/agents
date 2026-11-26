@@ -11,7 +11,7 @@ import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock, SessionConfigOption } from "@agentclientprotocol/sdk";
-import { CannotLoadSession, OpenElsewhere, connectMirror, connectSession, type AcpSession, type AllowAll, type MirrorReply } from "./acp-connection";
+import { CannotLoadSession, OpenElsewhere, connectMirror, connectSession, type AcpSession, type AllowAll, type MirrorReply, type MirrorSession } from "./acp-connection";
 import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOptions, withModels } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
@@ -1446,6 +1446,18 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
   };
 
   const sendText = (typed: string, how: "send" | "queue") => {
+    // A thread beside you: what you write waits for its turn to end, and Option-Return sends it
+    // into the turn where the agent can take that (S3). The delivery shows under the field.
+    if (MIRROR && "reply" in session) {
+      onSend();
+      setField("");
+      setNotice(null);
+      void (session as MirrorSession).reply(typed, how === "queue").then((reply) => {
+        if (!reply.ok) setNotice(how === "queue" ? `${agentName} cannot take a message during its turn.` : reply.message ?? "The message did not go.");
+        else if (reply.state === "queued" && reply.message) setNotice(`Waiting for ${agentName}'s turn to end`);
+      });
+      return;
+    }
     onSend();
     const attached = attachments;
     setAttachments([]);
@@ -2186,6 +2198,7 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
             {permissions.map((request, index) => (
               <Ask key={request.id} request={request} agentName={info.agent.name} session={session} focused={index === 0} cwd={info.cwd} />
             ))}
+            <ProposedCloseCard />
           </div>
         </div>
         </div>
@@ -2538,11 +2551,39 @@ const MIRROR: { task?: string; program?: string } | null = (() => {
   return { ...(params.get("task") ? { task: params.get("task")! } : {}), ...(params.get("program") ? { program: params.get("program")! } : {}) };
 })();
 
+/** What a thread beside you says beside its conversation: a close its coordinator proposed. */
+const useMirrorThread = create<{ proposedClose: { why: string } | null }>(() => ({ proposedClose: null }));
+
+/** The coordinator proposed to close the thread (T8): the last row, with why, Close as done and
+ *  Keep open. The app does either (agent resolve), as the Needs you list does. */
+function ProposedCloseCard() {
+  const proposed = useMirrorThread((state) => state.proposedClose);
+  const [pending, setPending] = useState(false);
+  if (!MIRROR || !proposed) return null;
+  const act = (action: "close" | "keep-open") => {
+    const app = appHandler(APP_HANDLERS.threadAction);
+    if (!app) return;
+    setPending(true);
+    void Promise.resolve(app.postMessage({ action, task: MIRROR.task, program: MIRROR.program }) as Promise<{ ok?: boolean } | undefined>)
+      .then((reply) => { if (reply?.ok) useMirrorThread.setState({ proposedClose: null }); })
+      .finally(() => setPending(false));
+  };
+  return (
+    <div className="close-card" role="group" aria-label="Proposed close">
+      <div className="close-why"><span className="dim">The coordinator suggests closing this thread:</span> {proposed.why}</div>
+      <div className="close-actions">
+        <button type="button" className="pbtn" disabled={pending} onClick={() => act("close")}>Close as done</button>
+        <button type="button" className="pbtn quiet" disabled={pending} onClick={() => act("keep-open")}>Keep open</button>
+      </div>
+    </div>
+  );
+}
+
 /** The app sends a reply from a mirror as the user's (agent send --from user). */
-function sendThreadReply(target: { session: string; task?: string; program?: string }, text: string): Promise<MirrorReply> {
+function sendThreadReply(target: { session: string; task?: string; program?: string }, text: string, steer: boolean): Promise<MirrorReply> {
   const app = appHandler(APP_HANDLERS.threadReply);
   if (!app) return Promise.resolve({ ok: false, message: "Answering a thread from here works in Agents Next." });
-  return Promise.resolve(app.postMessage({ ...target, text }) as Promise<MirrorReply | undefined>)
+  return Promise.resolve(app.postMessage({ ...target, text, steer }) as Promise<MirrorReply | undefined>)
     .then((reply) => reply ?? { ok: false, message: "The app did not answer." }, (error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : String(error) }));
 }
 
@@ -2558,7 +2599,7 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
   const opening = useOpeningConversation((s) => s.text);
   const session = useMemo(() => !token ? null : MIRROR && sessionId
     // A thread another pane has, beside you: drawn from its log; what you write goes as yours.
-    ? connectMirror({ token, target: { session: sessionId, ...MIRROR }, dispatch, send: (text) => sendThreadReply({ session: sessionId, ...MIRROR }, text) })
+    ? connectMirror({ token, target: { session: sessionId, ...MIRROR }, dispatch, send: (text, steer) => sendThreadReply({ session: sessionId, ...MIRROR }, text, steer), onThread: (thread) => useMirrorThread.setState({ proposedClose: thread.proposedClose ?? null }) })
     : connectSession({
       url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`,
       sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, takeOver: takeOvers > 0,

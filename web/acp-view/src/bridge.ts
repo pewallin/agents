@@ -18,6 +18,8 @@ export const APP_HANDLERS = {
   /** The user's answer to a thread shown beside them (a mirror of a worker's session): the app
    *  sends it as the user's (`agent send --from user`) and replies how it went. */
   threadReply: "agentsNextThreadReply",
+  /** A thread beside the user closed as done or kept open (its coordinator proposed closing it). */
+  threadAction: "agentsNextThreadAction",
 } as const;
 export type AppHandler = (typeof APP_HANDLERS)[keyof typeof APP_HANDLERS];
 

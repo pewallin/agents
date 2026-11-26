@@ -563,6 +563,21 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       handleControl(request, response, token, options.handoff);
       return;
     }
+    // Stop Turn from the app's pane menu (S4): the turn of the session the host holds stops
+    // (session/cancel); 409 when the host holds none (the pane's terminal has it: Esc there).
+    if (request.method === "POST" && (request.url === "/api/cancel" || request.url?.startsWith("/api/cancel?"))) {
+      const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+      if (!tokensMatch(token, auth)) {
+        response.writeHead(401, { "Cache-Control": "no-store" }).end();
+        return;
+      }
+      const wanted = new URL(request.url, "http://127.0.0.1").searchParams.get("session");
+      const session = hosted;
+      if (!session?.alive || !session.sessionId || (wanted && wanted !== session.sessionId)) { sendJson(response, 409, { message: "The host holds no turn to stop." }); return; }
+      session.cancel();
+      sendJson(response, 200, {});
+      return;
+    }
     // The app quits: an agent that can rest does, unless it works or waits on a permission.
     if (request.method === "POST" && request.url === "/api/rest") {
       const auth = request.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -622,6 +637,8 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       )),
       terminal: options.handoff?.inView() ? undefined : terminal,
       logRoot: options.sessionLog?.root,
+      asks: (sessionId) => hosted?.alive && hosted.sessionId === sessionId ? hosted.pendingAsks() : [],
+      answerAsk: (sessionId, id, optionId) => Boolean(hosted?.alive && hosted.sessionId === sessionId && hosted.answerAsk(id, optionId)),
       log,
     })) return;
     handleHttp(request, response, {
@@ -1345,6 +1362,10 @@ function handleBridge(
     terminal: TerminalReader | undefined;
     /** Where the session logs are (session-log.ts); the default root when not given. */
     logRoot?: string;
+    /** The host's own session's open permission questions, and answering one (a thread beside
+     *  the user, which has no agent of its own). */
+    asks?: (sessionId: string) => Array<{ id: string; params: Record<string, unknown> }>;
+    answerAsk?: (sessionId: string, id: string, optionId: string | null) => boolean;
     log: (message: string) => void;
   },
 ): boolean {
@@ -1353,7 +1374,7 @@ function handleBridge(
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
     || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
     || path === "/api/session/first-turn" || path === "/api/steer" || path === "/api/queue" || path.startsWith("/api/queue/")
-    || path === "/api/history" || path === "/api/terminal-question" || path === "/api/log" || path === "/api/log/events" || path === "/api/threads"
+    || path === "/api/history" || path === "/api/terminal-question" || path === "/api/log" || path === "/api/log/events" || path === "/api/threads" || path === "/api/asks"
     || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
@@ -1465,13 +1486,19 @@ function handleBridge(
     });
     const lastPath = findSessionLog(last.session, root)?.path;
     let title: string | undefined;
+    let proposedClose: unknown;
     if (task && program) {
-      try { title = (JSON.parse(readFileSync(join(program, "tasks", task, "task.json"), "utf8")) as { title?: unknown }).title as string | undefined; } catch { /* untitled */ }
+      try {
+        const meta = JSON.parse(readFileSync(join(program, "tasks", task, "task.json"), "utf8")) as { title?: unknown; proposedClose?: unknown; resolved?: unknown };
+        title = meta.title as string | undefined;
+        if (!meta.resolved) proposedClose = meta.proposedClose;
+      } catch { /* untitled */ }
     }
     sendJson(response, 200, {
       session: last.session,
       harness: last.harness,
       ...(typeof title === "string" && title ? { title } : {}),
+      ...(proposedClose ? { proposedClose } : {}),
       n: last.lines.at(-1)?.n ?? -1,
       updates,
       meta: lastPath ? readSessionLogMeta(lastPath) ?? null : null,
@@ -1505,6 +1532,20 @@ function handleBridge(
       }
     });
     return true;
+  }
+  // The permission questions of a thread beside the user: the host's own session's, answered from
+  // there with Allow once or Deny (S1).
+  if (path === "/api/asks") {
+    const session = url.searchParams.get("session") ?? "";
+    if (request.method === "GET") { sendJson(response, 200, { asks: context.asks?.(session) ?? [] }); return true; }
+    if (request.method === "POST") {
+      readJson(request).then((body) => {
+        const { id, optionId } = (body ?? {}) as { id?: unknown; optionId?: unknown };
+        const answered = typeof id === "string" && Boolean(context.answerAsk?.(session, id, typeof optionId === "string" ? optionId : null));
+        sendJson(response, answered ? 200 : 409, answered ? {} : { message: "It was answered already." });
+      }, fail(400));
+      return true;
+    }
   }
   if (path === "/api/log/events" && request.method === "GET") {
     const session = url.searchParams.get("session") ?? "";

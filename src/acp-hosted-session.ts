@@ -196,6 +196,33 @@ export class HostedSession {
     this.history.splice(0, this.history.length, ...lines);
   }
 
+  /** Stops the running turn (session/cancel); its prompt then ends as cancelled. */
+  cancel(): void {
+    if (!this.sessionId) return;
+    // A question that waits is answered as cancelled, as ACP asks of a client that cancels.
+    for (const id of [...this.asks.keys()]) this.answerAsk(id, null);
+    this.toAgent(JSON.stringify({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: this.sessionId } }));
+  }
+
+  /** The agent's questions no view has answered (permissions), as the agent sent them. */
+  pendingAsks(): Array<{ id: string; params: Record<string, unknown> }> {
+    return [...this.asks].flatMap(([id, line]) => {
+      const message = parse(line);
+      return message?.method === "session/request_permission" && message.params ? [{ id, params: message.params }] : [];
+    });
+  }
+
+  /** Answers a question of the agent's from outside a view (a thread beside the user): the
+   *  option picked, or cancelled. False when it is answered already. */
+  answerAsk(id: string, optionId: string | null): boolean {
+    const line = this.asks.get(id);
+    if (!line) return false;
+    const original = parse(line)?.id;
+    this.asks.delete(id);
+    this.toAgent(JSON.stringify({ jsonrpc: "2.0", id: original, result: { outcome: optionId ? { outcome: "selected", optionId } : { outcome: "cancelled" } } }));
+    return true;
+  }
+
   /** Prompts the agent with `text`, as typed into its TUI; resolves when its turn ends. */
   async prompt(text: string): Promise<string | undefined> {
     if (!this.sessionId) throw new Error("the session has not started");

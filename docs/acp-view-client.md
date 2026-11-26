@@ -427,3 +427,15 @@ as the user's message (an envelope `from="user" words="verbatim"` is drawn as th
 text from the message file). `/threads?program=<program>&from=<task>` is the coordinator's threads
 by state (`GET /api/threads`, what `agents threads` says of the program), in the same tab; ↑/↓ and
 Return, or a click, open one.
+
+In the thread beside you (2026-11-26, step 4b): Enter sends an answer that waits for the agent's
+turn to end, and the field says "Waiting for <agent>'s turn to end" while it does; Option-Return
+sends it into the turn (`agent send --mode steer --from user`), or says the agent cannot take a
+message during its turn. The host's own session's open permission questions show there with Allow
+once and Deny only (`GET`/`POST /api/asks`; Always allow stays in the agent's pane). A close the
+coordinator proposed (`proposedClose` in task.json, given with `/api/log`) is the last row, with
+why, Close as done and Keep open (`agentsNextThreadAction`: `agent resolve`, or `agent resolve
+--keep-open`, which only takes the proposal away). `POST /api/cancel` stops the turn of the
+session the host holds (the app's Stop Turn; 409 when the terminal has the session, where the app
+sends Esc). An answer to a thread whose pane is gone opens it again beside its coordinator (`agent
+reopen`) and goes to it once it is there.

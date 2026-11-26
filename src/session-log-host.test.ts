@@ -87,6 +87,15 @@ describe("the ACP host's session log", () => {
     await reader.cancel();
   });
 
+  it("stops the turn of the session it holds when the app asks, and says so when it holds none", async () => {
+    host = await start();
+    const post = () => fetch(`${host!.url}/api/cancel`, { method: "POST", headers: { Authorization: `Bearer ${host!.token}` } });
+    expect((await post()).status).toBe(409);
+    await host.startHostedSession();
+    expect((await post()).status).toBe(200);
+    expect((await (await fetch(`${host.url}/api/asks?session=fake-1`, { headers: { Authorization: `Bearer ${host.token}` } })).json())).toEqual({ asks: [] });
+  });
+
   it("writes the host's own session, its prompts included", async () => {
     host = await start();
     expect(await host.startHostedSession()).toBe("fake-1");

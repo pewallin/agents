@@ -280,7 +280,13 @@ export interface MirrorTarget {
 }
 
 /** What the app answers a reply sent from a mirror: whether it went, and where it waits. */
-export interface MirrorReply { ok: boolean; state?: string; message?: string }
+export interface MirrorReply { ok: boolean; state?: string; message?: string; steered?: boolean }
+
+/** A thread beside you: what you write goes through the app (`reply`), steered into the running
+ *  turn with Option-Return, else waiting for the turn to end. */
+export interface MirrorSession extends AcpSession {
+  reply(text: string, steer: boolean): Promise<MirrorReply>;
+}
 
 /**
  * A view of a session another pane has, drawn from its session log (the host's /api/log): no
@@ -291,26 +297,50 @@ export function connectMirror(options: {
   token: string;
   target: MirrorTarget;
   dispatch: (action: SessionAction) => void;
-  send: (text: string) => Promise<MirrorReply>;
-  onReply?: (reply: MirrorReply) => void;
-}): AcpSession {
+  send: (text: string, steer: boolean) => Promise<MirrorReply>;
+  /** What the thread's log says of it beside its conversation: a close its coordinator proposed. */
+  onThread?: (thread: { title?: string; proposedClose?: { why: string; at?: string } }) => void;
+}): MirrorSession {
   const { dispatch } = options;
   let events: EventSource | undefined;
   let closeConnection: () => void = () => {};
   const closed = new Promise<void>((resolve) => { closeConnection = resolve; });
   const query = new URLSearchParams({ session: options.target.session, ...(options.target.task ? { task: options.target.task } : {}), ...(options.target.program ? { program: options.target.program } : {}) });
   const refuse = async () => { throw new Error("This thread is shown from its log: write in the field to send it a message."); };
+  // The thread's permission questions, while the host holds its session: Allow once or Deny here
+  // (S1); Always allow stays in the agent's own pane.
+  let asks: ReturnType<typeof setInterval> | undefined;
+  const shownAsks = new Set<string>();
+  let askSession = "";
+  const followAsks = async () => {
+    const answer = await fetch(`/api/asks?session=${encodeURIComponent(askSession)}`, { headers: { Authorization: `Bearer ${options.token}` } }).catch(() => undefined);
+    if (!answer?.ok) return;
+    const { asks: open } = await answer.json() as { asks: Array<{ id: string; params: { toolCall?: unknown; options?: Array<{ kind?: string }> } }> };
+    const ids = new Set(open.map((ask) => `ask-${ask.id}`));
+    for (const ask of open) {
+      const id = `ask-${ask.id}`;
+      if (shownAsks.has(id)) continue;
+      shownAsks.add(id);
+      const choices = (ask.params.options ?? []).filter((option) => option.kind === "allow_once" || option.kind === "reject_once");
+      dispatch({ type: "permissionRequested", request: { id, toolCall: ask.params.toolCall as never, options: choices as never } });
+    }
+    for (const id of [...shownAsks]) if (!ids.has(id)) { shownAsks.delete(id); dispatch({ type: "permissionAnswered", id }); }
+  };
   return {
     async load() {
       dispatch({ type: "loading" });
       const response = await fetch(`/api/log?${query}`, { headers: { Authorization: `Bearer ${options.token}` } });
       if (!response.ok) throw new Error((await response.json().catch(() => ({})) as { message?: string }).message ?? `the host answered ${response.status}`);
-      const log = await response.json() as { session: string; n: number; title?: string; updates: SessionNotification["update"][]; meta?: { opened?: Record<string, unknown>; commands?: unknown[] } | null };
+      const log = await response.json() as { session: string; n: number; title?: string; proposedClose?: { why: string; at?: string }; updates: SessionNotification["update"][]; meta?: { opened?: Record<string, unknown>; commands?: unknown[] } | null };
+      options.onThread?.({ title: log.title, proposedClose: log.proposedClose });
       // The tab reads "Threads › <title>" (the app makes "Threads" its way to the list).
       if (log.title && typeof document !== "undefined") document.title = `Threads › ${log.title}`;
       for (const update of log.updates) dispatch({ type: "update", update });
       const opened = log.meta?.opened ?? {};
       dispatch({ type: "loaded", modes: opened.modes as never, configOptions: opened.configOptions as never, models: opened.models as never });
+      askSession = log.session;
+      void followAsks();
+      asks = setInterval(() => { if (typeof document === "undefined" || document.visibilityState === "visible") void followAsks(); }, 2_000);
       events = new EventSource(`/api/log/events?session=${encodeURIComponent(log.session)}&after=${log.n}&token=${encodeURIComponent(options.token)}`);
       events.addEventListener("updates", (event) => {
         const { updates } = JSON.parse((event as MessageEvent<string>).data) as { updates: SessionNotification["update"][] };
@@ -319,26 +349,40 @@ export function connectMirror(options: {
       });
       return { sessionId: log.session, modes: opened.modes, configOptions: opened.configOptions } as LoadSessionResponse & { sessionId: string };
     },
+    reply(text, steer) {
+      return text.trim() ? options.send(text.trim(), steer) : Promise.resolve({ ok: false, message: "Nothing to send." });
+    },
     async prompt(blocks) {
       const text = blocks.filter((block) => block.type === "text").map((block) => (block as { text: string }).text).join("\n").trim();
-      if (!text) return;
-      const reply = await options.send(text);
-      options.onReply?.(reply);
+      const reply = await this.reply(text, false);
       if (!reply.ok) throw new Error(reply.message ?? "The message did not go.");
     },
-    async steer(blocks) { await this.prompt(blocks); return "prompted"; },
+    async steer(blocks) {
+      const text = blocks.filter((block) => block.type === "text").map((block) => (block as { text: string }).text).join("\n").trim();
+      const reply = await this.reply(text, true);
+      return reply.ok ? "steered" : "refused";
+    },
     async steering() { return false; },
     async promptCapabilities() { return { image: false, embeddedContext: false }; },
     cancel: refuse,
     wake() {},
     focus() {},
-    answerPermission() {},
+    answerPermission(id, optionId) {
+      if (!id.startsWith("ask-")) return;
+      shownAsks.delete(id);
+      dispatch({ type: "permissionAnswered", id });
+      void fetch(`/api/asks?session=${encodeURIComponent(askSession)}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${options.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ id: id.slice("ask-".length), optionId }),
+      }).catch(() => undefined);
+    },
     setConfigOption: refuse,
     setMode: refuse,
     async allowAll() { return { offered: false, on: false }; },
     async setAllowAll() { return { offered: false, on: false }; },
     onAllowAll() {},
     closed,
-    close() { events?.close(); closeConnection(); },
+    close() { events?.close(); if (asks) clearInterval(asks); closeConnection(); },
   };
 }
