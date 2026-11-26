@@ -259,3 +259,69 @@ Checked headless on 2026-11-18 with a private tmux server, `agents acp-session -
 on scratch copies of three real Claude sessions (1-4 MB of history) and a Chromium page: the
 conversation showed with the same text, the same position of its last turn and the same number of
 messages as once the session opened, with no layout shift and no message twice.
+
+## Resting and resuming: what each agent keeps (measured 2026-11-26)
+
+Panes that open from their session log and start their agent only when you type (the build in
+agents-next `docs/coordinator-threads.md`) need every agent to take a session up again in a new
+process as if it had never stopped. Measured headless on the mini with each adapter on stdio, in a
+scratch git folder: `session/new` with one stdio MCP server passed over ACP, a non-default mode
+(plan or read-only) and a cheaper model where there is one, a prompt that names a code word and
+calls the MCP tool, SIGTERM, a new process, `initialize` and `session/load` with no MCP servers,
+then a prompt asking for the code word and the tool. Warm caches; times are from the new
+process's start to `session/load` answered (a prompt can go then).
+
+| Agent | Loads | Context | Mode | Model | MCP passed at `session/new` | Ready |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude (claude-agent-acp 0.100, Claude Code 2.1.330) | ✓ | ✓ | ✓ plan kept | – set haiku, came back sonnet | gone; passed again on load, back | 0.6 s |
+| Codex (codex-acp 2.5, codex 0.169, its own app-server) | ✓ | ✓ | – read-only came back agent | (not changed: no cheaper model offered) | gone; passed again, back | 1.0 s |
+| Kiro 3.6 (v3 engine) | ✓ | ✓ | ✓ plan kept | ✓ claude-haiku-4.5 kept | (plan mode offers no MCP tools) | 1.1 s |
+| OpenCode 1.18.21 | ✓ | ✓ | ✓ plan kept | ✓ kept | gone; passed again, back | 1.05 s |
+| Pi (pi-acp 0.0.34 through npx, pi 1.4.0) | ✓ | not checked: Pi ran no model turn on the mini (empty answers, no login) | (its modes are thinking levels) | ✓ haiku kept | not checked | 2.9 s |
+| Copilot 0.0.406 | – no `session/load`; `copilot --acp --resume <id>` starts, but a prompt to the id answers "Session … not found" | – | – | – | – | – |
+
+What this decides:
+
+- **Claude, Codex, Kiro 3 and OpenCode can rest.** Each takes its session up again in about a
+  second, with its context. That is less than typing a short message, so starting the agent at
+  the first keystroke (rather than at send) hides it.
+- **Pi and Copilot stay live and never rest** until they are checked: Pi's context could not be
+  seen without a model turn here, and Copilot cannot load a session at all.
+- **The host sets the session's choices again on resume.** Claude loses a model picked in the
+  session and Codex its mode, so the host keeps the mode, model and effort the view last set and
+  sets them on the session as it opens, as it already does for the pane's command
+  (acp-launch-settings.ts).
+- **MCP servers.** No agent keeps servers a client passed over ACP: they must be passed again with
+  `session/load`, and then work. The view passes none (`mcpServers: []`), so there is nothing to
+  pass again; the servers in an agent's own settings start with each process, so they come back
+  with the agent.
+
+### How the host holds processes today
+
+- One host per ACP pane, `agents acp-session` (the Bun binary, 17-40 MB), the pane's command for
+  the pane's lifetime. Codex runs it beside its TUI under `codex-session` and
+  `acp-host-supervise`; a hand-off agent's host runs the TUI as its child (acp-handoff.ts).
+- A hand-off pane in its view runs one adapter process per WebSocket client (`bridge`) plus a warm
+  spare started ahead of the next client (`warmSpare`), and no TUI. A worker's host holds its
+  session itself (HostedSession), and a view attaches to that.
+- **No view without an agent process.** The host serves the page with none, but every WebSocket
+  takes an adapter at once (`takeAgent`), and the view's first messages are `initialize` and
+  `session/load`, so the conversation shows only once an agent has replayed it. A pane that rests
+  needs the host to give the view the conversation from the session log, start no adapter and no
+  spare, and start one when the view asks for it (the first keystroke).
+- A Codex pane's agent is its TUI on the pane's app-server: the view's codex-acp is only a client of
+  that. Resting a Codex pane ends the TUI (and its app-server's hold on the thread), and resuming it
+  starts the TUI on the same thread again.
+
+### When a pane's session id changes
+
+- **`/clear`.** claude-agent-acp refuses `/clear` (an unsupported command); its "clear the context
+  and go on with the plan" keeps the ACP session id. In Codex's TUI, `/new` and `/clear` give the
+  pane's app-server a new thread, and the view follows it (`currentSession`) under the same host.
+- **`/new`, `/resume` and another agent** go through `agents resume`, which starts the pane's
+  command again: a new host, a new session. The new host is told the session before it, for the
+  log's chain.
+- **Kiro's copies.** Kiro 3's TUI resumes a Kiro 2 session (a bare UUID) as a new copy,
+  `cli_<uuid>_<suffix>` (`kiroContinuedSession` names it). The mini's sessions are Kiro 3's own
+  (`sess_…`), which keep their id; a Kiro 2 session on another Mac changes id each time its TUI
+  takes it up.
