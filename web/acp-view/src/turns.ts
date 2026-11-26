@@ -186,6 +186,42 @@ export function buildTurns(state: Pick<SessionState, "items" | "toolCalls">): Tu
   return turns;
 }
 
+/** The turns, each one whose content is as before replaced by the object it was before: the
+ *  view draws again only the turns that changed (a streamed chunk changes the last one), not the
+ *  whole conversation. A turn is the same when its user message, its steps (a tool call by the
+ *  call itself, which an update replaces), its answer and its times are; its changes come from
+ *  its calls. */
+export function keepUnchanged(previous: readonly Turn[], next: Turn[]): Turn[] {
+  if (previous.length === 0) return next;
+  const before = new Map(previous.map((turn) => [turn.id, turn]));
+  let kept = false;
+  const turns = next.map((turn) => {
+    const old = before.get(turn.id);
+    if (!old || !sameTurn(old, turn)) return turn;
+    kept = true;
+    return old;
+  });
+  return kept ? turns : next;
+}
+
+function sameTurn(a: Turn, b: Turn): boolean {
+  return a.startedAt === b.startedAt && a.endedAt === b.endedAt && shallowEqual(a.user, b.user)
+    && sameItems(a.steps, b.steps) && sameItems(a.answer, b.answer);
+}
+
+function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((item, index) => shallowEqual(item, b[index]));
+}
+
+function shallowEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key]);
+}
+
 /** A run of tool calls in a row, shown as one line ("Ran 12 commands · read 3 files"); the
  *  thinking between them goes into the run too, and shows when it is opened. */
 export type StepGroup = { type: "group"; id: string; calls: ToolCall[]; steps: Step[] };

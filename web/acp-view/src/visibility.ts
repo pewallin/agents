@@ -27,3 +27,15 @@ export function usePageVisible(): boolean {
 export function waitsWhileHidden(state: SessionState, action: SessionAction): boolean {
   return action.type === "update" && !state.replaying;
 }
+
+/** When an action reaches the view: `now`; at the next `frame`, with everything else that came in
+ *  that frame (what an agent streams, a session's history as it loads: one render a frame instead
+ *  of one a chunk); or once the page is `shown` (a live turn while nobody sees the page). A
+ *  history loading while the page is hidden goes through at once: no frame comes while it is
+ *  hidden, and the view's opening waits for it. Anything else (a prompt, a permission, the turn's
+ *  end) goes through at once, after what waited before it. */
+export function whenShown(state: SessionState, action: SessionAction, hidden: boolean): "now" | "frame" | "shown" {
+  if (action.type !== "update") return "now";
+  if (!hidden) return "frame";
+  return waitsWhileHidden(state, action) ? "shown" : "now";
+}

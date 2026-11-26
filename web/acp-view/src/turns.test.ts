@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import { emptySession, reduce, type SessionAction, type ToolCall, type ToolStatus } from "./session-state";
-import { buildTurns, changesOf, withoutSteeringNotes, conversationChanges, countLines, describeCall, duration, groupSteps, groupSummary, oneLine, pageName, shortPath, thoughtSummary } from "./turns";
+import { buildTurns, changesOf, keepUnchanged, withoutSteeringNotes, conversationChanges, countLines, describeCall, duration, groupSteps, groupSummary, oneLine, pageName, shortPath, thoughtSummary } from "./turns";
 import { changedWords, commentsMessage, diffRows, linePieces, splitPath } from "./review";
 
 const text = (t: string) => ({ type: "text" as const, text: t });
@@ -283,3 +283,38 @@ describe("Kiro's steering notes", () => {
     expect(buildTurns(state)[0].answer.map((item) => item.text)).toEqual(["BANANA\nStopped early."]);
   });
 });
+
+describe("keepUnchanged", () => {
+  const start: SessionAction[] = [
+    { type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Först"), messageId: "u1" } },
+    { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Run", kind: "execute", status: "completed" } },
+    { type: "update", update: { sessionUpdate: "agent_message_chunk", content: text("Klart."), messageId: "a1" } },
+    { type: "update", update: { sessionUpdate: "user_message_chunk", content: text("Sedan"), messageId: "u2" } },
+    { type: "update", update: { sessionUpdate: "agent_thought_chunk", content: text("Tänker"), messageId: "th1" }, at: 10 },
+    { type: "update", update: { sessionUpdate: "agent_message_chunk", content: text("Svar"), messageId: "a2" }, at: 20 },
+  ];
+  const state = start.reduce(reduce, emptySession());
+  const before = buildTurns(state);
+  const after = (...more: SessionAction[]) => keepUnchanged(before, buildTurns(more.reduce(reduce, state)));
+
+  it("keeps a turn the update did not touch, and gives the streaming one anew", () => {
+    const turns = after({ type: "update", update: { sessionUpdate: "agent_message_chunk", content: text(" mer"), messageId: "a2" }, at: 30 });
+    expect(turns[0]).toBe(before[0]);
+    expect(turns[1]).not.toBe(before[1]);
+    expect(turns[1].answer.map((item) => item.text)).toEqual(["Svar mer"]);
+  });
+
+  it("gives a turn anew when one of its tool calls changes", () => {
+    const turns = after({ type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed" } });
+    expect(turns[0]).not.toBe(before[0]);
+    expect(turns[1]).toBe(before[1]);
+  });
+
+  it("gives the same turns as building them anew", () => {
+    const chunk: SessionAction = { type: "update", update: { sessionUpdate: "agent_message_chunk", content: text(" mer"), messageId: "a2" }, at: 30 };
+    expect(after(chunk)).toEqual(buildTurns([chunk].reduce(reduce, state)));
+    expect(keepUnchanged(before, buildTurns(state))).toEqual(before);
+    expect(keepUnchanged(before, buildTurns(state))[1]).toBe(before[1]);
+  });
+});
+

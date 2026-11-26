@@ -6,7 +6,7 @@
 //
 // The look: a reading column, the agent's text straight on the page, its work as quiet gray lines
 // that open on demand, one floating field to write in.
-import { StrictMode, createContext, lazy, Suspense, useCallback, type ComponentProps, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
+import { StrictMode, createContext, lazy, memo, Suspense, useCallback, type ComponentProps, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
@@ -16,8 +16,8 @@ import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOp
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
 import { workFolders } from "./paths";
-import { pageHidden, usePageVisible, waitsWhileHidden } from "./visibility";
-import { buildTurns, changesOf, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, pageName, shortPath, thoughtSummary, toolOutput, webStep, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
+import { pageHidden, usePageVisible, whenShown } from "./visibility";
+import { buildTurns, changesOf, keepUnchanged, conversationChanges, describeCall, duration, exitCode, groupSteps, groupSummary, mergeChanges, oneLine, pageName, shortPath, thoughtSummary, toolOutput, webStep, type FileChange, type GitChange, type Step, type StepGroup, type Turn } from "./turns";
 import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, PlanMark, ResultStrip, SentAttachments, TurnChangesContext, type ChipHost, type ChipTarget } from "./chips";
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
@@ -61,28 +61,44 @@ export interface HostInfo {
   agent: { id: string; name: string };
 }
 
-// What an agent streams while the page is hidden is reduced here and shown in one render when the
-// page is seen again (visibility.ts): a hidden view rendered every chunk of a working agent.
+// What an agent streams is reduced here as it comes and shown once a frame, or, while the page is
+// hidden, in one render when it is seen again (visibility.ts): the view rendered every chunk.
 let waiting: SessionState | null = null;
+let frame: number | null = null;
+// A frame that does not come (WebKit holds them back in a window it thinks nobody sees, while
+// the page may still count as visible) does not hold the conversation back for long.
+let late: ReturnType<typeof setTimeout> | null = null;
+const LATE_FRAME_MS = 50;
 const useSession = create<SessionState & { dispatch: (action: SessionAction) => void }>((set, get) => ({
   ...emptySession(),
   dispatch: (action) => {
     const current = waiting ?? get();
     const next = reduce(current, action);
-    if (pageHidden() && waitsWhileHidden(current, action)) {
+    const when = whenShown(current, action, pageHidden());
+    if (when !== "now") {
       waiting = next;
+      if (when === "frame") {
+        frame ??= requestAnimationFrame(showWaiting);
+        late ??= setTimeout(showWaiting, LATE_FRAME_MS);
+      }
       return;
     }
     waiting = null;
+    cancelFrame();
     set(next);
   },
 }));
-const showWaiting = () => {
+function cancelFrame() {
+  if (frame !== null) { cancelAnimationFrame(frame); frame = null; }
+  if (late !== null) { clearTimeout(late); late = null; }
+}
+function showWaiting() {
+  cancelFrame();
   if (!waiting) return;
   const shown = waiting;
   waiting = null;
   useSession.setState(shown);
-};
+}
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => { if (!pageHidden()) showWaiting(); });
   // A picture of a window nobody sees (a locked screen) shows the conversation as it is.
@@ -803,7 +819,8 @@ function SentMessage({ user }: { user: NonNullable<Turn["user"]> }) {
   return <YouMessage text={shown.text} pending={user.local && !user.answered} at={user.at} attachments={shown.attachments} />;
 }
 
-function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void; onSend: (text: string) => void }) {
+/** One turn; drawn again only when its props change (a streamed chunk changes the last turn). */
+const TurnView = memo(function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void; onSend: (text: string) => void }) {
   const streaming = last && working;
   const stopped = useSession((s) => s.stoppedTurns?.includes(turn.id) ?? false);
   const answerText = useMemo(() => turn.answer.map((item) => item.text).join("\n"), [turn.answer]);
@@ -830,7 +847,7 @@ function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; 
       {!streaming && (turn.answer.length > 0 || turn.changes.length > 0) && <Receipt turn={turn} cwd={cwd} onReview={() => onReview(turn)} onSend={onSend} />}
     </TurnChangesContext.Provider>
   );
-}
+});
 
 /** The step the agent is on, as one shimmering line. */
 function CurrentStep({ turn, now, cwd }: { turn: Turn | undefined; now: number; cwd: string }) {
@@ -1973,11 +1990,23 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   const state = useSession((s) => attention(s));
   // A turn that waits on a question is still under way.
   const working = state === "working" || state === "needs-you";
-  const builtTurns = useMemo(() => buildTurns({ items, toolCalls }), [items, toolCalls]);
+  // A turn that did not change stays the object it was, so only the turns that changed draw again.
+  const lastBuilt = useRef<Turn[]>([]);
+  const builtTurns = useMemo(() => {
+    const built = keepUnchanged(lastBuilt.current, buildTurns({ items, toolCalls }));
+    lastBuilt.current = built;
+    return built;
+  }, [items, toolCalls]);
   const gitTurns = useGitTurns(working, builtTurns.length);
+  const merged = useRef(new WeakMap<Turn, { git: unknown; turn: Turn }>());
   const turns = useMemo(() => builtTurns.map((turn, index) => {
     const git = gitTurns[index];
-    return git ? { ...turn, changes: mergeChanges(turn.changes, git.files, { from: git.from, to: git.to }) } : turn;
+    if (!git) return turn;
+    const known = merged.current.get(turn);
+    if (known?.git === git) return known.turn;
+    const withGit = { ...turn, changes: mergeChanges(turn.changes, git.files, { from: git.from, to: git.to }) };
+    merged.current.set(turn, { git, turn: withGit });
+    return withGit;
   }), [builtTurns, gitTurns]);
   const now = useNow(working);
   const [review, setReview] = useState<FileChange[] | null>(null);
@@ -2068,6 +2097,11 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   }), [level]);
   const openReviewRef = useRef(openReview);
   openReviewRef.current = openReview;
+  // The same functions from one render to the next, so a turn that did not change is not drawn
+  // again; they act on the session as it is when they run.
+  const workingRef = useRef(working);
+  workingRef.current = working;
+  const reviewTurn = useCallback((turn: Turn) => void openReviewRef.current(turn.changes), []);
   // /changes: one review of every file the conversation changed.
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
@@ -2103,6 +2137,10 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
     const element = scroller.current;
     if (element) element.scrollTop = element.scrollHeight;
   }, []);
+  const sendFromTurn = useCallback((text: string) => {
+    toEnd();
+    void (workingRef.current ? session.steer : session.prompt)([{ type: "text", text }]);
+  }, [session, toEnd]);
 
   useEffect(() => {
     document.title = title ? `${title} – ${info.agent.name}` : info.agent.name;
@@ -2130,9 +2168,8 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
             <WorkerLine />
             {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
-              <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working} cwd={info.cwd}
-                onReview={(t) => void openReview(t.changes)}
-                onSend={(text) => { toEnd(); void (working ? session.steer : session.prompt)([{ type: "text", text }]); }} />
+              <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working && index === turns.length - 1} cwd={info.cwd}
+                onReview={reviewTurn} onSend={sendFromTurn} />
             ))}
             {working && permissions.length === 0 && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
             {permissions.map((request, index) => (
