@@ -16,7 +16,7 @@ import { closeOpenQuestions, questionView, questionsOf, recordQuestion, recordUs
 import { isWorkerRecord } from "./spawn-support.js";
 import { deliveredAt, userInputAt } from "./supervisor.js";
 import { agentStatuses, ensureSupervisor, readFileOr, reportStateFromParams, writeOwnReport } from "./supervisor-control.js";
-import { markResolved, reopenedAfterDone, resolvesOnClose } from "./threads.js";
+import { markResolved, reopenedAfterDone, resolvesOnClose, updateTaskMeta } from "./threads.js";
 
 export async function runAgentReport(command) {
   const params = command.params;
@@ -332,11 +332,19 @@ export async function runAgentClose(command) {
     && targets.some(target => target.uuid && target.uuid === record.parent));
   targets = [...targets, ...subWorkers];
   const resolved = [];
+  const resting = [];
+  const closer = closerOf(own);
   for (const record of targets) {
     const files = taskPaths(program, record.task);
     const report = readJSON(files.reportJSON, { task: record.task, line: "Closed without a report.", outputs: [], history: [] });
-    // A done thread closed is resolved; an unfinished one stays open, stopped, to reopen later.
-    if (resolvesOnClose(report)) resolved.push(record.task);
+    // A done thread its coordinator closes rests: it stays ready for review in Threads, and a
+    // message wakes it; only the user resolves it (closing its tab, or agent resolve). One closed
+    // by anyone else is resolved; an unfinished one stays open, stopped, to reopen later.
+    if (resolvesOnClose(report) && closer === "coordinator") {
+      resting.push(record.task);
+      // The supervisor sees this pane go: it is the coordinator's close, not the user's.
+      if (record.uuid) updateTaskMeta(program, record.task, meta => ({ ...meta, closedPane: record.uuid }));
+    } else if (resolvesOnClose(report)) resolved.push(record.task);
     if (report.state !== "done") {
       report.state = closedReportState(report);
       report.updatedAt = new Date().toISOString();
@@ -346,12 +354,12 @@ export async function runAgentClose(command) {
     // A question for the user stays: the thread still waits on it.
     closeOpenQuestions(program, record.uuid, "its pane was closed", { keepUser: true });
     runTMuxRequired(["kill-pane", "-t", record.paneID], "tmux kill-pane");
-    if (resolved.includes(record.task)) markResolved(program, record.task, undefined, { kind: "done", who: closerOf(own) });
+    if (resolved.includes(record.task)) markResolved(program, record.task, undefined, { kind: "done", who: closer });
   }
   if (targets.length > 0) {
     writeStatusFile(program);
     notifyApp(own.sessionName);
   }
-  const stopped = targets.map(record => record.task).filter(task => !resolved.includes(task));
-  return { id: requestID("cli"), ok: true, result: { closed: targets.map(record => record.task), resolved: resolved.length ? resolved : undefined, stopped: stopped.length ? stopped : undefined, ...(subWorkers.length ? { withSubWorkers: subWorkers.map(record => record.task) } : {}) } };
+  const stopped = targets.map(record => record.task).filter(task => !resolved.includes(task) && !resting.includes(task));
+  return { id: requestID("cli"), ok: true, result: { closed: targets.map(record => record.task), resolved: resolved.length ? resolved : undefined, readyForReview: resting.length ? resting : undefined, stopped: stopped.length ? stopped : undefined, ...(subWorkers.length ? { withSubWorkers: subWorkers.map(record => record.task) } : {}) } };
 }

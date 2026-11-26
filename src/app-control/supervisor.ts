@@ -385,7 +385,9 @@ export async function runSupervisor(command) {
       }
       // The user closed the tab of a done thread: they looked at the work, nothing is left. An
       // unfinished one stays open, stopped. (Panes gone with their tmux server never get here.)
-      if (resolvesOnClose(report) && !unfinished) markResolved(program, tracked.task, undefined, { kind: "done", who: "user" });
+      // A pane its coordinator closed after done rests instead (agent close).
+      const closedByCoordinator = tracked.uuid && readJSON(files.meta, {}).closedPane === tracked.uuid;
+      if (resolvesOnClose(report) && !unfinished && !closedByCoordinator) markResolved(program, tracked.task, undefined, { kind: "done", who: "user" });
     }
     if (notifiedChanged) writeFileAtomic(notifiedFile, `${JSON.stringify(notified, null, 2)}\n`);
     const state = JSON.stringify({ server, workers: Object.fromEntries(workers) });
