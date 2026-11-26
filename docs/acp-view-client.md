@@ -409,9 +409,11 @@ host keeps the coordinator's conversation apart from its sessions (agents-next
 `docs/coordinator-threads.md`, "The coordinator's conversation"): a prompt from a view is a
 `message` of `<program>/thread.jsonl` unless it is an `<agents-event>` the CLI typed, and each
 prompt's turn end writes a `turn` with the turn's steps and its last message as the answer
-(`SessionLogTap` `onTurn`). A view's load of the host's session is given that conversation instead
-of the session's own history (`threadUpdates`): resting from the log, after a wake, and once a
-turn has ended. A Codex coordinator (its prompts go to its TUI) is not covered.
+(`SessionLogTap` `onTurn`). A view's load of the host's session is given the session's own history, with the
+sessions the pane went on from above it (a run that started fresh, from their logs). It was given
+thread.jsonl in its place for a few hours on 2026-11-26, and a coordinator's pane lost its history
+after a wake: thread.jsonl begins with that build, so it is a record beside the session, never what
+the pane draws on its own. A Codex coordinator (its prompts go to its TUI) is not covered.
 
 ## A thread beside you, drawn from its log (2026-11-26)
 

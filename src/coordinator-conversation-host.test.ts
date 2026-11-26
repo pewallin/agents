@@ -65,7 +65,7 @@ describe("a coordinator's pane", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("keeps the user's messages and its answers apart from its sessions, and a view shows that conversation", async () => {
+  it("keeps the user's messages and its answers apart from its sessions, and a view still shows all of the session", async () => {
     host = await startAcpHost({
       paneId: "%8", agent: { id: "test-acp", name: "Test" }, runtimeTempDir: join(dir, "rt"), webRoot: join(dir, "web"), cwd: dir,
       agentCommand: { command: process.execPath, args: ["-e", AGENT(dir)], env: process.env },
@@ -95,7 +95,8 @@ describe("a coordinator's pane", () => {
     expect(thread[2]).toMatchObject({ wokeBy: "Worker login is done", reply: "Hello" });
     ws.close();
 
-    // A view that loads the pane again is given the conversation.
+    // A view that loads the pane again is given the whole session, never only the conversation
+    // thread.jsonl has (it begins with the build that writes it: the history before was lost).
     const again = new WebSocket(`${h.url.replace("http", "ws")}/acp?token=${encodeURIComponent(h.token)}`, { headers: { Origin: h.url } });
     const seen: Array<Record<string, unknown>> = [];
     again.on("message", (data) => seen.push(JSON.parse(String(data))));
@@ -108,9 +109,48 @@ describe("a coordinator's pane", () => {
     expect(texts).toEqual([
       "user_message_chunk:Fix the login",
       "agent_message_chunk:Hello",
-      'user_message_chunk:<agents-event kind="wake" from="agents" words="data">Worker login is done</agents-event>',
+      'user_message_chunk:<agents-event kind="wake" thread="login" from="agents" words="data">Worker login is done · read /p/m.md</agents-event>',
       "agent_message_chunk:Hello",
     ]);
     again.close();
+  }, 20_000);
+
+  it("shows a run that started fresh below the runs it went on from in the pane", async () => {
+    const root = join(dir, "sessions");
+    mkdirSync(join(root, "test"), { recursive: true });
+    writeFileSync(join(root, "test", "old-1.jsonl"), [
+      { v: 1, n: 0, at: "x", kind: "start", session: "old-1", harness: "test" },
+      { v: 1, n: 1, at: "x", kind: "user", text: "Earlier question" },
+      { v: 1, n: 2, at: "x", kind: "agent", text: "Earlier answer" },
+    ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+    host = await startAcpHost({
+      paneId: "%8", agent: { id: "test-acp", name: "Test" }, runtimeTempDir: join(dir, "rt"), webRoot: join(dir, "web"), cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", AGENT(dir)], env: process.env },
+      sessionLog: { harness: "test", root, origin: () => ({ previous: "old-1" }) },
+      coordinatorProgram: () => program,
+    });
+    const h = host;
+    await h.startHostedSession();
+    await h.hostedPrompt("Now");
+    // A new session's log names the one before only once it is made; a fresh host loads it.
+    await h.close();
+    host = await startAcpHost({
+      paneId: "%8", agent: { id: "test-acp", name: "Test" }, runtimeTempDir: join(dir, "rt2"), webRoot: join(dir, "web"), cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", AGENT(dir)], env: process.env },
+      sessionLog: { harness: "test", root },
+      coordinatorProgram: () => program,
+    });
+    await host.startHostedSession("fake-1");
+    const ws = new WebSocket(`${host.url.replace("http", "ws")}/acp?token=${encodeURIComponent(host.token)}`, { headers: { Origin: host.url } });
+    const seen: Array<Record<string, unknown>> = [];
+    ws.on("message", (data) => seen.push(JSON.parse(String(data))));
+    await new Promise((resolve) => ws.once("open", resolve));
+    ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+    ws.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/load", params: { sessionId: "fake-1", cwd: dir, mcpServers: [] } }));
+    await until(() => seen.some((m) => m.id === 2 && m.method === undefined));
+    const texts = seen.filter((m) => m.method === "session/update").map((m) => (m.params as { update: { content?: { text?: string } } }).update.content?.text);
+    expect(texts.slice(0, 2)).toEqual(["Earlier question", "Earlier answer"]);
+    expect(texts).toContain("Now");
+    ws.close();
   }, 20_000);
 });

@@ -196,6 +196,12 @@ export class HostedSession {
     this.history.splice(0, this.history.length, ...lines);
   }
 
+  /** What a view that loads the session later is given before the session's own history (a
+   *  coordinator's earlier runs). */
+  prependHistory(lines: string[]): void {
+    this.history.unshift(...lines);
+  }
+
   /** Stops the running turn (session/cancel); its prompt then ends as cancelled. */
   cancel(): void {
     if (!this.sessionId) return;
