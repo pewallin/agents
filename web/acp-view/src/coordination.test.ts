@@ -9,6 +9,8 @@ describe("coordination lines", () => {
     expect(messageFileText('<agents-event kind="wake" from="agents" words="data">\nWorker ui is done.\n</agents-event>\n\n<agents-event kind="note" from="agents">\n(Reminder)\n</agents-event>\n')).toBe("Worker ui is done.\n\n(Reminder)");
     expect(tasksIn("Worker ios-tests is done; Worker ui's pane closed")).toEqual(["ios-tests", "ui"]);
     expect(parseDelivery("hello")).toBeNull();
+    // A line from before the envelope, kept in an older conversation, is a quiet row too.
+    expect(parseDelivery("⟢ agents · Worker ui is done · read /p/messages/20261125T101010-ab12.md")).toEqual({ kind: "wake", from: "agents", words: "data", summary: "Worker ui is done", file: "/p/messages/20261125T101010-ab12.md" });
   });
 
   it("reads a worker's first prompt", () => {

@@ -830,6 +830,13 @@ const TurnView = memo(function TurnView({ turn, last, working, cwd, onReview, on
   const streaming = last && working;
   const stopped = useSession((s) => s.stoppedTurns?.includes(turn.id) ?? false);
   const answerText = useMemo(() => turn.answer.map((item) => item.text).join("\n"), [turn.answer]);
+  const { level } = useContext(DetailContext);
+  // A turn a wake or message of the agents began that answers nothing (a coordinator's wake that
+  // needs nothing from you): not shown at Results, one quiet row at Steps (Peter, 2026-11-23).
+  const delivery = turn.user ? parseDelivery(turn.user.text) : null;
+  const quiet = delivery && delivery.from !== "user" && !answerText.trim() && !streaming;
+  if (quiet && level === "results") return null;
+  if (quiet && level === "steps") return <UserItem user={turn.user!} />;
   return (
     <TurnChangesContext.Provider value={turn.changes}>
       {turn.user && <UserItem user={turn.user} />}

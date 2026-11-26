@@ -112,6 +112,7 @@ export function workerTitle(coordination: Coordination, task: string): string {
 }
 
 const OPEN = "<agents-event ";
+const EARLIER_MARKER = "⟢ agents · ";
 const CLOSE = "</agents-event>";
 const READ = " · read ";
 
@@ -119,6 +120,14 @@ const READ = " · read ";
  *  the file with the whole of it, who it is from and whether it holds the user's own words. */
 export function parseDelivery(text: string): { summary: string; file?: string; kind?: string; from?: string; words?: string; thread?: string } | null {
   const trimmed = text.trim();
+  // The line before the envelope (until 2026-11-26), as conversations from before keep it: shown
+  // as what it is, a quiet row, never as the user's words.
+  if (trimmed.startsWith(EARLIER_MARKER)) {
+    const rest = trimmed.slice(EARLIER_MARKER.length);
+    const at = rest.lastIndexOf(READ);
+    return at < 0 ? { summary: rest.split("\n")[0], kind: "wake", from: "agents", words: "data" }
+      : { summary: rest.slice(0, at).trim(), file: rest.slice(at + READ.length).split(/\s/)[0], kind: "wake", from: "agents", words: "data" };
+  }
   if (!trimmed.startsWith(OPEN)) return null;
   const opening = trimmed.indexOf(">");
   if (opening < 0) return null;
