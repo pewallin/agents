@@ -222,8 +222,18 @@ export function wakeSummary(task, event) {
   case "ask-coordinator": return `Worker ${task} asks you`;
   case "stopped": return `Worker ${task} stopped without a report`;
   case "closed": return `Worker ${task}'s pane closed`;
+  case "not-begun": return `Worker ${task} has not begun`;
   default: return `Worker ${task}`;
   }
+}
+
+// A worker that never began its work: started minutes ago, no report, never seen at work, and
+// its screen standing still (a login, a trust or hooks question, a view whose agent never took the
+// brief). `screen` is the end of what its pane shows.
+export function notBegunLine(task, paneID, minutes, status, screen) {
+  const state = status ? `its agent reads ${status}` : "its agent reports no state";
+  const shows = screen ? ` Its pane ${paneID} ends with: "${screen}"` : ` Its pane ${paneID} shows nothing.`;
+  return `Worker ${task} has not begun its work: ${minutes} minutes after it was started it has not reported, nothing shows it at work, and its screen has not changed (${state}).${shows} Tell the user what stops it; they can answer it in that pane, and your queued lines reach the worker once it is at its prompt. If it cannot start, \`agent respawn ${task} --replace\` starts it again.`;
 }
 
 export function waitsLine(task, paneID, choice) {

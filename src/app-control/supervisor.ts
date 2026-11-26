@@ -7,11 +7,11 @@ import { requestID, sendRequest, socketPath, tokenPath } from "./app-socket.js";
 import { settleStaleClaims, typeQueuedLines } from "./ask.js";
 import { writeStatusFile, writeTaskReport } from "./briefs.js";
 import { deliveryFile, deliveryHold, effectiveStatus, noteDelivery, paneContent, screenChoiceText, screenState, updateMessageRecord } from "./delivery.js";
-import { RIDER_SUFFIX, deliveryReminder, enqueueMessage, noteForCoordinator, noteLine, queueNames, readQueued, turnDriver, waitsLine, wakeLine, wakeSummary } from "./messages.js";
+import { RIDER_SUFFIX, deliveryReminder, enqueueMessage, notBegunLine, noteForCoordinator, noteLine, queueNames, readQueued, turnDriver, waitsLine, wakeLine, wakeSummary } from "./messages.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, runTMux, setPaneOption } from "./panes.js";
 import { sleep } from "./placement.js";
-import { AT_PROMPT_STATES, COORDINATOR_ANSWER_PATIENCE_MS, SETTLED_REPORTS } from "./processes.js";
+import { AT_PROMPT_STATES, COORDINATOR_ANSWER_PATIENCE_MS, SETTLED_REPORTS, oneLine } from "./processes.js";
 import { coordinationPaneRecords, notifyApp, readJSON, taskPaths, writeFileAtomic } from "./program.js";
 import { isRespawning } from "./promote.js";
 import { answerUserQuestions, closeOpenQuestions, isUserQuestion, questionsByTask } from "./questions.js";
@@ -65,6 +65,14 @@ export function supervisorLog(message) {
 
 // Ticks (2 s each) an agent must wait at its prompt before its turn counts as ended.
 export const TURN_END_TICKS = 2;
+// The supervisor looks once every TICK_MS.
+export const TICK_MS = 2000;
+// How long a worker may sit after its start, its screen still half that time, before its
+// coordinator hears it has not begun (AGENTS_APP_NOT_BEGUN_MS in tests).
+export function notBegunMs() {
+  const ms = Number(process.env.AGENTS_APP_NOT_BEGUN_MS);
+  return Number.isFinite(ms) && ms > 0 ? ms : 2 * 60 * 1000;
+}
 
 // When lines last reached the agent with this @agents_uuid.
 export function deliveredAt(program, uuid) {
@@ -286,6 +294,26 @@ export async function runSupervisor(command) {
         }
         tracked.waitsOnChoice = waitsOnChoice;
       }
+      // A worker that never began: `agent spawn` saw its process start, but it sits on something
+      // the screen rules do not know (a login, a trust or hooks question, a view whose agent never
+      // took the brief) and would otherwise stay "started" with nobody told. Only a thread that
+      // never reported: a reopened one may rightly wait at its prompt.
+      if (status === "working") tracked.began = true;
+      const startedAt = record.reportAt * 1000;
+      const still = panes.get(record.paneID);
+      if (!tracked.began && !tracked.waitsOnChoice && record.parent && record.reportState === "started"
+          && startedAt > 0 && now - startedAt >= notBegunMs() && (still?.stableTicks || 0) * TICK_MS >= notBegunMs() / 2
+          && !(report?.history || []).some(entry => !entry.by)) {
+        const episode = `${record.uuid || record.paneID}:${record.reportAt}`;
+        if (notified[`${record.task}#not-begun`] !== episode) {
+          const screen = oneLine(String(still?.text || "").split("\n").map(line => line.trim()).filter(Boolean).slice(-6).join(" / "), 400);
+          enqueueMessage(program, record.parent, notBegunLine(record.task, record.paneID, Math.round((now - startedAt) / 60000), status, screen), wakeSummary(record.task, "not-begun"), undefined, { event: { kind: "wake", thread: record.task } });
+          supervisorLog(`${record.task} has not begun its work`);
+          notified[`${record.task}#not-begun`] = episode;
+          notifiedChanged = true;
+        }
+        tracked.began = true;
+      }
       // A turn ends when the agent has waited at its prompt for TURN_END_TICKS ticks in a row: a
       // state that flickers to idle and back mid-turn is no stop. A state nobody can tell
       // (undefined) changes nothing.
@@ -434,6 +462,6 @@ export async function runSupervisor(command) {
       fs.rmSync(pidFile, { force: true });
       return;
     }
-    await sleep(2000);
+    await sleep(TICK_MS);
   }
 }

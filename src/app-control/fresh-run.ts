@@ -25,7 +25,13 @@ export function freshContext(program, limit = 20) {
   const said = entries.map(entry => entry.kind === "message"
     ? `- ${entry.at.slice(0, 16).replace("T", " ")} The user: ${oneLine(entry.text, 1200)}`
     : `- ${entry.at.slice(0, 16).replace("T", " ")} You${entry.wokeBy ? ` (woken: ${entry.wokeBy})` : ""}: ${entry.reply ? oneLine(entry.reply, 1200) : "(no answer)"}`);
-  const open = threadRows(program).filter(row => !row.meta.resolved).map(row => `- ${row.task}: ${row.meta.title || row.task}`);
+  // Each open thread with where its worker last stood, so the new session knows its workers
+  // before it runs `agent status` (which has them live).
+  const open = threadRows(program).filter(row => !row.meta.resolved).map(row => {
+    const state = row.report?.state || "started";
+    const line = row.report?.line ? `: "${oneLine(row.report.line, 300)}"` : "";
+    return `- ${row.task}: ${row.meta.title || row.task} (${state}${row.report?.updatedAt ? ` ${row.report.updatedAt.slice(0, 16).replace("T", " ")}` : ""}${line})`;
+  });
   return [
     "# Where the conversation stands",
     "",
@@ -34,6 +40,8 @@ export function freshContext(program, limit = 20) {
     ...(said.length ? said : ["- (nothing yet)"]),
     "",
     "## Open threads",
+    "",
+    "Each with its latest report; `agent status --json` has your workers as they are now.",
     "",
     ...(open.length ? open : ["- (none)"]),
     "",
