@@ -378,6 +378,9 @@ export function PeekLayer({ children }: { children: ReactNode }) {
  *  middle button) opens it as a tab in the pane, ⌘-click in another app. */
 export function clickHint(target: ChipTarget, changed = false): string {
   const asTab = "⌥-click: as a tab";
+  // A coordinator's worker opens its thread beside the coordinator (the app's link rule).
+  const coordination = useCoordination.getState();
+  const ownWorker = target.kind === "pane" && coordination.role === "coordinator" && Boolean(workerInPane(coordination, target.id)?.task);
   switch (target.kind) {
     case "file": return changed
       ? `Click the name: open beside · the counts: this turn's changes · ${asTab} · ⌘-click: open in its app`
@@ -385,7 +388,7 @@ export function clickHint(target: ChipTarget, changed = false): string {
     case "dir": return "Click: show in Files · ⌘-click: open in Finder";
     case "image": return `Click: Quick Look · ${asTab} · ⌘-click: open in its app`;
     case "url": case "ticket": return `Click: open beside · ${asTab} · ⌘-click: open in your browser`;
-    case "pane": return "Click: show the pane";
+    case "pane": return ownWorker ? "Click: show its thread beside · ⌥-click: go to its pane" : "Click: show the pane";
     case "bead": case "commit": return "Click: open beside";
   }
 }
