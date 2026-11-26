@@ -2192,6 +2192,8 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
     <PeekLayer>
     <div className={`view${review ? " reviewing" : ""}`} data-acp-ready="true" data-attention={state}>
       <div className="main" ref={main}>
+        {/* A thread beside you: its line stays above the conversation as it scrolls. */}
+        {MIRROR && <div className="crumb-bar"><MirrorCrumb /></div>}
         <div className="scroll-wrap">
         <ScrollThumb target={scroller} />
         <div className="scroll under-dock" ref={scroller} onScroll={(event) => {
@@ -2564,7 +2566,22 @@ const MIRROR: { task?: string; program?: string } | null = (() => {
 })();
 
 /** What a thread beside you says beside its conversation: a close its coordinator proposed. */
-const useMirrorThread = create<{ proposedClose: { why: string } | null }>(() => ({ proposedClose: null }));
+const useMirrorThread = create<{ proposedClose: { why: string } | null; title?: string }>(() => ({ proposedClose: null }));
+
+/** The line above a thread beside you: "Threads › <title>", Threads a link to the coordinator's
+ *  threads in the same tab (Peter, 2026-11-26: in the page, as Claude does). */
+function MirrorCrumb() {
+  const title = useMirrorThread((state) => state.title);
+  if (!MIRROR?.program || !MIRROR.task) return null;
+  const list = `/threads?${new URLSearchParams({ "agents-next": "acp-page", program: MIRROR.program, from: MIRROR.task })}${location.hash}`;
+  return (
+    <nav className="crumb" aria-label="Thread">
+      <button type="button" className="crumb-link" onClick={() => location.assign(list)}>Threads</button>
+      <span className="crumb-sep" aria-hidden="true">›</span>
+      <span className="crumb-here">{title ?? MIRROR.task}</span>
+    </nav>
+  );
+}
 
 /** The coordinator proposed to close the thread (T8): the last row, with why, Close as done and
  *  Keep open. The app does either (agent resolve), as the Needs you list does. */
@@ -2651,7 +2668,7 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
   const opening = useOpeningConversation((s) => s.text);
   const session = useMemo(() => !token ? null : MIRROR && sessionId
     // A thread another pane has, beside you: drawn from its log; what you write goes as yours.
-    ? connectMirror({ token, target: { session: sessionId, ...MIRROR }, dispatch, send: (text, steer) => sendThreadReply({ session: sessionId, ...MIRROR }, text, steer), onThread: (thread) => useMirrorThread.setState({ proposedClose: thread.proposedClose ?? null }) })
+    ? connectMirror({ token, target: { session: sessionId, ...MIRROR }, dispatch, send: (text, steer) => sendThreadReply({ session: sessionId, ...MIRROR }, text, steer), onThread: (thread) => useMirrorThread.setState({ proposedClose: thread.proposedClose ?? null, title: thread.title }) })
     : connectSession({
       url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`,
       sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, takeOver: takeOvers > 0,
@@ -2831,7 +2848,7 @@ function ThreadsPage({ program }: { program: string }) {
   const [showsResolved, setShowsResolved] = useState(false);
   useEffect(() => {
     hostJson<{ name: string; threads: ListedThread[] }>(`/api/threads?program=${encodeURIComponent(program)}`)
-      .then((value) => { setListing(value); document.title = `${value.name} › Threads`; }, () => setListing(null));
+      .then((value) => { setListing(value); document.title = "Threads"; }, () => setListing(null));
   }, [program]);
   const ordered = useMemo(() => THREAD_GROUPS.filter((group) => showsResolved || group.title !== "Resolved")
     .flatMap((group) => (listing?.threads ?? []).filter((thread) => group.states.includes(thread.state))), [listing, showsResolved]);
@@ -2872,7 +2889,7 @@ function ThreadsPage({ program }: { program: string }) {
   };
   return (
     <div className="view threads-page"><div className="main"><div className="scroll"><div className="col">
-      <h1 className="threads-heading">{listing.name} · Threads</h1>
+      <nav className="crumb" aria-label="Threads"><span className="crumb-here">{listing.name} · Threads</span></nav>
       {THREAD_GROUPS.map((group) => {
         const threads = listing.threads.filter((thread) => group.states.includes(thread.state));
         if (threads.length === 0) return null;

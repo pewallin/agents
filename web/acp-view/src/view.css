@@ -874,3 +874,11 @@ button:disabled, select:disabled { cursor: default; }
 /* The coordinator's proposal to close a thread beside you: its last row (T8). */
 .close-card { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--edge); border-radius: 8px; background: var(--tint); }
 .close-actions { display: flex; gap: 8px; }
+
+/* The line above a thread beside you, and above the list in its place. */
+.crumb { display: flex; align-items: baseline; gap: 6px; font-size: var(--fs-mono); line-height: 20px; color: var(--dim); margin: 0 0 2px; min-width: 0; }
+.crumb-link { color: var(--fg2); font: inherit; border: 0; background: transparent; text-decoration: none; cursor: pointer; border-radius: 4px; padding: 0 3px; margin: 0 -3px; }
+.crumb-link:hover { color: var(--fg); background: var(--tint); }
+.crumb-here { color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.crumb-bar { flex: none; width: 100%; max-width: calc(var(--fs) * 70); margin: 0 auto; padding: 8px 26px 4px; box-sizing: border-box; }
+.crumb-bar .crumb { margin: 0; }

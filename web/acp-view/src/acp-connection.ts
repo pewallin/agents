@@ -333,8 +333,8 @@ export function connectMirror(options: {
       if (!response.ok) throw new Error((await response.json().catch(() => ({})) as { message?: string }).message ?? `the host answered ${response.status}`);
       const log = await response.json() as { session: string; n: number; title?: string; proposedClose?: { why: string; at?: string }; updates: SessionNotification["update"][]; meta?: { opened?: Record<string, unknown>; commands?: unknown[] } | null };
       options.onThread?.({ title: log.title, proposedClose: log.proposedClose });
-      // The tab reads "Threads › <title>" (the app makes "Threads" its way to the list).
-      if (log.title && typeof document !== "undefined") document.title = `Threads › ${log.title}`;
+      // The tab reads the thread's title; the way to the list is a line in the page.
+      if (log.title && typeof document !== "undefined") document.title = log.title;
       for (const update of log.updates) dispatch({ type: "update", update });
       const opened = log.meta?.opened ?? {};
       dispatch({ type: "loaded", modes: opened.modes as never, configOptions: opened.configOptions as never, models: opened.models as never });
