@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import type { ModelSource } from "./state.js";
 import type { AgentDoneRecordInput } from "./done.js";
@@ -587,9 +587,16 @@ program
 
 program
   .command("usage")
-  .description("Show normalized provider quota usage")
+  .description("Show normalized provider quota usage, or with --program the tokens a coordinator's program used")
+  .option("--program <dir>", "A coordinator's program folder: tokens per thread and for the coordinator, from the sessions' transcripts")
   .option("--json", "Output as JSON")
   .action(async (opts) => {
+    if (opts.program) {
+      const { programUsage, formatProgramUsage } = await import("./program-usage.js");
+      const usage = programUsage(resolve(opts.program));
+      console.log(opts.json || !process.stdout.isTTY ? JSON.stringify(usage, null, 2) : formatProgramUsage(usage));
+      return;
+    }
     const snapshot = await fetchAgentUsageSnapshot();
     if (opts.json || !process.stdout.isTTY) {
       console.log(JSON.stringify(snapshot, null, 2));
