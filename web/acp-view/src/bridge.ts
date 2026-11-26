@@ -29,6 +29,8 @@ export const PAGE_ENTRIES = {
   applyCoordination: "__agentsNextApplyCoordination",
   openBeside: "__agentsNextOpenBeside",
   conversationFailed: "__agentsNextConversationFailed",
+  /** The detail a thread beside the user shows, from its tab's header (Steps or Results). */
+  setDetailLevel: "__agentsNextSetDetailLevel",
 } as const;
 
 /** Events the app dispatches on the page's window. */
@@ -50,6 +52,8 @@ export const APP_ACTIONS = {
   /** The pane's agent starts again on its session, under the CLI's current host. */
   restartInACPMode: "agents-next-action://restart-acp",
   copyDiagnostics: "agents-next-action://copy-acp-diagnostics",
+  /** A thread beside the user (or the list in its place) closed with Esc: its tab closes. */
+  closeTab: "agents-next-action://close-tab",
 } as const;
 
 /** The app's scheme for thumbnails of files it draws. */

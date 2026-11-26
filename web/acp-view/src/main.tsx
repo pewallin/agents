@@ -2101,6 +2101,10 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   };
   const [level, setLevel] = useState<DetailLevel>(storedDetailLevel);
   const cycleLevel = useCallback(() => setLevel((current) => { const next = nextDetailLevel(current); storeDetailLevel(next); return next; }), []);
+  // A thread beside you takes its level from its tab's header (Steps or Results).
+  useEffect(() => {
+    definePageEntry(PAGE_ENTRIES.setDetailLevel, (next: unknown) => { if (next === "steps" || next === "results") setLevel(next); });
+  }, []);
   // ⌃O cycles how much of the work shows, wherever the keyboard is in the view.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -2198,6 +2202,7 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
             {permissions.map((request, index) => (
               <Ask key={request.id} request={request} agentName={info.agent.name} session={session} focused={index === 0} cwd={info.cwd} />
             ))}
+            <TerminalPermissionRow asked={permissions.length > 0} />
             <ProposedCloseCard />
           </div>
         </div>
@@ -2574,6 +2579,46 @@ function ProposedCloseCard() {
       <div className="close-actions">
         <button type="button" className="pbtn" disabled={pending} onClick={() => act("close")}>Close as done</button>
         <button type="button" className="pbtn quiet" disabled={pending} onClick={() => act("keep-open")}>Keep open</button>
+      </div>
+    </div>
+  );
+}
+
+/** Esc closes a thread beside you, or the list in its place, as its tab's close does; not while
+ *  something of the page takes it first (a menu, a field with text). */
+if (typeof window !== "undefined" && (MIRROR || location.pathname === "/threads")) {
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+    const active = document.activeElement as HTMLTextAreaElement | HTMLInputElement | null;
+    if (active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT") && active.value) return;
+    if (document.querySelector(".pop, [role=menu], [role=listbox]")) return;
+    location.href = APP_ACTIONS.closeTab;
+  });
+}
+
+/** A permission the thread's agent asks in its terminal (S1): answered there, so the thread says
+ *  what it asks and offers Go to pane. One the host holds shows as Allow once and Deny instead. */
+function TerminalPermissionRow({ asked }: { asked: boolean }) {
+  const [waiting, setWaiting] = useState<string | null>(null);
+  useEffect(() => {
+    const app = appHandler(APP_HANDLERS.threadAction);
+    if (!MIRROR || !app) return;
+    let live = true;
+    const ask = () => {
+      if (document.visibilityState !== "visible") return;
+      void Promise.resolve(app.postMessage({ action: "waiting" }) as Promise<{ permission?: string | null } | undefined>)
+        .then((reply) => { if (live) setWaiting(reply?.permission ?? null); }, () => undefined);
+    };
+    ask();
+    const timer = setInterval(ask, 3_000);
+    return () => { live = false; clearInterval(timer); };
+  }, []);
+  if (!MIRROR || asked || !waiting) return null;
+  return (
+    <div className="close-card" role="group" aria-label="Permission in its terminal">
+      <div className="close-why"><span className="dim">It asks in its terminal:</span> {waiting}</div>
+      <div className="close-actions">
+        <button type="button" className="pbtn" onClick={() => appHandler(APP_HANDLERS.threadAction)?.postMessage({ action: "go-to-pane" })}>Go to pane</button>
       </div>
     </div>
   );
