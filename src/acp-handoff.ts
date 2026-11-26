@@ -20,6 +20,7 @@ import { acpHostMetadataPath, readAcpHostMetadata, startAcpHost, type AcpHost } 
 import { paneUsageReader, reportViewActivity, type AcpAgentEntry } from "./acp-host-cli.js";
 import type { AcpLaunchSettings } from "./acp-launch-settings.js";
 import { getStateDir } from "./paths.js";
+import { paneSessionLog } from "./session-log-pane.js";
 import { reportState, type ReportedState } from "./state.js";
 
 export interface HandoffSessionInput {
@@ -653,6 +654,7 @@ export async function runHandoffSession(input: HandoffSessionInput): Promise<nev
         agentLogFiles: agent.logFiles?.(),
         agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
         historyAgent: agent.stateAgent,
+        sessionLog: { harness: agent.stateAgent, ...paneSessionLog(paneId) },
         sessionUsage: paneUsageReader(agent, paneId),
         onActivity: reportViewActivity(agent.stateAgent, paneId),
         handoff: { inView: () => mode === "view", handOff, giveBack },

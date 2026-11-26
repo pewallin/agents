@@ -33,7 +33,7 @@ export function usage() {
     "",
     "Agents (workers and coordinators):",
     "  agents app agent spawn <prompt> [--task <name>] --title <the user's words> [--parent <pane-ref>|--no-parent] [--placement auto|split|tab] [--axis horizontal|vertical] [--pane <pane-ref>] [--into <pane-ref>] [--cwd <dir>] [--profile <id>] [--model <model>] [--language <name>] [--launch-command <cmd>] [--program <dir>] [--startup-wait <seconds>] [--approved] [--dry-run] --json",
-    "  agents app agent respawn <task> [--title <title>] [--replace|--into <pane-ref>] [--profile <id>] [--model <model>] [--launch-command <cmd>] [--startup-wait <seconds>] --json",
+    "  agents app agent respawn <task> [--why <why>] [--title <title>] [--replace|--into <pane-ref>] [--profile <id>] [--model <model>] [--launch-command <cmd>] [--startup-wait <seconds>] --json",
     "  agents app agent promote [--pane <pane-ref>|--spawn-id <id>] [--program <dir>] [--name <name>] [--take-over <pane|task>] [--language <name>] [--tell] --json",
     "  agents app agent protocol --json",
     "  agents app agent adopt <pane-ref> [--task <name>] --title <the user's words> [--language <name>] [--approved] <what to do> --json",

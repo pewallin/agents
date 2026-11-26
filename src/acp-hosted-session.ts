@@ -208,7 +208,11 @@ export class HostedSession {
   }
 
   private toAgent(line: string): void {
-    if (this.steering?.clientLine(line)) return;
+    if (this.steering?.clientLine(line)) {
+      // Kiro's steer goes to it in its own words; the taps see what the view asked.
+      this.taps.onClientLine?.(line);
+      return;
+    }
     if (this.compaction?.clientLine(line)) {
       this.taps.onClientLine?.(line);
       return;

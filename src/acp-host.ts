@@ -25,6 +25,7 @@ import { AcpCompaction, compactionWay } from "./acp-compaction.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { TerminalReader } from "./terminal-question.js";
+import { SessionLogTap, type SessionLogTapOptions } from "./session-log.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween, workRoots } from "./acp-peek.js";
 
@@ -99,6 +100,9 @@ export interface AcpHostOptions {
   /** The agent name of the pane's conversations in `agents history` (its state agent: claude,
    *  kiro, …), for the view's /resume. */
   historyAgent?: string;
+  /** Writes the session logs of what the views and the host's own session draw (session-log.ts):
+   *  the agent's harness name, and where a session's chain goes on from. */
+  sessionLog?: Omit<SessionLogTapOptions, "cwd" | "log">;
   /** The pane's conversations; defaults to `agents history` for the pane (paneHistory). */
   history?: (limit: number) => Promise<PaneHistory>;
 }
@@ -385,6 +389,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
   const plan = new AcpPlanRecorder(acpHostPlanPath(metadataPath));
   const promptPath = acpHostPromptPath(metadataPath);
   const reviews = new ReviewStore();
+  const sessionLog = options.sessionLog ? new SessionLogTap({ ...options.sessionLog, cwd: options.cwd, log }) : undefined;
   /** The pane's screen, read only when it changed (the view asks every second or so). */
   const terminal = new TerminalReader(options.paneId);
   const events = new Set<ServerResponse>();
@@ -688,6 +693,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         compaction,
         onAgentLine: (line) => {
           diagnostics.message(client, "agent→view", line);
+          sessionLog?.agentLine(`view-${client}`, line);
           usage?.agentLine(line);
           view.sessions.agentLine(line);
           plan.agentLine(line);
@@ -718,6 +724,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
             view.sessions.open(loading.sessionId);
           }
           if (isPromptLine(line)) recordViewPrompt(promptPath);
+          sessionLog?.clientLine(`view-${client}`, line);
           activity.clientLine(client, line);
           activityChanged();
           options.onClientLine?.(line);
@@ -727,6 +734,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         onClose: (code, reason) => {
           log(`view ${client} closed (${code}${reason ? ` ${reason}` : ""})`);
           usage?.close();
+          sessionLog?.streamGone(`view-${client}`);
           views.delete(client);
           activity.clientGone(client);
           activityChanged();
@@ -796,6 +804,8 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       }
       const warm = spare;
       const child = takeAgent(false);
+      // Each of the host's own sessions is a stream of its own: ids start again with its process.
+      const hostedStream = `host-${child.pid ?? nextClient++}`;
       log(`the host starts a session of its own, agent ${child.pid}${child === warm ? " (started ahead)" : ""}`);
       const session = new HostedSession(child, {
         launchSettings,
@@ -804,6 +814,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         sessionUsage: options.sessionUsage,
         onAgentLine: (line) => {
           diagnostics.message(0, "agent→host", line);
+          sessionLog?.agentLine(hostedStream, line);
           plan.agentLine(line);
           activity.agentLine(0, line);
           activityChanged();
@@ -811,19 +822,24 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         },
         onClientLine: (line) => {
           diagnostics.message(0, "host→agent", line);
+          sessionLog?.clientLine(hostedStream, line);
           activity.clientLine(0, line);
           activityChanged();
           options.onClientLine?.(line);
         },
         log,
       });
-      child.once("exit", (code, signal) => log(`agent ${child.pid} exited (${code ?? signal})`));
+      child.once("exit", (code, signal) => {
+        log(`agent ${child.pid} exited (${code ?? signal})`);
+        sessionLog?.streamGone(hostedStream);
+      });
       hosted = session;
       return await session.start(options.cwd, existing);
     },
     async close() {
       if (closed) return;
       closed = true;
+      sessionLog?.flush();
       if (options.agentStateFile) unwatchFile(options.agentStateFile, agentStateChanged);
       queue.close();
       if (readAcpHostMetadata(metadataPath)?.token === token) {

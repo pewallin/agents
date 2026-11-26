@@ -325,3 +325,43 @@ What this decides:
   `cli_<uuid>_<suffix>` (`kiroContinuedSession` names it). The mini's sessions are Kiro 3's own
   (`sess_…`), which keep their id; a Kiro 2 session on another Mac changes id each time its TUI
   takes it up.
+
+## The session log (2026-11-26)
+
+The pane's ACP host writes what its views draw to a log per session,
+`~/.agents/sessions/<harness>/<session-id>.jsonl` (`AGENTS_SESSIONS_DIR` elsewhere), as the
+traffic between a view (or the host's own session) and the agent passes through it
+(src/session-log.ts, `SessionLogTap`). One JSON line each, `{v: 1, n, at, kind, …}`, `n` counting
+from 0:
+
+| kind | What it holds |
+| --- | --- |
+| `start` | The first line: `session`, `harness`, `cwd`, and where the chain goes on from: `previous` (the pane's session before, after `/new`, `/resume`, an agent switch, a Codex thread change or Kiro's copy), `pane`, `program` and `task` for a worker, `how: {start: "respawn", why}` for a respawn |
+| `user` | A prompt as it was sent: `text`, `attachments` (images by reference, files by URI), `steered` for one taken into a running turn, `replay` for one the agent replayed |
+| `agent`, `thought` | The agent's message or thinking, its chunks joined into one line |
+| `tool` | A tool call once it settles: `id`, `title`, `toolKind`, `status`, `locations`, `rawInput`, `content` (a diff whole, text to its last 200 lines), `rawOutput` (whole up to 32 KB, else its last lines), `ms` |
+| `plan` | The plan's entries, when they change |
+| `permission` | A question for permission: `request`, `toolCallId`, `title`, `options` |
+| `choice` | The answer to it: `outcome` (selected or cancelled), `optionId`, `optionKind` |
+| `turnEnd` | A prompt's end: `stopReason`, `ms`, `tools`, `edits`, `failed`, and `config` (the session's mode, model and other choices then, for a resumed session to be given again); a respawn's first turn has its `how` |
+
+- **One writer.** The host that has the session writes its log; lines are only appended. A
+  host that stopped in the middle of a line leaves it torn: the next host starts on a new line and
+  a reader skips any line that does not parse.
+- **Images** are written once beside the log, `<session>.files/<sha256>.<ext>`, and the line names
+  the file (`ref`). Tool content images keep only their type.
+- **Old sessions (no backfill).** A session opened through its harness (`session/load`) gets a log
+  from what the agent replays, the first time. A load of a session with a log writes nothing again,
+  except the turns the replay has after the log's last prompt (the pane's TUI had the session in
+  between). A load that fails leaves no log.
+- **The chain.** The pane's tmux option `@agents_session_log` keeps the session its host last
+  logged; the next session's start line names it as `previous`. `agent respawn <task> --why "<why>"`
+  sets `@agents_session_how` on the new pane, which the new session's start line and first turn
+  carry. A worker's sessions are also in its `tasks/<task>/sessions.jsonl`, as before.
+
+`agents session-log <session-id> [--json] [--after <n>]` prints a session's log (plain text, or
+`{session, harness, lines}`); `--chain` adds the sessions it goes on from, oldest first
+(`{sessions: [...]}`); `--task <task> [--program <dir>]` reads a worker thread's sessions in
+order, with each session's `via` from sessions.jsonl. A session with no log is listed as
+`missing`. It runs over SSH like `agents threads`. What the TUI does with a session while the
+view does not have it is not in the log until a view loads the session again.

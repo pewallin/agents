@@ -25,6 +25,7 @@ import { paneSessionUsage, type StateUsage } from "./scanner-state-runtime.js";
 import { kiroContinuedSession, kiroSessionLock, kiroSessionLocks, kiroSetting } from "./kiro-sessions.js";
 import { claudeLaunchSettings, kiroLaunchSettings, opencodeLaunchSettings, type AcpLaunchSettings } from "./acp-launch-settings.js";
 import { commandWords, shellCommand } from "./command-words.js";
+import { paneSessionLog } from "./session-log-pane.js";
 
 /** What the view's clients see, reported as the pane's agent state: the app's "needs you" dot
  *  lights while a permission waits in the view, as it does for one in the terminal. */
@@ -440,6 +441,7 @@ export async function runAcpSessionCommand(args: string[], runtimeTempDir: strin
     agentLogFiles: agent.logFiles?.(),
     agentStateFile: join(getStateDir(), `${agent.stateAgent}-${paneId}.json`),
     historyAgent: agent.stateAgent,
+    sessionLog: { harness: agent.stateAgent, ...paneSessionLog(paneId) },
     sessionUsage: paneUsageReader(agent, paneId),
     paneId,
     agent: { id: agent.id, name: agent.name },

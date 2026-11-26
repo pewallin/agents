@@ -698,6 +698,58 @@ program
     }
   });
 
+// What an ACP session showed, from the session log its pane's host wrote (src/session-log.ts):
+// one session, the sessions it goes on from (--chain), or a worker thread's sessions in order
+// (--task, from its sessions.jsonl). Works over SSH like `agents threads`.
+program
+  .command("session-log [session]")
+  .description("Show what an ACP session showed, from its session log")
+  .option("--after <n>", "Only lines after this sequence number", (value) => parseInt(value, 10))
+  .option("--chain", "Also the sessions it goes on from, oldest first")
+  .option("--task <task>", "A worker thread's sessions in order (with --program, or the pane's program)")
+  .option("--program <dir>", "The program folder of --task")
+  .option("--json", "Output as JSON")
+  .action(async (session: string | undefined, opts) => {
+    const log = await import("./session-log.js");
+    let sessions: Array<{ session: string; via?: string }>;
+    if (opts.task) {
+      const { taskPaths } = await import("./app-control/program.js");
+      const { readSessionLines } = await import("./app-control/threads.js");
+      let programDir: string | undefined = opts.program;
+      if (!programDir && process.env.TMUX_PANE) {
+        try { programDir = execFileSync("tmux", ["show-options", "-p", "-q", "-v", "-t", process.env.TMUX_PANE, "@agents_program"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined; } catch { /* none */ }
+      }
+      if (!programDir) { console.error("session-log --task needs --program <dir>"); process.exit(2); }
+      const file = join(taskPaths(programDir, opts.task).dir, "sessions.jsonl");
+      sessions = readSessionLines(file).map((line: { session: string; via?: string }) => ({ session: line.session, via: line.via }));
+      if (sessions.length === 0) { console.error(`no sessions for task ${opts.task} in ${programDir}`); process.exit(1); }
+    } else if (session) {
+      sessions = [{ session }];
+    } else {
+      console.error("session-log needs a session id, or --task");
+      process.exit(2);
+    }
+    const after = Number.isFinite(opts.after) ? opts.after : undefined;
+    let entries = log.sessionLogEntries(sessions, { after });
+    if (!opts.chain && !opts.task) entries = entries.filter((entry) => entry.session === session);
+    if (entries.every((entry) => entry.missing)) {
+      if (opts.json) console.log(JSON.stringify(opts.chain || opts.task ? { sessions: entries } : entries[0] ?? { session, missing: true, lines: [] }, null, 2));
+      else console.error(`no session log for ${session ?? opts.task}`);
+      process.exit(1);
+    }
+    if (opts.json) {
+      console.log(JSON.stringify(opts.chain || opts.task ? { sessions: entries } : entries[0], null, 2));
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.missing) { console.log(`— session ${entry.session}: no log`); continue; }
+      for (const line of entry.lines) {
+        const text = log.sessionLogText(line);
+        if (text) console.log(text);
+      }
+    }
+  });
+
 // A coordinator's threads in a folder: what Agents Next lists in Conversations
 // (src/app-control/threads.ts). --repair fills in the session lists of older threads again.
 program

@@ -14,6 +14,7 @@ import { canonicalSourcePaneRecord, localPaneRef, paneIDFromRef, resolveLocalSou
 import { createPaneThroughApp, waitForExecutableShell, waitForPaneAddressable } from "./placement.js";
 import { coordinationPaneRecords, coordinatorProgram, ensurePaneUUID, notifyApp, readJSON, resolveCoordinatorProgram, taskPaths, uniqueTaskName, waitForPaneUUID, workspaceWindowID } from "./program.js";
 import { respawnMarker } from "./promote.js";
+import { SESSION_HOW_OPTION } from "../session-log-pane.js";
 import { acpPromptSupported, acquireSpawnLock, briefInViewLaunch, failStartup, noteSubWorker, paneProcesses, spawnRecovery, spawnSummary, startupWaitMs, subWorkerLead, watchAgentStartup } from "./spawn-support.js";
 import { ensureSupervisor } from "./supervisor-control.js";
 
@@ -182,6 +183,8 @@ export async function runAgentSpawn(command, currentSocketPath) {
     setPaneOption(newPane, "@agents_report_at", String(Math.floor(Date.now() / 1000)));
     // Its own sub-workers, should it start any, talk to the user in the same language.
     if (language) setPaneOption(newPane, LANGUAGE_OPTION, language);
+    // A respawn's new session says why in its log's first turn (agents session-log).
+    if (respawn && !respawn.resume) setPaneOption(newPane, SESSION_HOW_OPTION, JSON.stringify({ start: "respawn", ...(typeof params.why === "string" && params.why.trim() ? { why: params.why.trim().slice(0, 300) } : {}) }));
     if (sub && !respawn) noteSubWorker(program, sub, task, command.prompt);
     ensureSupervisor(program);
     notifyApp(parentRecord.sessionName);
