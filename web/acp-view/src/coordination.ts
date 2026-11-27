@@ -254,3 +254,10 @@ export function withoutContext(text: string): string {
   const end = trimmed.indexOf(CONTEXT_CLOSE);
   return end < 0 ? text : trimmed.slice(end + CONTEXT_CLOSE.length).replace(/^\s*\n/, "");
 }
+
+/** The brief itself out of a worker's brief file (briefs.ts): what follows "## Brief" up to the
+ *  CLI's own "## How to work here"; a brief has headings of its own (Goal, Context, Done when). */
+export function briefBody(text: string): string {
+  const after = text.split(/^## Brief[ \t]*$/m)[1] ?? text;
+  return after.split(/^## How to work here[ \t]*$/m)[0].replace(/^\s*ROLE:[^\n]*\n+/i, "").trim();
+}

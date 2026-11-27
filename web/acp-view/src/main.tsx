@@ -24,7 +24,7 @@ import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
 import { attachedPaths, attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
 import { AgentEventLine, BriefRow, DeliveryRow, threadHref, useUserWords } from "./coordination-view";
-import { besideContext, parseAgentCommand, parseDelivery, parseWorkerPrompt, useCoordination, withoutContext, workerState } from "./coordination";
+import { besideContext, briefBody, parseAgentCommand, parseDelivery, parseWorkerPrompt, useCoordination, withoutContext, workerState } from "./coordination";
 import { makeFold } from "./fold";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
@@ -3110,7 +3110,7 @@ function WorkerPage({ task, program }: { task: string; program: string }) {
           if (path) hostJson<{ text: string }>(`/api/text?path=${encodeURIComponent(path)}`).then((value) => set(pick(value.text).trim() || null), () => set(null));
         };
         // The brief file starts with its title and where it came from; the brief is under "## Brief".
-        text(found?.brief, setBrief, (raw) => (raw.split(/^## Brief\s*$/m)[1] ?? raw).split(/^## /m)[0].replace(/^\s*ROLE:[^\n]*\n+/i, ""));
+        text(found?.brief, setBrief, briefBody);
         text(found?.report, setReport, (raw) => raw);
       }, () => setThread(null));
   }, [task, program]);

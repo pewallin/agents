@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { besideContext, describeAgentEvent, messageFileText, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, threadNamed, withoutContext, workerInPane, workerState, workerTitle } from "./coordination";
+import { besideContext, briefBody, describeAgentEvent, messageFileText, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, threadNamed, withoutContext, workerInPane, workerState, workerTitle } from "./coordination";
 
 describe("coordination lines", () => {
   it("reads a wake-up line", () => {
@@ -83,5 +83,12 @@ describe("the thread open beside a coordinator", () => {
     expect(sent).toBe('<agents-context thread="wi01-dts">The user has this thread open beside you: Build the DTS service.</agents-context>\nis this one done?');
     expect(withoutContext(sent)).toBe("is this one done?");
     expect(withoutContext("plain words")).toBe("plain words");
+  });
+});
+
+describe("a worker's brief", () => {
+  it("is all of the brief, its own headings too, without the CLI's part", () => {
+    const file = "# Task: t\n\nStarted …\n\n## Brief\n\n## Goal\nAdd a README.\n\n## Done when\nIt exists.\n\n## How to work here\n\nRead WORKER.md.\n";
+    expect(briefBody(file)).toBe("## Goal\nAdd a README.\n\n## Done when\nIt exists.");
   });
 });

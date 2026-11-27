@@ -4,7 +4,7 @@
 // coordinator and thread. A coordinator's workers are its threads, listed in the app.
 import { lazy, Suspense, useContext, useEffect, useState, type ReactNode } from "react";
 import { Chip, ChipHostContext, NamedChip, StateMark } from "./chips";
-import { describeAgentEvent, messageFileText, tasksIn, threadNamed, useCoordination, workerNamed, workerTitle, type AgentEvent } from "./coordination";
+import { briefBody, describeAgentEvent, messageFileText, tasksIn, threadNamed, useCoordination, workerNamed, workerTitle, type AgentEvent } from "./coordination";
 
 const Markdown = lazy(() => import("./markdown"));
 
@@ -123,7 +123,7 @@ export function BriefRow({ task, brief, prompt, respawn }: { task: string; brief
   const [open, setOpen] = useState(false);
   // The brief file starts with its title and where it came from; the brief itself is under "## Brief".
   // The ROLE line says what the row says already.
-  const body = text ? (text.split(/^## Brief\s*$/m)[1] ?? text).split(/^## /m)[0].trim().replace(/^\s*ROLE:[^\n]*\n+/i, "") : null;
+  const body = text ? briefBody(text) || null : null;
   const canOpen = Boolean(body) || (text === null && Boolean(prompt));
   const toggle = (event: React.MouseEvent | React.KeyboardEvent) => {
     // The chips in the row open what they name.
