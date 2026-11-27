@@ -174,3 +174,38 @@ export function readKiroSessionUsage(sessionId?: string, root: string = kiroSess
     return {};
   }
 }
+
+/** The credits of each of a Kiro session's prompt turns, in order, where Kiro's files say them;
+ *  empty when they do not (for what each of a coordinator's turns cost, program-usage.ts). */
+export function readKiroTurnCredits(sessionId?: string, root: string = kiroSessionsRoot()): number[] {
+  if (!sessionId || !/^[\w.-]+$/.test(sessionId)) return [];
+  const cliFile = join(root, "cli", `${sessionId}.json`);
+  try {
+    if (existsSync(cliFile)) {
+      const turns = record(record(record(JSON.parse(readFileSync(cliFile, "utf-8")))?.session_state)?.conversation_metadata)?.user_turn_metadatas;
+      if (!Array.isArray(turns)) return [];
+      return turns.map((turn) => {
+        const metering = record(turn)?.metering_usage;
+        if (!Array.isArray(metering)) return 0;
+        let credits = 0;
+        for (const item of metering) {
+          if (/credit/i.test(String(record(item)?.unit ?? "credit"))) credits += finiteNumber(record(item)?.value) ?? 0;
+        }
+        return credits;
+      });
+    }
+    const dir = findV2SessionDirectory(root, sessionId);
+    if (!dir) return [];
+    let last: unknown[] | undefined;
+    for (const line of readFileSync(join(dir, "messages.jsonl"), "utf-8").split("\n")) {
+      if (!line.includes("usage_summary")) continue;
+      try {
+        const payload = record(record(JSON.parse(line))?.payload);
+        if (payload?.type === "usage_summary" && Array.isArray(payload.promptTurnSummaries)) last = payload.promptTurnSummaries;
+      } catch { /* a broken line */ }
+    }
+    return (last ?? []).map((summary) => finiteNumber(record(summary)?.usage) ?? 0);
+  } catch {
+    return [];
+  }
+}

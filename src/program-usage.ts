@@ -9,7 +9,8 @@
 // Other harnesses record no usage the CLI can read: their sessions are counted, not measured.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { readKiroSessionUsage } from "./kiro-session-usage.js";
+import { readKiroSessionUsage, readKiroTurnCredits } from "./kiro-session-usage.js";
+import { sessionLogsRoot } from "./session-log.js";
 import { sessionTranscriptPath } from "./scanner-history.js";
 
 export interface TokenUsage {
@@ -225,5 +226,178 @@ export function formatProgramUsage(usage: ProgramUsage): string {
     ...rows.map((row) => row.map((cell, column) => (column === 0 ? cell.padEnd(widths[column]) : cell.padStart(widths[column]))).join("  ")),
     "",
     "Input is read at full price, cache reads at about a tenth of it. Kiro counts credits, not tokens. Unmeasured sessions are of harnesses that record no usage (Pi, OpenCode, Copilot).",
+  ].join("\n");
+}
+
+// --- what each of a coordinator's turns cost (Peter, 2026-11-27) ---------------------------------
+// The coordinator is woken for every message in its threads; what that costs against the turns the
+// user starts is read back from its sessions' logs (~/.agents/sessions/<harness>/<session>.jsonl,
+// written by the pane's ACP host): each prompt line says what began a turn (an <agents-event> wake,
+// or the user's words) and each turnEnd when it ended. Tokens per turn come from Claude Code's
+// transcript (its messages in the turn's time), credits from Kiro's own per-turn figures (the
+// turns in order), cost from the agent's last usage_update where it sends one (cumulative, so a
+// turn's is the difference).
+
+export type TurnKind = "wake" | "user";
+
+export interface CoordinatorTurn {
+  session: string;
+  agent: string;
+  at: string;
+  kind: TurnKind;
+  /** The envelope's kind for a wake (wake, thread, message, messages, …). */
+  event?: string;
+  ms?: number;
+  usage?: TokenUsage;
+  cost?: number;
+}
+
+export interface TurnSummary {
+  turns: number;
+  usage: TokenUsage;
+  /** Where the agent says it. */
+  cost?: number;
+  ms: number;
+}
+
+export interface CoordinatorTurns {
+  program: string;
+  from?: string;
+  to?: string;
+  /** Hours from the first turn to the last. */
+  hours: number;
+  wake: TurnSummary;
+  user: TurnSummary;
+  turns: CoordinatorTurn[];
+}
+
+function findSessionLog(session: string, root: string): string | undefined {
+  let harnesses: string[] = [];
+  try { harnesses = readdirSync(root); } catch { return undefined; }
+  for (const harness of harnesses) {
+    const file = join(root, harness, `${session}.jsonl`);
+    try { if (statSync(file).isFile()) return file; } catch { /* not this one */ }
+  }
+  return undefined;
+}
+
+function promptText(line: Record<string, unknown>): string {
+  const prompt = line.prompt ?? line.content ?? line.text;
+  if (typeof prompt === "string") return prompt;
+  if (Array.isArray(prompt)) return prompt.map((block) => (typeof (block as { text?: unknown })?.text === "string" ? (block as { text: string }).text : "")).join("");
+  return "";
+}
+
+/** The turns a session log holds, with what began each. */
+export function turnsInLog(lines: unknown[], session: string, agent: string): CoordinatorTurn[] {
+  const turns: CoordinatorTurn[] = [];
+  let open: CoordinatorTurn | undefined;
+  let lastCost: number | undefined;
+  for (const entry of lines) {
+    const line = entry as Record<string, unknown>;
+    if (line?.kind === "user" && !open) {
+      const text = promptText(line).trimStart();
+      const wake = text.startsWith("<agents-event");
+      const event = wake ? text.match(/^<agents-event[^>]*\bkind="([^"]+)"/)?.[1] ?? "wake" : undefined;
+      const from = wake ? text.match(/^<agents-event[^>]*\bfrom="([^"]+)"/)?.[1] : undefined;
+      open = { session, agent, at: String(line.at ?? ""), kind: wake && from !== "user" ? "wake" : "user", ...(event ? { event } : {}) };
+    } else if (line?.kind === "turnEnd" && open) {
+      if (typeof line.ms === "number") open.ms = line.ms;
+      const amount = num((line.usage as { cost?: { amount?: unknown } } | undefined)?.cost?.amount);
+      if (amount > 0) {
+        if (lastCost !== undefined && amount >= lastCost) open.cost = amount - lastCost;
+        lastCost = amount;
+      }
+      turns.push(open);
+      open = undefined;
+    }
+  }
+  if (open) turns.push(open);
+  return turns;
+}
+
+function turnSummary(turns: CoordinatorTurn[]): TurnSummary {
+  const usage = empty();
+  let cost: number | undefined;
+  let ms = 0;
+  for (const turn of turns) {
+    if (turn.usage) add(usage, turn.usage);
+    if (turn.cost !== undefined) cost = (cost ?? 0) + turn.cost;
+    ms += turn.ms ?? 0;
+  }
+  return { turns: turns.length, usage, ...(cost !== undefined ? { cost } : {}), ms };
+}
+
+export function coordinatorTurns(program: string, root: string = sessionLogsRoot()): CoordinatorTurns {
+  const claude = claudeTranscripts();
+  const turns: CoordinatorTurn[] = [];
+  const seen = new Set<string>();
+  for (const entry of sessionsIn(join(program, "coordinators.jsonl"))) {
+    if (seen.has(entry.session)) continue;
+    seen.add(entry.session);
+    const agent = typeof entry.agent === "string" ? entry.agent.toLowerCase() : "";
+    const log = findSessionLog(entry.session, root);
+    if (!log) continue;
+    const own = turnsInLog(jsonLines(log), entry.session, agent);
+    if (agent === "claude") {
+      // Its messages in each turn's time, from its own transcript.
+      const file = claude(entry.session);
+      const lines = file ? jsonLines(file) : [];
+      own.forEach((turn, index) => {
+        const start = Date.parse(turn.at);
+        const end = own[index + 1] ? Date.parse(own[index + 1].at) : Infinity;
+        turn.usage = claudeUsage(lines.filter((line) => {
+          const at = Date.parse(String((line as { timestamp?: unknown })?.timestamp ?? ""));
+          return at >= start && at < end;
+        }));
+      });
+    } else if (agent.startsWith("kiro")) {
+      const credits = readKiroTurnCredits(entry.session);
+      // Kiro counts every prompt turn of the session; the log may begin later (a resumed one).
+      const offset = Math.max(0, credits.length - own.length);
+      own.forEach((turn, index) => {
+        const value = credits[offset + index];
+        if (value !== undefined) turn.usage = { ...empty(), credits: value };
+      });
+    }
+    turns.push(...own);
+  }
+  turns.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const from = turns[0]?.at;
+  const to = turns.at(-1)?.at;
+  const hours = from && to ? Math.max(0, (Date.parse(to) - Date.parse(from)) / 3_600_000) : 0;
+  return {
+    program, ...(from ? { from } : {}), ...(to ? { to } : {}), hours,
+    wake: turnSummary(turns.filter((turn) => turn.kind === "wake")),
+    user: turnSummary(turns.filter((turn) => turn.kind === "user")),
+    turns,
+  };
+}
+
+export function formatCoordinatorTurns(report: CoordinatorTurns): string {
+  if (report.turns.length === 0) return `No turns of the coordinator in its session logs (${report.program}).`;
+  const perHour = (value: number, digits = 1) => (report.hours >= 0.1 ? (value / report.hours).toFixed(digits) : "");
+  const row = (name: string, part: TurnSummary) => {
+    const tokens = part.usage.input + part.usage.cacheRead + part.usage.cacheWrite + part.usage.output;
+    return [
+      name, String(part.turns), perHour(part.turns),
+      tokens ? amount(tokens) : "", tokens && report.hours >= 0.1 ? amount(Math.round(tokens / report.hours)) : "",
+      part.usage.credits === undefined ? "" : part.usage.credits.toFixed(1),
+      part.usage.credits === undefined ? "" : perHour(part.usage.credits),
+      part.cost === undefined ? "" : `$${part.cost.toFixed(2)}`,
+    ];
+  };
+  const rows = [
+    ["", "turns", "/h", "tokens", "tokens/h", "credits", "credits/h", "cost"],
+    row("wakes", report.wake),
+    row("your turns", report.user),
+  ];
+  const widths = rows[0].map((_, column) => Math.max(...rows.map((cells) => cells[column].length)));
+  return [
+    `Coordinator turns, ${report.from} to ${report.to} (${report.hours.toFixed(1)} h)`,
+    "",
+    ...rows.map((cells) => cells.map((cell, column) => (column === 0 ? cell.padEnd(widths[column]) : cell.padStart(widths[column]))).join("  ")),
+    "",
+    "Wakes are turns a line from the CLI began (a worker's report, a message in a thread); your turns are the ones your words began. Tokens from Claude Code's transcripts, credits from Kiro's own files, cost where the agent reports it.",
   ].join("\n");
 }

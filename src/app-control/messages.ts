@@ -12,7 +12,7 @@ import { newMessageID } from "./delivery.js";
 import { shellQuote } from "./launch.js";
 import { SETTLED_REPORTS, oneLine } from "./processes.js";
 import { readJSON, taskPaths, writeFileAtomic } from "./program.js";
-import { appInputState, deliveredAt } from "./supervisor.js";
+import { appInputState, deliveredAt, userDeliveredAt } from "./supervisor.js";
 import { readFileOr } from "./supervisor-control.js";
 import { clockText } from "./watch.js";
 import { envelopeBlock, envelopeLine } from "../agent-envelope.js";
@@ -29,7 +29,7 @@ export function enqueueMessage(program, targetUUID, text, summary, id = newMessa
   const dir = path.join(program, ".queue", targetUUID);
   fs.mkdirSync(dir, { recursive: true });
   const body = lines ? String(text || "").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim() : oneLine(text, 2000);
-  const entry = { id, summary: oneLine(summary, SUMMARY_LIMIT), text: body, event: messageEvent(event) };
+  const entry = { id, summary: oneLine(summary, summaryLimit(event)), text: body, event: messageEvent(event) };
   // `at` orders it among the queued lines (a fresh run's start goes before the wake that came).
   writeFileAtomic(path.join(dir, `${at ?? Date.now()}-${id}.txt`), `${JSON.stringify(entry)}\n`);
   return id;
@@ -63,7 +63,7 @@ export function readQueued(file) {
   try {
     const entry = JSON.parse(raw);
     if (entry && typeof entry.text === "string" && entry.text.trim()) {
-      return { id: entry.id, summary: oneLine(entry.summary || entry.text, SUMMARY_LIMIT), text: entry.text.trim(), event: messageEvent(entry.event) };
+      return { id: entry.id, summary: oneLine(entry.summary || entry.text, summaryLimit(entry.event)), text: entry.text.trim(), event: messageEvent(entry.event) };
     }
   } catch {
     // The bare line.
@@ -93,6 +93,35 @@ export function messageEvent(event = {}) {
 // the app tell it from the user's own typing, and the user's words from another agent's. The
 // messages themselves wait in a file under <program>/messages/, each in an envelope of its own.
 export const SUMMARY_LIMIT = 80;
+// A message in one of the coordinator's threads says it in the line itself, with about 200
+// characters of it, so the coordinator need not open a file to know what was said.
+export const THREAD_SUMMARY_LIMIT = 280;
+export const THREAD_PREVIEW_LIMIT = 200;
+
+export function summaryLimit(event) {
+  return event?.kind === "thread" ? THREAD_SUMMARY_LIMIT : SUMMARY_LIMIT;
+}
+
+// One message in a coordinator's thread (Peter, 2026-11-27, "as Claude"): the user's message to a
+// worker, or the worker's answer to the user. The coordinator is woken for each; several that come
+// while it works go to it as one line at the end of its turn. It reads the whole thread only when
+// it needs to.
+export function threadEvent(program, task, by, text) {
+  const preview = oneLine(text || "", THREAD_PREVIEW_LIMIT);
+  const said = preview ? `: "${preview}"` : " (no text)";
+  const summary = by === "user" ? `Worker ${task} got a message from the user${said}` : `Worker ${task} answered the user${said}`;
+  const whole = `The whole thread: agents session-log --task ${shellQuote(task)} --program ${shellQuote(program)} --json`;
+  return {
+    summary,
+    text: `${summary}. ${whole}. If it changes nothing for you, end your turn without a reply.`,
+    event: { kind: "thread", thread: task, from: by === "user" ? "agents" : `worker:${task}` },
+  };
+}
+
+export function enqueueThreadEvent(program, coordinatorUUID, task, by, text) {
+  const event = threadEvent(program, task, by, text);
+  return enqueueMessage(program, coordinatorUUID, event.text, event.summary, undefined, { event: event.event });
+}
 export const MESSAGE_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
 
 export function deliveryLine(program, entries, reminder) {
@@ -271,7 +300,10 @@ export function lastSettledReport(report) {
 // typing on iOS or in a tmux client of one's own wakes the coordinator as before.
 export async function turnDriver(program, record, report) {
   const since = Date.parse(lastSettledReport(report)?.at || "") || 0;
-  if (!since || deliveredAt(program, record.uuid) > since) return "coordinator";
+  // The user's words from a thread's reply field, the last thing that went in: theirs.
+  const delivered = deliveredAt(program, record.uuid);
+  if (delivered > since && userDeliveredAt(program, record.uuid) === delivered) return "user";
+  if (!since || delivered > since) return "coordinator";
   const input = await appInputState(record.paneID);
   const typed = typeof input?.secondsSinceInput === "number" ? Date.now() - input.secondsSinceInput * 1000 : 0;
   return typed > since ? "user" : "coordinator";

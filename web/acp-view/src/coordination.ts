@@ -236,3 +236,21 @@ export function describeAgentEvent(event: AgentEvent): string {
     case "close": return `Closed ${event.tasks.length ? event.tasks.join(", ") : "its workers"}`;
   }
 }
+
+const CONTEXT_OPEN = "<agents-context ";
+const CONTEXT_CLOSE = "</agents-context>";
+
+/** What the view puts before your words to a coordinator while a thread of its is open beside it
+ *  (Peter, 2026-11-27): the coordinator reads them in that thread's context. */
+export function besideContext(thread: { task: string; title?: string }): string {
+  const clean = (value: string) => value.replace(/["<>\n]/g, " ").trim();
+  return `${CONTEXT_OPEN}thread="${clean(thread.task)}">The user has this thread open beside you${thread.title ? `: ${clean(thread.title)}` : ""}.${CONTEXT_CLOSE}\n`;
+}
+
+/** Your words without the context the view put before them. */
+export function withoutContext(text: string): string {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith(CONTEXT_OPEN)) return text;
+  const end = trimmed.indexOf(CONTEXT_CLOSE);
+  return end < 0 ? text : trimmed.slice(end + CONTEXT_CLOSE.length).replace(/^\s*\n/, "");
+}

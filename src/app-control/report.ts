@@ -6,7 +6,7 @@ import { requestID } from "./app-socket.js";
 import { sharedCLIPath, taskRows, writeStatusFile, writeTaskReport } from "./briefs.js";
 import { deliveryState } from "./delivery.js";
 import { shellQuote } from "./launch.js";
-import { coordinatorReminder, enqueueMessage, memoryBytes, noteForCoordinator, noteLine, turnDriver, wakeLine, wakeSummary, whenText } from "./messages.js";
+import { coordinatorReminder, enqueueMessage, enqueueThreadEvent, memoryBytes, turnDriver, wakeLine, wakeSummary, whenText } from "./messages.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, runTMuxRequired, setPaneOption } from "./panes.js";
 import { sleep } from "./placement.js";
@@ -48,8 +48,9 @@ export async function runAgentReport(command) {
     // coordinator gets a note with its next line. A first done and a question always wake it.
     const again = state === "blocked" || (state === "done" && (previous.history || []).some(entry => !entry.by && entry.state === "done"));
     if (again && await turnDriver(record.program, record, previous) === "user") {
-      noteForCoordinator(record.program, record.parent, record.task, noteLine(record.program, record.task, state, line));
-      queuedFor = "note";
+      // Work the user drives in its thread: the coordinator gets one line of it (2026-11-27).
+      enqueueThreadEvent(record.program, record.parent, record.task, "worker", line);
+      queuedFor = "parent";
     } else if (state === "ask-coordinator") {
       questionId = recordQuestion(record.program, record, line, false);
       queuedFor = "parent";

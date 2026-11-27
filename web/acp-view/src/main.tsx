@@ -24,7 +24,7 @@ import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
 import { attachedPaths, attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
 import { AgentEventLine, BriefRow, DeliveryRow, threadHref, useUserWords } from "./coordination-view";
-import { parseAgentCommand, parseDelivery, parseWorkerPrompt, useCoordination, workerState } from "./coordination";
+import { besideContext, parseAgentCommand, parseDelivery, parseWorkerPrompt, useCoordination, withoutContext, workerState } from "./coordination";
 import { makeFold } from "./fold";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
@@ -765,8 +765,8 @@ function TicketText({ text }: { text: string }) {
 function YouMessage({ text: written, pending, at, attachments: sent = [] }: { text: string; pending?: boolean; at?: number; attachments?: SentAttachment[] }) {
   // Files a message carries as @paths (queued, or sent into a thread) show as its attachments.
   const { text, attachments } = useMemo(() => {
-    const found = attachedPaths(written);
-    return found.attachments.length === 0 ? { text: written, attachments: sent } : { text: found.text, attachments: [...sent, ...found.attachments] };
+    const found = attachedPaths(withoutContext(written));
+    return found.attachments.length === 0 ? { text: found.text, attachments: sent } : { text: found.text, attachments: [...sent, ...found.attachments] };
   }, [written, sent]);
   const body = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(false);
@@ -838,10 +838,12 @@ const TurnView = memo(function TurnView({ turn, last, working, cwd, onReview, on
   const answerText = useMemo(() => turn.answer.map((item) => item.text).join("\n"), [turn.answer]);
   const { level } = useContext(DetailContext);
   // A turn a wake or message of the agents began that answers nothing (a coordinator's wake that
-  // needs nothing from you): not shown at Results, one quiet row at Steps (Peter, 2026-11-23).
+  // needs nothing from you): not shown at Results, one quiet row at Steps (Peter, 2026-11-23); in
+  // a coordinator's pane not at all, as it is woken for every message in its threads (2026-11-27).
+  const coordinator = useCoordination((state) => state.role === "coordinator");
   const delivery = turn.user ? parseDelivery(turn.user.text) : null;
   const quiet = delivery && delivery.from !== "user" && !answerText.trim() && !streaming;
-  if (quiet && level === "results") return null;
+  if (quiet && (level === "results" || coordinator)) return null;
   if (quiet && level === "steps") return <UserItem user={turn.user!} />;
   return (
     <TurnChangesContext.Provider value={turn.changes}>
@@ -1498,6 +1500,8 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
       return;
     }
     onSend();
+    // To a coordinator: the thread you have open beside it goes before your words.
+    const context = useCoordination.getState().role === "coordinator" ? threadBeside() : Promise.resolve("");
     const attached = attachments;
     setAttachments([]);
     setField("");
@@ -1508,14 +1512,14 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
     const save = (attachment: Attachment) => hostJson<{ path: string }>("/api/attachment", { name: attachment.name, data: attachment.data ?? "" }).then((value) => value.path);
     // The message with its attachments: images as images when the agent takes them, the rest as links.
     const withAttachments = async (text: string) => {
-      const blocks = (await blocksFor(text)).filter((block) => block.type !== "text" || block.text.trim());
+      const blocks = (await blocksFor(`${await context}${text}`)).filter((block) => block.type !== "text" || block.text.trim());
       if (attached.length === 0) return blocks;
       return [...blocks, ...await attachmentBlocks(attached, await session.promptCapabilities(), save)];
     };
     // A queued or inboxed message is text: its attachments go as @paths.
     const withPaths = async () => {
       const paths = await Promise.all(attached.map((attachment) => attachment.path ?? save(attachment)));
-      return [typed, ...paths.map((path) => `@${path}`)].filter(Boolean).join(" ");
+      return `${await context}${[typed, ...paths.map((path) => `@${path}`)].filter(Boolean).join(" ")}`;
     };
     const failed = () => setNotice("The attachments could not be saved for the agent.");
     const enqueue = () => withPaths().then((text) => hostJson("/api/queue", { text })).catch(() => setNotice("The message could not be queued."));
@@ -2303,6 +2307,22 @@ function useGitTurns(working: boolean, turnCount: number): Record<number, { from
     }
   }, [working]);
   return byTurn;
+}
+
+/** The thread a coordinator's pane has open beside it, as a line before what you write to it
+ *  (besideContext); nothing when none is, or outside Agents Next. */
+async function threadBeside(): Promise<string> {
+  const app = appHandler(APP_HANDLERS.beside);
+  if (!app) return "";
+  try {
+    const reply = await Promise.race([
+      Promise.resolve(app.postMessage({}) as Promise<{ task?: string; title?: string } | undefined>),
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 300)),
+    ]);
+    return reply?.task ? besideContext({ task: reply.task, title: reply.title }) : "";
+  } catch {
+    return "";
+  }
 }
 
 /** What a click on a chip does. In Agents Next: a file opens beside the pane (⌥ in the editor),

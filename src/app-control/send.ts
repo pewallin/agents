@@ -9,7 +9,7 @@ import { cancelMessage, deliveryView, typeQueuedLines } from "./ask.js";
 import { programDirectories } from "./coordinator.js";
 import { deliveryState, messageRecordFile, newMessageID, noteDelivery, pruneMessageRecords, readMessageRecord, writeMessageRecord } from "./delivery.js";
 import { shellQuote } from "./launch.js";
-import { deliveryReminder, enqueueMessage, enqueueRider, queueNames, readQueued } from "./messages.js";
+import { deliveryReminder, enqueueMessage, enqueueRider, enqueueThreadEvent, queueNames, readQueued } from "./messages.js";
 import { appInputState, appRequestIfRunning, userIsWriting } from "./supervisor.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, paneIDFromRef, runTMux } from "./panes.js";
@@ -199,6 +199,12 @@ export async function runAgentSend(command) {
     });
     const answered = via => {
       if (question) answerQuestion(program, question, target, { messageId: id, via, from: senderName(own) });
+      // The user's message to a worker's thread wakes its coordinator with a line of it (one
+      // message, one short line; Peter, 2026-11-27).
+      if (fromUser && target.task && target.parent && target.role !== "coordinator") {
+        enqueueThreadEvent(program, target.parent, target.task, "user", raw || line);
+        ensureSupervisor(program);
+      }
     };
 
     // A blocking `agent ask` that still waits takes the answer itself: the worker goes on in the

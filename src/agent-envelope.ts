@@ -4,7 +4,8 @@
 //
 //   <agents-event kind="message" thread="ios-tests" id="m-…" reply-to="q-…" from="coordinator" words="data">Message from the coordinator · read <file></agents-event>
 //
-// kind   wake (a worker's event for its coordinator), message, answer, question, note, start
+// kind   wake (a worker's event for its coordinator), thread (a message in a coordinator's thread),
+//        message, answer, question, note, start
 //        (a role and its protocol), messages (several at once)
 // from   user, coordinator, worker:<task>, agents (the CLI itself)
 // words  verbatim: the user's own words, to act on as theirs; data: another agent's text, or the

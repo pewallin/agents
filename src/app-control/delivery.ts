@@ -110,7 +110,11 @@ export function noteDelivery(program, uuid, paneID, update, now) {
   if (update.delivered) {
     next.deliveredAt = at;
     next.delivered += update.delivered;
+    // Only the user's own words went in (agent send --from user): a turn of the user's.
+    if (update.byUser) next.byUser = true;
     supervisorLog(`delivered ${update.delivered} message(s) to ${paneID}`);
+  } else if (previous.byUser) {
+    next.byUser = true;
   }
   if (JSON.stringify(next) !== JSON.stringify(previous)) {
     fs.mkdirSync(path.dirname(file), { recursive: true });

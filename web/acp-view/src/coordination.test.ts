@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeAgentEvent, messageFileText, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, threadNamed, workerInPane, workerState, workerTitle } from "./coordination";
+import { besideContext, describeAgentEvent, messageFileText, parseAgentCommand, parseDelivery, parseWorkerPrompt, shellWords, tasksIn, threadNamed, withoutContext, workerInPane, workerState, workerTitle } from "./coordination";
 
 describe("coordination lines", () => {
   it("reads a wake-up line", () => {
@@ -74,5 +74,14 @@ describe("worker titles", () => {
     expect(workerTitle(coordination, "nope")).toBe("nope");
     expect(threadNamed(coordination, "old")?.threadState).toBe("resolved");
     expect(threadNamed({ workers: [] }, "old")).toBeUndefined();
+  });
+});
+
+describe("the thread open beside a coordinator", () => {
+  it("goes before your words, and the view shows your words alone", () => {
+    const sent = besideContext({ task: "wi01-dts", title: "Build the DTS service" }) + "is this one done?";
+    expect(sent).toBe('<agents-context thread="wi01-dts">The user has this thread open beside you: Build the DTS service.</agents-context>\nis this one done?');
+    expect(withoutContext(sent)).toBe("is this one done?");
+    expect(withoutContext("plain words")).toBe("plain words");
   });
 });

@@ -652,6 +652,9 @@ export class SessionLogTap {
         ...(turn ? { ms: Date.now() - turn.startedAt, tools: turn.tools, edits: turn.edits, failed: turn.failed } : {}),
         ...(Object.keys(open.config).length > 0 ? { config: { ...open.config } } : {}),
         ...(open.how ? { how: open.how } : {}),
+        // The agent's usage as it last said it (ACP usage_update: tokens in context, the cost so
+        // far), so what each turn cost, a wake's against the user's, can be read back later.
+        ...(open.meta.usage ? { usage: open.meta.usage } : {}),
       });
       open.how = undefined;
       this.saveMeta(open);

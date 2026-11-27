@@ -589,8 +589,15 @@ program
   .command("usage")
   .description("Show normalized provider quota usage, or with --program the tokens a coordinator's program used")
   .option("--program <dir>", "A coordinator's program folder: tokens per thread and for the coordinator, from the sessions' transcripts")
+  .option("--turns", "With --program: the coordinator's turns, wakes against your own, per hour, from its session logs")
   .option("--json", "Output as JSON")
   .action(async (opts) => {
+    if (opts.program && opts.turns) {
+      const { coordinatorTurns, formatCoordinatorTurns } = await import("./program-usage.js");
+      const report = coordinatorTurns(resolve(opts.program));
+      console.log(opts.json || !process.stdout.isTTY ? JSON.stringify(report, null, 2) : formatCoordinatorTurns(report));
+      return;
+    }
     if (opts.program) {
       const { programUsage, formatProgramUsage } = await import("./program-usage.js");
       const usage = programUsage(resolve(opts.program));

@@ -3,7 +3,7 @@
 // version it speaks (data-acp-bridge on <html>), so a view and an app of different releases are
 // noticed in the pane's log instead of failing quietly. Bump BRIDGE_VERSION when a channel or its
 // message changes.
-export const BRIDGE_VERSION = 6;
+export const BRIDGE_VERSION = 7;
 
 /** The app's message handlers (window.webkit.messageHandlers.<name>.postMessage). */
 export const APP_HANDLERS = {
@@ -20,6 +20,9 @@ export const APP_HANDLERS = {
   threadReply: "agentsNextThreadReply",
   /** A thread beside the user closed as done or kept open (its coordinator proposed closing it). */
   threadAction: "agentsNextThreadAction",
+  /** The thread a coordinator's pane has open beside it (a reply: { task, title } or {}), named
+   *  with what the user writes to the coordinator. */
+  beside: "agentsNextBeside",
 } as const;
 export type AppHandler = (typeof APP_HANDLERS)[keyof typeof APP_HANDLERS];
 

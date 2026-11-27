@@ -480,3 +480,16 @@ the message's picture, never as the path (a queued message to any pane carries i
 the same way). What you send shows at once as waiting, until the thread's log has it (a resting
 or busy agent takes it later). `agent send --to <pane>` to a pane that shows a thread beside the
 user (its `@agents_view` or `@agents_web_page` is a thread page) sends to that thread.
+
+A coordinator woken for every message in its threads (2026-11-27): the user's message to a
+worker's thread (`agent send --from user`) and the worker's answer to the user (the turn the
+user's words began, `byUser` in its delivery record) each queue one `kind="thread"` line for its
+coordinator, with the first 200 characters in the line; lines that come while it works go in as
+one. Its page shows no row for a wake it ends without a reply. What the user writes to a
+coordinator starts with `<agents-context thread="<task>">…</agents-context>` while a thread of its
+is open beside it (`agentsNextBeside`, bridge version 7); the bubble leaves it out. What this
+costs: `agents usage --program <dir> --turns` reads the coordinator's session logs (each turnEnd
+now carries the agent's last usage_update) and splits its turns into wakes and the user's own, per
+hour, with tokens from Claude Code's transcripts, credits from Kiro's per-turn figures, and cost
+where the agent reports it. A coordinator in its terminal (no ACP view) has no session log and is
+not counted.

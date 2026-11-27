@@ -7,7 +7,7 @@ import { requestID, sendRequest, socketPath, tokenPath } from "./app-socket.js";
 import { settleStaleClaims, typeQueuedLines } from "./ask.js";
 import { writeStatusFile, writeTaskReport } from "./briefs.js";
 import { deliveryFile, deliveryHold, effectiveStatus, noteDelivery, paneContent, screenChoiceText, screenState, updateMessageRecord } from "./delivery.js";
-import { RIDER_SUFFIX, deliveryReminder, enqueueMessage, notBegunLine, noteForCoordinator, noteLine, queueNames, readQueued, turnDriver, waitsLine, wakeLine, wakeSummary } from "./messages.js";
+import { RIDER_SUFFIX, deliveryReminder, enqueueMessage, enqueueThreadEvent, notBegunLine, queueNames, readQueued, turnDriver, waitsLine, wakeLine, wakeSummary } from "./messages.js";
 import { fail, usage } from "./output.js";
 import { localPaneRef, runTMux, setPaneOption } from "./panes.js";
 import { sleep } from "./placement.js";
@@ -78,6 +78,13 @@ export function notBegunMs() {
 export function deliveredAt(program, uuid) {
   if (!uuid) return 0;
   return Date.parse(readJSON(deliveryFile(program, uuid), {}).deliveredAt || "") || 0;
+}
+
+// When the user's own words last went in alone (a thread's reply field), as the last delivery.
+export function userDeliveredAt(program, uuid) {
+  if (!uuid) return 0;
+  const record = readJSON(deliveryFile(program, uuid), {});
+  return record.byUser ? Date.parse(record.deliveredAt || "") || 0 : 0;
 }
 
 // When the user last sent a prompt from a pane's ACP view, as its host noted it.
@@ -339,8 +346,9 @@ export async function runSupervisor(command) {
             const preview = statuses.get(record.paneID)?.responsePreview;
             // A turn the user drove in the pane: they saw it end, and the coordinator gets a note.
             if (await turnDriver(program, record, report) === "user") {
-              noteForCoordinator(program, record.parent, record.task, noteLine(program, record.task, "stopped", preview, { done }));
-              supervisorLog(`${record.task} stopped after a turn the user drove; noted for its coordinator`);
+              // The worker's answer to the user, as one line of its thread (Peter, 2026-11-27).
+              enqueueThreadEvent(program, record.parent, record.task, "worker", preview);
+              supervisorLog(`${record.task} answered the user; its coordinator gets a line of it`);
             } else {
               enqueueMessage(program, record.parent, wakeLine(program, record.task, "stopped", preview, undefined, { done }), wakeSummary(record.task, "stopped"), undefined, { event: { kind: "wake", thread: record.task } });
               supervisorLog(`${record.task} stopped without a report`);
@@ -449,11 +457,14 @@ export async function runSupervisor(command) {
         noteDelivery(program, uuid, record.paneID, { queued: messages.length + 1, waiting: "the coordinator starts a fresh session" }, now);
         continue;
       }
+      // Whether only the user's own words go in (a thread's reply field): the turn they start is
+      // the user's, and the worker's answer goes to its coordinator as a line of the thread.
+      const byUser = messages.every(name => readQueued(path.join(dir, name))?.event?.from === "user");
       // Claimed one by one: a promote typing them in itself may have taken some.
       if (!typeQueuedLines(program, uuid, record, messages, deliveryReminder(record))) continue;
       pane.deliveredAt = now;
       pending -= messages.length;
-      noteDelivery(program, uuid, record.paneID, { queued: 0, delivered: messages.length }, now);
+      noteDelivery(program, uuid, record.paneID, { queued: 0, delivered: messages.length, byUser }, now);
     }
 
     const offered = followOffers(program, records);
