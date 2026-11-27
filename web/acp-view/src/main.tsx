@@ -2060,6 +2060,13 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   const items = useSession((s) => s.items);
   const toolCalls = useSession((s) => s.toolCalls);
   const title = useSession((s) => s.title);
+  // A session the agents CLI began with a line of its own (a coordinator's start, a wake) is not
+  // titled by that line (Peter, 2026-11-27: the header read "<agents-event kind=…"): a coordinator
+  // goes by its program's name, anything else by what the line says.
+  const programName = useCoordination((state) => state.role === "coordinator" ? state.programName : undefined);
+  const shownTitle = title && title.trimStart().startsWith("<agents-event")
+    ? programName ?? parseDelivery(title)?.summary ?? undefined
+    : title;
   const permissions = useSession((s) => s.permissions);
   const state = useSession((s) => attention(s));
   // A turn that waits on a question is still under way.
@@ -2219,8 +2226,8 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   useEffect(() => {
     // A thread beside you keeps the title its log gave it ("Threads › <title>").
     if (MIRROR) return;
-    document.title = title ? `${title} – ${info.agent.name}` : info.agent.name;
-  }, [title, info.agent.name]);
+    document.title = shownTitle ? `${shownTitle} – ${info.agent.name}` : info.agent.name;
+  }, [shownTitle, info.agent.name]);
   // Follow the conversation while it is read at the bottom; stay put while reading higher up.
   useEffect(() => {
     const element = scroller.current;

@@ -493,3 +493,12 @@ now carries the agent's last usage_update) and splits its turns into wakes and t
 hour, with tokens from Claude Code's transcripts, credits from Kiro's per-turn figures, and cost
 where the agent reports it. A coordinator in its terminal (no ACP view) has no session log and is
 not counted.
+
+A coordinator reopened (2026-11-27, Peter: "the coordinator thread must be persistent, closable
+and reopenable like a worker's"): `agent reopen --coordinator --program <dir> [--pane <ref>]`
+resumes the program's latest coordinator session whose transcript is on disk in a new pane and
+gives it its role back (`agent promote --restore`): no start message, so no spent turn, no
+introduction and no files opened again. The app's Start on a program in Conversations does this
+when the chosen agent is the one that coordinated last. A view never takes an `<agents-event>`
+line for its title: a coordinator's page is titled by its program, and the app never shows such a
+line as a pane's title.

@@ -336,8 +336,8 @@ export function parseCommand(argv) {
   }
 
   if (command === "agent" && subcommand === "reopen") {
-    const { positional, params } = parseOptions(rest, new Set(["dry-run"]));
-    if (positional.length === 0) fail(64, "usage", "agent reopen requires a task name, then why if you like: agent reopen <task> \"<why>\".");
+    const { positional, params } = parseOptions(rest, new Set(["dry-run", "coordinator"]));
+    if (positional.length === 0 && !params.coordinator) fail(64, "usage", "agent reopen requires a task name, then why if you like: agent reopen <task> \"<why>\"; or --coordinator --program <dir>.");
     return { kind: "agent-reopen", task: positional[0], why: positional.slice(1).join(" "), params };
   }
 

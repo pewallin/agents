@@ -52,6 +52,7 @@ export function usage() {
     "  agents app agent resolve <task>... --propose <why> --json   (proposes closing a done thread; the user closes it)",
     "  agents app agent remove <task>... [--program <dir>] | --program <dir> --json   (deletes threads without a pane, or without tasks a whole program nobody leads; agents' own sessions stay)",
     "  agents app agent reopen <task> [<why>] [--title <title>] [--program <dir>] [--pane <pane-ref>] [--dry-run] --json   (a done thread says it was reopened and why; without a pane: resume its latest session, else respawn it, else read it)",
+    "  agents app agent reopen --coordinator --program <dir> [--pane <pane-ref>] --json   (the program's coordinator as the same conversation: its latest session resumed beside the pane, its role given back without a start message)",
     "  agents app agent name <name> [--program <dir>] --json   (names the coordinator's program: 2-4 words from the user's goal)",
     "  agents app agent title <task> <title> [--program <dir>] --json   (names a thread in the user's words: verb first, 3-6 words)",
     "  agents app feedback <what happened> --command <command or tool> [--suggestion <text>] --json   (also agents feedback; only while Agents Next's development setting collects feedback on its tools)",

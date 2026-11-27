@@ -6,16 +6,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { requestID } from "./app-socket.js";
 import { threadTitle, writeStatusFile, writeTaskReport } from "./briefs.js";
-import { agentNameFromLaunchCommand, normalizeAgentName } from "./launch.js";
+import { agentNameFromLaunchCommand, normalizeAgentName, shellQuote } from "./launch.js";
 import { fail } from "./output.js";
 import { localPaneRef, resolveLocalSourcePane, runTMuxRequired, setPaneOption } from "./panes.js";
 import { coordinationPaneRecords, coordinatorLeads, notifyApp, ownCoordinationRecord, programName, readJSON, setProgramName, taskPaths } from "./program.js";
-import { runAgentRespawn } from "./promote.js";
+import { runAgentPromote, runAgentRespawn } from "./promote.js";
 import { closeOpenQuestions, closeUserQuestions } from "./questions.js";
 import { closedReportState, closerOf, recordReopen } from "./report.js";
 import { runAgentSpawn } from "./spawn.js";
 import { isWorkerRecord } from "./spawn-support.js";
-import { isFinished, markResolved, markUnresolved, proposeClose, readSessionLines, removeProgram, removeThread, reopenStep, resumeTarget, sessionsFile, threadRows, titleWarning, transcriptLookup, updateTaskMeta } from "./threads.js";
+import { coordinatorsFile, isFinished, markResolved, markUnresolved, proposeClose, readSessionLines, removeProgram, removeThread, reopenStep, resumeTarget, sessionsFile, threadRows, titleWarning, transcriptLookup, updateTaskMeta } from "./threads.js";
 import { agentResumeInvocation } from "../resume.js";
 import { oneLine } from "./processes.js";
 
@@ -205,6 +205,7 @@ function reopenParent(program, params, records) {
 // thread open again.
 export async function runAgentReopen(command, currentSocketPath) {
   const params = command.params;
+  if (params.coordinator) return runAgentReopenCoordinator(command, currentSocketPath);
   const { program, own } = commandProgram(params, "agent reopen");
   const files = knownTask(program, command.task);
   // --title names the thread as it opens again.
@@ -264,4 +265,33 @@ export async function runAgentReopen(command, currentSocketPath) {
     },
   }, currentSocketPath);
   return { ...response, result: { ...response.result, step: "resume", agent: session.agent, session: session.session } };
+}
+
+// Reopens a program's coordinator as the same conversation (Peter, 2026-11-27: "the coordinator
+// thread must be persistent and closable and reopenable like a worker's"): its latest session
+// whose transcript is on disk, resumed in a new pane beside --pane, and given its role back
+// without a start message. A live coordinator is shown instead.
+export async function runAgentReopenCoordinator(command, currentSocketPath) {
+  const params = command.params;
+  if (!params.program || params.program === true) fail(64, "usage", "agent reopen --coordinator needs --program <dir>.");
+  const program = path.resolve(String(params.program));
+  const records = coordinationPaneRecords();
+  const live = records.find(record => record.program === program && record.role === "coordinator" && !record.task && !record.dead);
+  if (live) return { id: requestID("cli"), ok: true, result: { program, step: "pane", pane: localPaneRef(live.paneID) } };
+  const transcriptOf = transcriptLookup();
+  const sessions = readSessionLines(coordinatorsFile(program)).reverse()
+    .map(session => ({ ...session, transcript: transcriptOf(session.agent, session.session, session.cwd) }));
+  const session = sessions.find(candidate => candidate.transcript);
+  if (!session) fail(2, "noCoordinatorSession", `${program} has no coordinator session to resume; start a new coordinator instead.`, { sessions: sessions.length });
+  if (params["dry-run"]) return { id: requestID("cli"), ok: true, result: { program, step: "resume", agent: session.agent, session: session.session, dryRun: true } };
+  const invocation = agentResumeInvocation(session.agent, resumeTarget(session), {});
+  const spawned = await runAgentSpawn({
+    prompt: "",
+    params: { ...params, "no-parent": true, "launch-command": invocation.argv.map(shellQuote).join(" "), cwd: session.cwd },
+    respawn: { cwd: session.cwd, resume: { argv: invocation.argv, agent: normalizeAgentName(session.agent) } },
+  }, currentSocketPath);
+  const newPane = spawned.result?.newPane;
+  if (!newPane) return spawned;
+  const promoted = await runAgentPromote({ params: { pane: newPane, program, restore: true } });
+  return { id: requestID("cli"), ok: true, result: { program, step: "resume", pane: newPane, agent: session.agent, session: session.session, promoted: promoted.result } };
 }

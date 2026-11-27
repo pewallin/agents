@@ -84,7 +84,11 @@ export async function runAgentPromote(command) {
   const carryOn = notes.coordinatedBefore && !tookOver?.memoryRequested
     ? ` This work was coordinated before you, by an agent that may have run on another harness; it is yours now. Read ${notes.files.join(", ")} and carry on from there, as that coordinator would: the user's goals, decisions and preferences there hold for you too.${adopted.length ? ` Its workers report to you now: ${adopted.join(", ")}.` : ""} \`${shellQuote(cli)} agent status --all --json\` lists the tasks. Do not rebuild that record: no searching earlier sessions, transcripts or git history, no reading every report or re-checking every link.`
     : "";
-  if (params.tell) {
+  // A coordinator's own session resumed in a new pane (agent reopen --coordinator) is the same
+  // conversation: it gets its role back, and no start message, which would cost a turn and have
+  // it introduce itself and open its files again (Peter, 2026-11-27).
+  const restore = Boolean(params.restore);
+  if (params.tell && !restore) {
     const memory = tookOver?.memoryRequested
       ? ` The coordinator before you writes ${tookOver.memory} and tells you when it is there; wait for that, read it, and do not write it yourself until then.`
       : "";
@@ -102,7 +106,7 @@ export async function runAgentPromote(command) {
   // The user who made a running agent coordinator is about to talk to it: the line goes in now
   // if the agent waits at its prompt, not a supervisor tick or two later. An agent that has just
   // started, maybe in place of another, gets it from the supervisor once its screen settles.
-  const deliveredNow = params.tell && !fresh ? await deliverQueuedNow(program, uuid, record) : undefined;
+  const deliveredNow = params.tell && !fresh && !restore ? await deliverQueuedNow(program, uuid, record) : undefined;
   if (params.tell || tookOver || adopted.length) ensureSupervisor(program);
   const next = tookOver?.memoryRequested
     ? `The coordinator before you writes ${tookOver.memory} now and tells you with an <agents-event> line when it is there. Wait for that line and read the file before you act; do not write ${tookOver.memory} yourself until then.`
@@ -126,7 +130,8 @@ export async function runAgentPromote(command) {
       adopted: adopted.length ? adopted : undefined,
       background,
       next: [next, handover].filter(Boolean).join(" ") || undefined,
-      told: params.tell ? true : undefined,
+      told: params.tell && !restore ? true : undefined,
+      restored: restore || undefined,
       delivered: deliveredNow,
       // The agent that ran this reads the protocol here; one told through its prompt reads the file.
       protocol: params.tell ? undefined : protocolText(protocol, program, cli),
