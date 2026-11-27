@@ -201,10 +201,23 @@ export async function runAgentSpawn(command, currentSocketPath) {
       await requestAppControl(currentSocketPath, token, "control.list", { context: "focused-pane" }, "cli"),
       "controls list"
     );
-    const controlID = placement === "tab" ? "workspace.create-local-tab" : "workspace.split-active-pane";
-    const invokeParams = placement === "tab"
-      ? { id: controlID, pane: placementPane }
-      : { id: controlID, pane: sourcePane, axis };
+    // A thread's tab goes beside its coordinator, added last and not selected, and a spawn never
+    // splits (Projects and Threads, R3 and step 0): where the app's create-local-tab takes
+    // `beside` and `background`. An older app places it as before.
+    const besideTab = Boolean(task) && requestedPlacement === "auto" && Boolean(parentRecord)
+      && controlHasArgument(descriptors, "workspace.create-local-tab", "beside")
+      && controlHasArgument(descriptors, "workspace.create-local-tab", "background");
+    const controlID = besideTab || placement === "tab" ? "workspace.create-local-tab" : "workspace.split-active-pane";
+    const invokeParams = besideTab
+      ? { id: controlID, pane: localPaneRef(parentRecord.paneID), beside: true, background: true }
+      : placement === "tab"
+        ? { id: controlID, pane: placementPane }
+        : { id: controlID, pane: sourcePane, axis };
+    if (besideTab) {
+      planned.placement = "beside";
+      delete planned.placementPane;
+      delete planned.axis;
+    }
     // An agent with an ACP view: the app marks its pane when Settings › Agents › Open agents in
     // says ACP View, and the pane shows the view from the start. A Codex shares its session
     // live with the view; another agent starts in the view, its brief the host's first prompt,
