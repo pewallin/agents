@@ -703,9 +703,9 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
   );
 }
 
-/** After a turn: a check mark (drawn once, for a turn seen live), when it ended, what it changed,
- *  and Review, Commit and Undo. Commit and Undo ask the agent; the view runs no git. */
-function Receipt({ turn, cwd, onReview, onSend }: { turn: Turn; cwd: string; onReview: () => void; onSend: (text: string) => void }) {
+/** After a turn: a check mark (drawn once, for a turn seen live), when it ended and what it
+ *  changed (Peter, 2026-11-27: no Review, Commit and Undo buttons; a file's counts open its changes). */
+function Receipt({ turn, cwd }: { turn: Turn; cwd: string }) {
   const changes = turn.changes;
   const added = changes.reduce((sum, change) => sum + change.added, 0);
   const removed = changes.reduce((sum, change) => sum + change.removed, 0);
@@ -723,11 +723,6 @@ function Receipt({ turn, cwd, onReview, onSend }: { turn: Turn; cwd: string; onR
           <span className="files">
             {changes.slice(0, 4).map((change) => <Chip key={change.path} target={fileTarget(change.path, shortPath(change.path, cwd))} />)}
             {changes.length > 4 && <span className="more">+{changes.length - 4}</span>}
-          </span>
-          <span className="receipt-acts">
-            <button className="pbtn" type="button" onClick={onReview}>Review</button>
-            <button className="pbtn" type="button" onClick={() => onSend("Commit the changes you made in this turn, with a message that says what they do.")}>Commit</button>
-            <button className="pbtn" type="button" onClick={() => onSend("Undo the changes you made in this turn.")}>Undo</button>
           </span>
         </>
       )}
@@ -832,7 +827,7 @@ function SentMessage({ user }: { user: NonNullable<Turn["user"]> }) {
 }
 
 /** One turn; drawn again only when its props change (a streamed chunk changes the last turn). */
-const TurnView = memo(function TurnView({ turn, last, working, cwd, onReview, onSend }: { turn: Turn; last: boolean; working: boolean; cwd: string; onReview: (turn: Turn) => void; onSend: (text: string) => void }) {
+const TurnView = memo(function TurnView({ turn, last, working, cwd }: { turn: Turn; last: boolean; working: boolean; cwd: string }) {
   const streaming = last && working;
   const stopped = useSession((s) => s.stoppedTurns?.includes(turn.id) ?? false);
   const answerText = useMemo(() => turn.answer.map((item) => item.text).join("\n"), [turn.answer]);
@@ -865,7 +860,7 @@ const TurnView = memo(function TurnView({ turn, last, working, cwd, onReview, on
         </div>
       )}
       {!streaming && answerText && <ResultStrip answer={answerText} changes={turn.changes} version={String(turn.endedAt ?? "")} />}
-      {!streaming && (turn.answer.length > 0 || turn.changes.length > 0) && <Receipt turn={turn} cwd={cwd} onReview={() => onReview(turn)} onSend={onSend} />}
+      {!streaming && (turn.answer.length > 0 || turn.changes.length > 0) && <Receipt turn={turn} cwd={cwd} />}
     </TurnChangesContext.Provider>
   );
 });
@@ -2178,11 +2173,6 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   }), [level]);
   const openReviewRef = useRef(openReview);
   openReviewRef.current = openReview;
-  // The same functions from one render to the next, so a turn that did not change is not drawn
-  // again; they act on the session as it is when they run.
-  const workingRef = useRef(working);
-  workingRef.current = working;
-  const reviewTurn = useCallback((turn: Turn) => void openReviewRef.current(turn.changes), []);
   // /changes: one review of every file the conversation changed.
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
@@ -2218,10 +2208,6 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
     const element = scroller.current;
     if (element) element.scrollTop = element.scrollHeight;
   }, []);
-  const sendFromTurn = useCallback((text: string) => {
-    toEnd();
-    void (workingRef.current ? session.steer : session.prompt)([{ type: "text", text }]);
-  }, [session, toEnd]);
 
   useEffect(() => {
     // A thread beside you keeps the title its log gave it ("Threads › <title>").
@@ -2253,8 +2239,7 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
           <div className={arrives ? "col arrive" : "col"}>
             {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
-              <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working && index === turns.length - 1} cwd={info.cwd}
-                onReview={reviewTurn} onSend={sendFromTurn} />
+              <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working && index === turns.length - 1} cwd={info.cwd} />
             ))}
             {working && permissions.length === 0 && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
             {permissions.map((request, index) => (

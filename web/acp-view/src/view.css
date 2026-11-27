@@ -670,8 +670,7 @@ th, td { overflow-wrap: break-word; }
 .receipt .delta { font-variant-numeric: tabular-nums; }
 .receipt .files { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .receipt .more { color: var(--dim); }
-/* Review, Commit and Undo go together, at the end of the line or whole on the next. */
-.receipt .receipt-acts { display: inline-flex; gap: 10px; margin-left: auto; flex: none; }
+/* A quiet button in a row of the conversation (a proposed close, Go to pane). */
 .pbtn { all: unset; cursor: pointer; display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: var(--radius-sm); background: var(--tint); color: var(--fg); font-size: calc(var(--fs) - 1.5px); }
 .pbtn:hover { background: var(--tint2); }
 @media (prefers-reduced-motion: reduce) { .receipt.draw .done path { animation: none; } }
