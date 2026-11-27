@@ -22,7 +22,7 @@ import { changeFor, Chip, ChipHostContext, fileTarget, NamedChip, PeekLayer, Pla
 import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
-import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
+import { attachedPaths, attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
 import { AgentEventLine, BriefRow, DeliveryRow, threadHref, useUserWords } from "./coordination-view";
 import { parseAgentCommand, parseDelivery, parseWorkerPrompt, useCoordination, workerState } from "./coordination";
 import { makeFold } from "./fold";
@@ -762,7 +762,12 @@ function TicketText({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-function YouMessage({ text, pending, at, attachments = [] }: { text: string; pending?: boolean; at?: number; attachments?: SentAttachment[] }) {
+function YouMessage({ text: written, pending, at, attachments: sent = [] }: { text: string; pending?: boolean; at?: number; attachments?: SentAttachment[] }) {
+  // Files a message carries as @paths (queued, or sent into a thread) show as its attachments.
+  const { text, attachments } = useMemo(() => {
+    const found = attachedPaths(written);
+    return found.attachments.length === 0 ? { text: written, attachments: sent } : { text: found.text, attachments: [...sent, ...found.attachments] };
+  }, [written, sent]);
   const body = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(false);
   const [open, setOpen] = useState(false);
@@ -1464,11 +1469,31 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
     // into the turn where the agent can take that (S3). The delivery shows under the field.
     if (MIRROR && "reply" in session) {
       onSend();
+      // Its attachments go with it as @paths, saved where the agent can read them.
+      const attached = attachments;
+      setAttachments([]);
       setField("");
       setNotice(null);
-      void (session as MirrorSession).reply(typed, how === "queue").then((reply) => {
-        if (!reply.ok) setNotice(how === "queue" ? `${agentName} cannot take a message during its turn.` : reply.message ?? "The message did not go.");
-        else if (reply.state === "queued" && reply.message) setNotice(`Waiting for ${agentName}'s turn to end`);
+      const saved = Promise.all(attached.map((attachment) => attachment.path
+        ?? hostJson<{ path: string }>("/api/attachment", { name: attachment.name, data: attachment.data ?? "" }).then((value) => value.path)));
+      let message = "";
+      void saved.then((paths) => {
+        message = [typed, ...paths.map((path) => `@${path}`)].filter(Boolean).join(" ");
+        return (session as MirrorSession).reply(message, how === "queue");
+      }, () => {
+        setAttachments(attached);
+        return { ok: false, message: "The attachments could not be saved for the agent." } as MirrorReply;
+      }).then((reply) => {
+        if (!reply.ok) {
+          setNotice(how === "queue" ? `${agentName} cannot take a message during its turn.` : reply.message ?? "The message did not go.");
+          // What did not go stays in the field to send again.
+          setAttachments((current) => current.length ? current : attached);
+          if (!input.current?.value) setField(typed);
+          return;
+        }
+        if (reply.state === "queued" && reply.message) setNotice(`Waiting for ${agentName}'s turn to end`);
+        const state = useMirrorThread.getState();
+        useMirrorThread.setState({ sent: [...state.sent, { id: Date.now() + state.sent.length, text: message, at: Date.now(), shownWith: userMessagesIn(useSession.getState().items) + state.sent.length + 1 }] });
       });
       return;
     }
@@ -2224,6 +2249,7 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
             {permissions.map((request, index) => (
               <Ask key={request.id} request={request} agentName={info.agent.name} session={session} focused={index === 0} cwd={info.cwd} />
             ))}
+            <SentToThread />
             <TerminalPermissionRow asked={permissions.length > 0} />
             <ProposedCloseCard />
           </div>
@@ -2595,7 +2621,33 @@ const MIRROR: { task?: string; program?: string; reply?: boolean } | null = (() 
 })();
 
 /** What a thread beside you says beside its conversation: a close its coordinator proposed. */
-const useMirrorThread = create<{ proposedClose: { why: string } | null; title?: string }>(() => ({ proposedClose: null }));
+const useMirrorThread = create<{
+  proposedClose: { why: string } | null;
+  title?: string;
+  /** What you sent that the thread's log does not show yet (it reaches a resting or busy agent
+   *  later), with how many of your messages the log shows once it is there. */
+  sent: Array<{ id: number; text: string; at: number; shownWith: number }>;
+}>(() => ({ proposedClose: null, sent: [] }));
+
+/** Your messages in the thread's log: lines in an envelope from the user. */
+function userMessagesIn(items: SessionState["items"]): number {
+  return items.reduce((count, item) => count + (item.type === "user" && parseDelivery(item.text)?.from === "user" ? 1 : 0), 0);
+}
+
+/** Your messages sent into a thread beside you that its log does not show yet: shown at once, as
+ *  waiting, so nothing you wrote seems lost while a resting agent wakes (Peter, 2026-11-27). */
+function SentToThread() {
+  const sent = useMirrorThread((state) => state.sent);
+  const items = useSession((state) => state.items);
+  const shown = useMemo(() => userMessagesIn(items), [items]);
+  useEffect(() => {
+    // The log shows one more of yours for each that arrived.
+    const waiting = sent.filter((item) => shown < item.shownWith);
+    if (waiting.length !== sent.length) useMirrorThread.setState({ sent: waiting });
+  }, [sent, shown]);
+  if (!MIRROR || sent.length === 0) return null;
+  return <>{sent.map((item) => <YouMessage key={item.id} text={item.text} pending at={item.at} />)}</>;
+}
 
 /** Where the page's fold is kept: per thread beside you, else per pane (its host's storage). */
 const usePageFold = makeFold(`agents.fold:${MIRROR ? `thread:${MIRROR.program ?? ""}:${MIRROR.task ?? ""}` : "pane"}`);

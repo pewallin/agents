@@ -227,7 +227,7 @@ describe("attachments", () => {
     const path = saveAttachment("../../screen shot?.png", Buffer.from("png"));
     try {
       expect(path.startsWith(`${realpathSync(process.env.AGENTS_HOME!)}/attachments/`)).toBe(true);
-      expect(path.endsWith("/screen shot_.png")).toBe(true);
+      expect(path.endsWith("/screen_shot_.png")).toBe(true);
       expect(readFileSync(path, "utf8")).toBe("png");
     } finally {
       rmSync(join(path, ".."), { recursive: true, force: true });

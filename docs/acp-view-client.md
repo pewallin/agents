@@ -472,3 +472,11 @@ folds the line (to its link) and the prompt (to a one-line field with its send b
 controls row); it is kept per pane, in the host's storage, and a pane that starts smaller than
 460 × 380 starts folded (fold.ts). Steps or Results is in the prompt of a thread beside you too;
 its tab header no longer has it (bridge version 6: `__agentsNextSetDetailLevel` is gone).
+
+Pictures and files in a thread beside you (2026-11-27, Peter's report): what you paste or drop into
+its reply field is saved by the host (`/api/attachment`, names without spaces) and goes with your
+words as `@<path>`; a message that names an image or a saved attachment as `@<path>` shows it as
+the message's picture, never as the path (a queued message to any pane carries its attachments
+the same way). What you send shows at once as waiting, until the thread's log has it (a resting
+or busy agent takes it later). `agent send --to <pane>` to a pane that shows a thread beside the
+user (its `@agents_view` or `@agents_web_page` is a thread page) sends to that thread.

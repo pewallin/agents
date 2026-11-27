@@ -501,7 +501,8 @@ function decodeEntities(text: string): string {
  *  directory, which macOS empties of files unread for a few days: the conversation names the file
  *  as long as the session lasts, and the view shows it from there. */
 export function saveAttachment(name: string, data: Buffer): string {
-  const safe = basename(name).replace(/[^\w.\- ]+/g, "_").replace(/^\.+/, "").slice(0, 120) || "pasted";
+  // No spaces: the path goes into a message as `@<path>`, which ends at the first space.
+  const safe = basename(name).replace(/[^\w.\-]+/g, "_").replace(/^\.+/, "").slice(0, 120) || "pasted";
   const root = join(getAgentsHome(), "attachments");
   mkdirSync(root, { recursive: true });
   const folder = mkdtempSync(join(root, "a-"));

@@ -3,6 +3,7 @@
 // its own path when the drop says it (a file:// URI), else a copy the pane's host saves where the
 // agent can read it.
 import type { ContentBlock } from "@agentclientprotocol/sdk";
+import type { SentAttachment } from "./session-state";
 
 export interface Attachment {
   id: string;
@@ -88,4 +89,20 @@ export async function attachmentBlocks(
     blocks.push({ type: "resource_link", uri: fileURI(path), name: attachment.name, ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}) });
   }
   return blocks;
+}
+
+const IMAGE_PATH = /\.(png|jpe?g|gif|webp|heic|tiff?|bmp|svg)$/i;
+
+/** The files a message names as `@<path>` (what a queued message, a message into a thread beside
+ *  you or a worker's inbox carries instead of its attachments): shown under the message as its
+ *  attachments, not as text. Only an image, or a file the view saved (an attachments folder). */
+export function attachedPaths(text: string): { text: string; attachments: SentAttachment[] } {
+  const attachments: SentAttachment[] = [];
+  const rest = text.replace(/(^|\s)@(\/\S+)(?=\s|$)/g, (whole, before: string, path: string) => {
+    const image = IMAGE_PATH.test(path);
+    if (!image && !/\/attachments\/a-[^/]+\/[^/]+$/.test(path)) return whole;
+    attachments.push({ kind: image ? "image" : "file", name: path.split("/").pop() ?? path, path });
+    return before;
+  });
+  return attachments.length === 0 ? { text, attachments } : { text: rest.replace(/[ \t]+\n/g, "\n").trim(), attachments };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachmentBlocks, attachmentsFromURIs, readAttachment } from "./attachments";
+import { attachedPaths, attachmentBlocks, attachmentsFromURIs, readAttachment } from "./attachments";
 
 describe("attachments", () => {
   it("reads a pasted image with a picture of it", async () => {
@@ -36,5 +36,18 @@ describe("attachments", () => {
     expect(await attachmentBlocks([note], { image: true, embeddedContext: true }, async () => "/never")).toEqual([
       { type: "resource", resource: { uri: "pasted:secret.txt", mimeType: "text/plain", text: "The word is PELICAN.\n" } },
     ]);
+  });
+});
+
+describe("files a message names as @paths", () => {
+  it("shows a pasted image as the message's attachment, not as text", () => {
+    expect(attachedPaths("menat till tråden @/Users/p/.agents/agents-app/attachments/a-x1/Pasted_image_12_14_01.png")).toEqual({
+      text: "menat till tråden",
+      attachments: [{ kind: "image", name: "Pasted_image_12_14_01.png", path: "/Users/p/.agents/agents-app/attachments/a-x1/Pasted_image_12_14_01.png" }],
+    });
+  });
+
+  it("leaves other @words and paths as they are", () => {
+    expect(attachedPaths("ask @peter about /tmp/notes.md and @/tmp/notes.md").attachments).toEqual([]);
   });
 });
