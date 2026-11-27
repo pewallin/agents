@@ -11,6 +11,7 @@ import { appendThreadTurn, markTurnNotify, notifyOptionValue, pendingTurnNotify,
 import { slug, taskPaths, uniqueTaskName } from "./program.js";
 import { quietThreadLine, quietThreadMs, threadActivityAt, wakeForQuietThreads } from "./quiet-threads.js";
 import { proposeClose, titleSeed } from "./threads.js";
+import { resolveOutcome } from "./thread-commands.js";
 
 let program: string;
 beforeEach(() => { program = fs.mkdtempSync(path.join(os.tmpdir(), "coordinator-behaviour-")); });
@@ -137,6 +138,16 @@ describe("quiet threads get a close proposal (P8)", () => {
     newTask("x");
     proposeClose(program, "x", "Ingen rörelse på två dagar", "2026-11-27T12:00:00.000Z", "dropped");
     expect(JSON.parse(fs.readFileSync(taskPaths(program, "x").meta, "utf8")).proposedClose).toEqual({ why: "Ingen rörelse på två dagar", at: "2026-11-27T12:00:00.000Z", as: "dropped" });
+  });
+
+  it("close as the proposal says when the user accepts it on the close card", () => {
+    newTask("x", {}, { state: "progress" });
+    proposeClose(program, "x", "Inte längre önskad", "2026-11-27T12:00:00.000Z", "dropped");
+    // The card's Close is a plain agent resolve: an unfinished thread proposed for dropping drops.
+    expect(resolveOutcome(program, "x", {}, "user")).toEqual({ kind: "dropped", why: "Inte längre önskad", who: "user" });
+    newTask("y", {}, { state: "done", history: [{ at: "2026-11-27T11:00:00.000Z", state: "done", line: "PR merged" }] });
+    proposeClose(program, "y", "Mergad", "2026-11-27T12:00:00.000Z");
+    expect(resolveOutcome(program, "y", {}, "user")).toEqual({ kind: "done", who: "user" });
   });
 });
 

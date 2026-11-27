@@ -12,7 +12,7 @@ import { shellQuote } from "./launch.js";
 import { deliveryReminder, enqueueMessage, enqueueRider, enqueueThreadEvent, queueNames, readQueued } from "./messages.js";
 import { appInputState, appRequestIfRunning, userIsWriting } from "./supervisor.js";
 import { fail, usage } from "./output.js";
-import { localPaneRef, paneIDFromRef, runTMux } from "./panes.js";
+import { localPaneRef, paneIDFromRef } from "./panes.js";
 import { oneLine, paneRunsAgent } from "./processes.js";
 import { coordinationPaneRecords, ensurePaneUUID, ownCoordinationRecord, readJSON, slug, taskPaths, writeFileAtomic } from "./program.js";
 
@@ -70,13 +70,6 @@ export async function runAgentSend(command) {
   } else if (isPaneRefText(params.to)) {
     target = records.find(record => record.paneID === paneIDFromRef(params.to));
     if (!target) fail(2, "paneUnavailable", `Could not find pane '${params.to}' in local tmux.`);
-    // A pane that shows a thread beside the user (Agents Next's page of a worker's thread) is
-    // that thread: the user calls it by the pane it is in.
-    const shown = !target.task ? threadShownIn(target.paneID) : undefined;
-    if (shown) {
-      ({ target } = taskTarget(records, shown.program, shown.task));
-      resolvedTo = { given: params.to, task: shown.task, shownIn: paneIDFromRef(params.to) };
-    }
   } else if (isAgentUUIDText(params.to)) {
     target = records.find(record => record.uuid === params.to.toLowerCase());
     if (!target) fail(2, "identityUnavailable", `No tmux pane carries @agents_uuid ${params.to}; nothing was sent.`);
@@ -328,30 +321,6 @@ export async function runAgentSend(command) {
     fs.closeSync(lockFD);
     fs.rmSync(lock, { force: true });
   }
-}
-
-// The thread a pane shows beside the user, from the page Agents Next records for it (its view's
-// address, `@agents_view`, and where it went from there, `@agents_web_page`, both base64 JSON):
-// a thread page (`/thread/<session>?mirror=1&task&program`) or a terminal thread's (`/worker`).
-export function threadShownIn(paneID) {
-  const options = ["#{@agents_web_page}", "#{@agents_view}"]
-    .map(format => runTMux(["display-message", "-p", "-t", paneID, format]) || "");
-  return threadOfPageOptions(options);
-}
-
-export function threadOfPageOptions(options) {
-  for (const encoded of options) {
-    let text;
-    // Swift's JSON writes "/" as "\/".
-    try { text = Buffer.from(String(encoded).trim(), "base64").toString("utf8").replace(/\\\//g, "/"); } catch { continue; }
-    for (const match of text.matchAll(/https?:\/\/127\.0\.0\.1:\d+\/(?:thread\/[^"?\s]+|worker)\?[^"\s#]+/g)) {
-      const query = new URL(match[0]).searchParams;
-      if (query.get("task") && query.get("program") && (query.get("mirror") === "1" || match[0].includes("/worker?"))) {
-        return { task: query.get("task"), program: query.get("program") };
-      }
-    }
-  }
-  return undefined;
 }
 
 // The live worker a task name names: the task itself, else the one task it is a prefix of (the

@@ -27,7 +27,7 @@ import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { TerminalReader } from "./terminal-question.js";
 import { appendThreadMessage, appendThreadTurn, notifyOptionValue, readThread, seedMarker, seedThread, showsAtLeast, takeNextRun, takeTurnNotify, threadUpdates } from "./app-control/conversation.js";
 import { parseEnvelopeLine } from "./agent-envelope.js";
-import { findSessionLog, markSessionLogInTui, sessionLogChain, sessionLogEntries, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions, type SessionLogTurn } from "./session-log.js";
+import { markSessionLogInTui, sessionLogChain, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions, type SessionLogTurn } from "./session-log.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween, workRoots } from "./acp-peek.js";
 
@@ -118,6 +118,9 @@ export interface AcpHostOptions {
   coordinatorProgram?: () => string | undefined;
   /** Tells the app of a coordinator's turn that notifies the user (session-log-pane paneNotify). */
   onNotify?: (value: string) => void;
+  /** The thread the pane is, if it is a worker of a project (its task in its program): its own
+   *  page (presentation=thread) shows its brief and a close its coordinator proposed. */
+  ownThread?: () => { program: string; task: string } | undefined;
   /** The pane's conversations; defaults to `agents history` for the pane (paneHistory). */
   history?: (limit: number) => Promise<PaneHistory>;
 }
@@ -682,9 +685,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
         (await options.currentSession?.().catch(() => undefined))?.id,
       )),
       terminal: options.handoff?.inView() ? undefined : terminal,
-      logRoot: options.sessionLog?.root,
-      asks: (sessionId) => hosted?.alive && hosted.sessionId === sessionId ? hosted.pendingAsks() : [],
-      answerAsk: (sessionId, id, optionId) => Boolean(hosted?.alive && hosted.sessionId === sessionId && hosted.answerAsk(id, optionId)),
+      ownThread: options.ownThread,
       log,
     })) return;
     handleHttp(request, response, {
@@ -1342,18 +1343,33 @@ function projectFiles(cwd: string): Promise<string[]> {
 }
 
 /** Files whose name starts with the query first, then those whose path holds it. */
-/** A worker thread's sessions in order (sessions.jsonl, app-control/threads.ts writes it). */
-function readTaskSessions(file: string): Array<{ session: string; via?: string }> {
+/** What a thread's own page shows of it (GET /api/thread): its title, its brief (what its brief
+ *  file says under "## Brief") and a close its coordinator proposed and nobody settled. */
+export function ownThreadPage(program: string, task: string): { task: string; program: string; title?: string; brief?: string; proposedClose?: { why: string; at?: string; as?: string } } {
+  const page: ReturnType<typeof ownThreadPage> = { task, program };
+  if (!/^[\w.-]{1,120}$/.test(task)) return page;
+  const dir = join(program, "tasks", task);
   try {
-    return readFileSync(file, "utf8").split("\n").flatMap((line) => {
-      try {
-        const entry = JSON.parse(line) as { session?: unknown; via?: unknown };
-        return typeof entry.session === "string" ? [{ session: entry.session, ...(typeof entry.via === "string" ? { via: entry.via } : {}) }] : [];
-      } catch { return []; }
-    });
-  } catch {
-    return [];
-  }
+    const meta = JSON.parse(readFileSync(join(dir, "task.json"), "utf8")) as { title?: unknown; proposedClose?: { why?: unknown; at?: unknown; as?: unknown }; resolved?: unknown };
+    if (typeof meta.title === "string" && meta.title.trim()) page.title = meta.title.trim();
+    const proposed = meta.proposedClose;
+    if (!meta.resolved && proposed && typeof proposed.why === "string") {
+      page.proposedClose = { why: proposed.why, ...(typeof proposed.at === "string" ? { at: proposed.at } : {}), ...(proposed.as === "dropped" ? { as: "dropped" } : {}) };
+    }
+  } catch { /* a thread without its task file yet */ }
+  try {
+    const text = readFileSync(join(dir, "brief.md"), "utf8");
+    const brief = briefSection(text);
+    if (brief) page.brief = brief;
+  } catch { /* no brief */ }
+  return page;
+}
+
+/** The brief itself out of a worker's brief file (app-control/briefs.ts): what follows "## Brief"
+ *  up to the CLI's own "## How to work here", else the whole file. */
+function briefSection(text: string): string {
+  const after = text.split(/^## Brief[ \t]*$/m)[1] ?? text;
+  return after.split(/^## How to work here[ \t]*$/m)[0].replace(/^\s*ROLE:[^\n]*\n+/i, "").trim();
 }
 
 export function rankFiles(files: string[], query: string): string[] {
@@ -1416,12 +1432,8 @@ function handleBridge(
     history?: (limit: number) => Promise<PaneHistory>;
     /** The pane's screen, while a TUI or a shell runs in it. */
     terminal: TerminalReader | undefined;
-    /** Where the session logs are (session-log.ts); the default root when not given. */
-    logRoot?: string;
-    /** The host's own session's open permission questions, and answering one (a thread beside
-     *  the user, which has no agent of its own). */
-    asks?: (sessionId: string) => Array<{ id: string; params: Record<string, unknown> }>;
-    answerAsk?: (sessionId: string, id: string, optionId: string | null) => boolean;
+    /** The thread the pane is, for its own page (GET /api/thread). */
+    ownThread?: () => { program: string; task: string } | undefined;
     log: (message: string) => void;
   },
 ): boolean {
@@ -1430,7 +1442,7 @@ function handleBridge(
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
     || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
     || path === "/api/session/first-turn" || path === "/api/steer" || path === "/api/queue" || path.startsWith("/api/queue/")
-    || path === "/api/history" || path === "/api/terminal-question" || path === "/api/log" || path === "/api/log/events" || path === "/api/threads" || path === "/api/asks"
+    || path === "/api/history" || path === "/api/terminal-question" || path === "/api/thread" || path === "/api/threads"
     || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
@@ -1519,50 +1531,15 @@ function handleBridge(
     context.history(Number(url.searchParams.get("limit") ?? 30) || 30).then((history) => sendJson(response, 200, history), fail(502));
     return true;
   }
-  // A thread drawn from its session log (a view of a session another pane has: /thread/<id>?mirror=1):
-  // the sessions of its chain, or of a worker's thread, as the updates a view draws, then each
-  // line the log gets as it comes (/api/log/events).
-  if (path === "/api/log" && request.method === "GET") {
-    const task = url.searchParams.get("task");
-    const program = url.searchParams.get("program");
-    const session = url.searchParams.get("session");
-    let sessions: Array<{ session: string; via?: string }> = session ? [{ session }] : [];
-    if (task && program && /^[\w.-]{1,120}$/.test(task)) {
-      const lines = readTaskSessions(join(program, "tasks", task, "sessions.jsonl"));
-      if (lines.length > 0) sessions = lines;
-    }
-    if (sessions.length === 0) { sendJson(response, 400, { message: "A session or a thread is needed." }); return true; }
-    const root = context.logRoot;
-    const entries = sessionLogEntries(sessions, { root });
-    const last = [...entries].reverse().find((entry) => !entry.missing);
-    if (!last) { sendJson(response, 404, { message: "That thread has no session log." }); return true; }
-    const updates = entries.flatMap((entry) => {
-      const found = entry.missing ? undefined : findSessionLog(entry.session, root);
-      return found ? sessionLogUpdates(entry.lines, found.path) : [];
-    });
-    const lastPath = findSessionLog(last.session, root)?.path;
-    let title: string | undefined;
-    let proposedClose: unknown;
-    if (task && program) {
-      try {
-        const meta = JSON.parse(readFileSync(join(program, "tasks", task, "task.json"), "utf8")) as { title?: unknown; proposedClose?: unknown; resolved?: unknown };
-        title = meta.title as string | undefined;
-        if (!meta.resolved) proposedClose = meta.proposedClose;
-      } catch { /* untitled */ }
-    }
-    sendJson(response, 200, {
-      session: last.session,
-      harness: last.harness,
-      ...(typeof title === "string" && title ? { title } : {}),
-      ...(proposedClose ? { proposedClose } : {}),
-      n: last.lines.at(-1)?.n ?? -1,
-      updates,
-      meta: lastPath ? readSessionLogMeta(lastPath) ?? null : null,
-    });
+  // The thread the pane is (a worker of a project), for its own page (presentation=thread): its
+  // title, its brief and a close its coordinator proposed, from its task's files.
+  if (path === "/api/thread" && request.method === "GET") {
+    const own = context.ownThread?.();
+    sendJson(response, 200, { thread: own ? ownThreadPage(own.program, own.task) : null });
     return true;
   }
-  // A coordinator's threads, for the list a thread beside you shows in its place (/threads): what
-  // `agents threads` says of the program, run as its own process.
+  // A coordinator's threads, for the Threads list (/threads): what `agents threads` says of the
+  // program, run as its own process. A row goes to the thread's own tab (the app's go-to-pane).
   if (path === "/api/threads" && request.method === "GET") {
     const program = url.searchParams.get("program") ?? "";
     let folder: string | undefined;
@@ -1582,51 +1559,13 @@ function handleBridge(
             task: thread.task, title: thread.title, state: thread.state, updatedAt: thread.updatedAt ?? null, resolvedAt: thread.resolvedAt ?? null,
             agent: thread.harness ?? (Array.isArray(thread.sessions) ? (thread.sessions[0] as { agent?: unknown } | undefined)?.agent ?? null : null),
             line: typeof thread.line === "string" ? thread.line : null,
-            session: Array.isArray(thread.sessions) ? (thread.sessions[0] as { session?: unknown } | undefined)?.session ?? null : null,
-            // For the page of a thread that runs in a terminal (no session log): its brief, its
-            // report and its pane (Thread links, L3).
             pane: typeof thread.pane === "string" ? thread.pane : null,
-            brief: typeof thread.brief === "string" ? thread.brief : null,
-            report: typeof thread.report === "string" ? thread.report : null,
           })),
         });
       } catch (failure) {
         fail(502)(failure);
       }
     });
-    return true;
-  }
-  // The permission questions of a thread beside the user: the host's own session's, answered from
-  // there with Allow once or Deny (S1).
-  if (path === "/api/asks") {
-    const session = url.searchParams.get("session") ?? "";
-    if (request.method === "GET") { sendJson(response, 200, { asks: context.asks?.(session) ?? [] }); return true; }
-    if (request.method === "POST") {
-      readJson(request).then((body) => {
-        const { id, optionId } = (body ?? {}) as { id?: unknown; optionId?: unknown };
-        const answered = typeof id === "string" && Boolean(context.answerAsk?.(session, id, typeof optionId === "string" ? optionId : null));
-        sendJson(response, answered ? 200 : 409, answered ? {} : { message: "It was answered already." });
-      }, fail(400));
-      return true;
-    }
-  }
-  if (path === "/api/log/events" && request.method === "GET") {
-    const session = url.searchParams.get("session") ?? "";
-    const found = findSessionLog(session, context.logRoot);
-    if (!found) { response.writeHead(404, { "Cache-Control": "no-store" }).end(); return true; }
-    let after = Number(url.searchParams.get("after") ?? -1);
-    response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
-    response.write(": connected\n\n");
-    const send = () => {
-      const log = readSessionLog(session, { after, root: context.logRoot });
-      if (!log || log.lines.length === 0) return;
-      after = log.lines.at(-1)!.n;
-      response.write(`event: updates\ndata: ${JSON.stringify({ n: after, updates: sessionLogUpdates(log.lines, found.path) })}\n\n`);
-    };
-    send();
-    watchFile(found.path, { interval: 500 }, send);
-    const ping = setInterval(() => response.write(": ping\n\n"), 25_000);
-    request.on("close", () => { clearInterval(ping); unwatchFile(found.path, send); });
     return true;
   }
   if (path === "/api/events" && request.method === "GET") {

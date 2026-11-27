@@ -71,6 +71,22 @@ export function paneCoordinatorProgram(paneId: string): () => string | undefined
   };
 }
 
+/** The thread a pane is (@agents_role worker, @agents_task in @agents_program), read at most every
+ *  10 s, for its own page (GET /api/thread). */
+export function paneThread(paneId: string): () => { program: string; task: string } | undefined {
+  let checkedAt = 0;
+  let thread: { program: string; task: string } | undefined;
+  return () => {
+    if (Date.now() - checkedAt > 10_000) {
+      checkedAt = Date.now();
+      const program = paneOption(paneId, "@agents_role") === "worker" ? paneOption(paneId, "@agents_program") : undefined;
+      const task = program ? paneOption(paneId, "@agents_task") : undefined;
+      thread = program && task ? { program, task } : undefined;
+    }
+    return thread;
+  };
+}
+
 /** How a coordinator's pane tells the app of a turn that notifies (R7): NOTIFY_OPTION on the pane,
  *  and a line in the app's event log, since tmux has no event for an option. */
 export function paneNotify(paneId: string): (value: string) => void {

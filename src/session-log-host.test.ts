@@ -64,27 +64,22 @@ describe("the ACP host's session log", () => {
     expect(kinds()).toEqual([["start", null], ["user", "Hi"], ["agent", "Hello"], ["turnEnd", null]]);
   });
 
-  it("draws a worker's thread from its log for a view beside you, and follows it as it grows", async () => {
-    host = await start();
-    expect(await host.startHostedSession()).toBe("fake-1");
-    await host.hostedPrompt("The brief");
+  it("tells a thread's own page its title, brief and a proposed close, and nothing on another pane", async () => {
     const program = join(dir, "program");
     mkdirSync(join(program, "tasks", "fix"), { recursive: true });
-    writeFileSync(join(program, "tasks", "fix", "task.json"), JSON.stringify({ title: "Fix the login" }));
-    writeFileSync(join(program, "tasks", "fix", "sessions.jsonl"), `${JSON.stringify({ at: "x", via: "spawn", agent: "claude", session: "fake-1" })}\n`);
+    writeFileSync(join(program, "tasks", "fix", "task.json"), JSON.stringify({ title: "Fixa inloggningen", proposedClose: { why: "Klar och mergad", at: "2026-11-27T12:00:00.000Z", as: "done" } }));
+    writeFileSync(join(program, "tasks", "fix", "brief.md"), "# Task: fix\n\n## Brief\n\nROLE: worker\n\n## Goal\n\nThe login works again.\n\n## How to work here\n\nRead WORKER.md.\n");
+    let own: { program: string; task: string } | undefined = { program, task: "fix" };
+    host = await startAcpHost({
+      paneId: "%7", agent: { id: "test-acp", name: "Test" }, runtimeTempDir: join(dir, "rt"), webRoot: join(dir, "web"), cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", AGENT], env: process.env },
+      ownThread: () => own,
+    });
     const auth = { headers: { Authorization: `Bearer ${host.token}` } };
-    // The sessions root is the test's: the host's log reader is given it through the environment.
-    const log = await (await fetch(`${host.url}/api/log?session=fake-1&task=fix&program=${encodeURIComponent(program)}`, auth)).json() as { session: string; title: string; n: number; updates: Array<{ sessionUpdate: string; content?: { text?: string } }> };
-    expect(log).toMatchObject({ session: "fake-1", title: "Fix the login" });
-    expect(log.updates.map((update) => `${update.sessionUpdate}:${update.content?.text ?? ""}`)).toEqual(["user_message_chunk:The brief", "agent_message_chunk:Hello"]);
-    const events = await fetch(`${host.url}/api/log/events?session=fake-1&after=${log.n}&token=${encodeURIComponent(host.token)}`);
-    const reader = events.body!.getReader();
-    await host.hostedPrompt("And then");
-    let text = "";
-    for (let i = 0; i < 40 && !text.includes("And then"); i++) text += new TextDecoder().decode((await reader.read()).value);
-    expect(text).toContain("event: updates");
-    expect(text).toContain("And then");
-    await reader.cancel();
+    const read = async () => (await (await fetch(`${host!.url}/api/thread`, auth)).json()) as { thread: unknown };
+    expect(await read()).toEqual({ thread: { task: "fix", program, title: "Fixa inloggningen", brief: "## Goal\n\nThe login works again.", proposedClose: { why: "Klar och mergad", at: "2026-11-27T12:00:00.000Z" } } });
+    own = undefined;
+    expect(await read()).toEqual({ thread: null });
   });
 
   it("stops the turn of the session it holds when the app asks, and says so when it holds none", async () => {
@@ -93,7 +88,6 @@ describe("the ACP host's session log", () => {
     expect((await post()).status).toBe(409);
     await host.startHostedSession();
     expect((await post()).status).toBe(200);
-    expect((await (await fetch(`${host.url}/api/asks?session=fake-1`, { headers: { Authorization: `Bearer ${host.token}` } })).json())).toEqual({ asks: [] });
   });
 
   it("writes the host's own session, its prompts included", async () => {

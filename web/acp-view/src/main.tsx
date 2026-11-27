@@ -11,7 +11,7 @@ import { withDictation } from "./dictation";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import type { ContentBlock, SessionConfigOption } from "@agentclientprotocol/sdk";
-import { CannotLoadSession, OpenElsewhere, connectMirror, connectSession, type AcpSession, type AllowAll, type MirrorReply, type MirrorSession } from "./acp-connection";
+import { CannotLoadSession, OpenElsewhere, connectSession, type AcpSession, type AllowAll } from "./acp-connection";
 import { choicesOf, currentName, modesLabel, settingLabel, settingTitle, splitOptions, withModels } from "./session-options";
 import { errorDetail } from "./errors";
 import { attention, emptySession, reduce, shownMessage, type PermissionRequest, type SentAttachment, type SessionAction, type SessionState, type ToolCall } from "./session-state";
@@ -24,7 +24,7 @@ import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
 import { attachedPaths, attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
 import { AgentEventLine, BriefRow, DeliveryRow, threadHref, useUserWords } from "./coordination-view";
-import { besideContext, briefBody, parseAgentCommand, parseDelivery, parseWorkerPrompt, useCoordination, withoutContext, workerState } from "./coordination";
+import { besideContext, parseAgentCommand, parseDelivery, parseWorkerPrompt, useCoordination, withoutContext, workerState } from "./coordination";
 import { makeFold } from "./fold";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
@@ -35,6 +35,7 @@ import { typedTicketTokens, useTicketRules } from "./tickets";
 import { contextPercent, usageText, usageTitle, type SessionUsage } from "./usage";
 import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
 import { hostOutdated, outdatedHostAction, triedKey, viewBuild } from "./host-build";
+import { followOwnThread, PAGE_OPTIONS, proposalKey, shownProposal, useOwnThread, workLine, type OwnThread } from "./thread-page";
 import "./view.css";
 
 announceBridge();
@@ -802,12 +803,14 @@ function YouMessage({ text: written, pending, at, attachments: sent = [] }: { te
 /** What started a turn: your message, or what the coordination put there (a wake-up, a brief),
  *  or a turn started in the terminal (with its text when the agents CLI passed it on). */
 function UserItem({ user }: { user: NonNullable<Turn["user"]> }) {
+  // A thread page shows its brief under its top line (ThreadBrief), not again as a row.
+  const briefOnTop = useOwnThread((state) => PAGE_OPTIONS.threadPresentation && Boolean(state.thread?.brief));
   const delivery = parseDelivery(user.text);
   // Your own words the app sent for you (from a thread beside you): your message, as typed here.
   if (delivery?.from === "user" && delivery.words === "verbatim") return <UserWords file={delivery.file} summary={delivery.summary} at={user.at} />;
   if (delivery) return <DeliveryRow summary={delivery.summary} file={delivery.file} at={user.at} />;
   const brief = parseWorkerPrompt(user.text);
-  if (brief) return <BriefRow task={brief.task} brief={brief.brief} prompt={user.text} respawn={brief.respawn} />;
+  if (brief) return briefOnTop && !brief.respawn ? null : <BriefRow task={brief.task} brief={brief.brief} prompt={user.text} respawn={brief.respawn} />;
   if (user.external) {
     return user.text
       ? <div className="you external with-text"><span className="from">From the terminal</span><TicketText text={user.text} /></div>
@@ -843,9 +846,12 @@ const TurnView = memo(function TurnView({ turn, last, working, cwd }: { turn: Tu
   return (
     <TurnChangesContext.Provider value={turn.changes}>
       {turn.user && <UserItem user={turn.user} />}
-      <Activity turn={turn} working={streaming} stopped={stopped} cwd={cwd} />
-      {/* While the agent works after a step, what it writes is in the steps (Activity) until the turn ends. */}
-      {turn.answer.length > 0 && !(streaming && turn.steps.length > 0) && (
+      {PAGE_OPTIONS.threadPresentation
+        ? <WorkLine turn={turn} working={streaming} cwd={cwd} />
+        : <Activity turn={turn} working={streaming} stopped={stopped} cwd={cwd} />}
+      {/* While the agent works after a step, what it writes is in the steps (Activity) until the
+          turn ends; a thread page has no steps, so its answer shows as it comes. */}
+      {turn.answer.length > 0 && (PAGE_OPTIONS.threadPresentation || !(streaming && turn.steps.length > 0)) && (
         <div className="say">
           {turn.answer.map((item, index) => (
             <Suspense key={item.id} fallback={<p className="plain">{item.text}</p>}>
@@ -1228,12 +1234,6 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
     onHeight(element.offsetHeight);
     return () => observer.disconnect();
   }, [onHeight]);
-  // A thread beside you that waits on you opens with the cursor in its reply field; any other
-  // opens for reading (Thread links, L8): the app says which (?reply=1).
-  useEffect(() => {
-    if (!MIRROR?.reply) return;
-    requestAnimationFrame(() => input.current?.focus());
-  }, []);
   // Quote in Reply, from the app's context menu: the selection goes into the field as a quote.
   useEffect(() => {
     const onQuote = (event: Event) => {
@@ -1462,38 +1462,6 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
   };
 
   const sendText = (typed: string, how: "send" | "queue") => {
-    // A thread beside you: what you write waits for its turn to end, and Option-Return sends it
-    // into the turn where the agent can take that (S3). The delivery shows under the field.
-    if (MIRROR && "reply" in session) {
-      onSend();
-      // Its attachments go with it as @paths, saved where the agent can read them.
-      const attached = attachments;
-      setAttachments([]);
-      setField("");
-      setNotice(null);
-      const saved = Promise.all(attached.map((attachment) => attachment.path
-        ?? hostJson<{ path: string }>("/api/attachment", { name: attachment.name, data: attachment.data ?? "" }).then((value) => value.path)));
-      let message = "";
-      void saved.then((paths) => {
-        message = [typed, ...paths.map((path) => `@${path}`)].filter(Boolean).join(" ");
-        return (session as MirrorSession).reply(message, how === "queue");
-      }, () => {
-        setAttachments(attached);
-        return { ok: false, message: "The attachments could not be saved for the agent." } as MirrorReply;
-      }).then((reply) => {
-        if (!reply.ok) {
-          setNotice(how === "queue" ? `${agentName} cannot take a message during its turn.` : reply.message ?? "The message did not go.");
-          // What did not go stays in the field to send again.
-          setAttachments((current) => current.length ? current : attached);
-          if (!input.current?.value) setField(typed);
-          return;
-        }
-        if (reply.state === "queued" && reply.message) setNotice(`Waiting for ${agentName}'s turn to end`);
-        const state = useMirrorThread.getState();
-        useMirrorThread.setState({ sent: [...state.sent, { id: Date.now() + state.sent.length, text: message, at: Date.now(), shownWith: userMessagesIn(useSession.getState().items) + state.sent.length + 1 }] });
-      });
-      return;
-    }
     onSend();
     // To a coordinator: the thread you have open beside it goes before your words.
     const context = useCoordination.getState().role === "coordinator" ? threadBeside() : Promise.resolve("");
@@ -1727,7 +1695,7 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
             className="input"
             value={draft}
             rows={1}
-            placeholder={MIRROR ? `Answer ${agentName}` : busy ? (steerWay === "none" ? `Queue a message for when ${agentName} is done` : `Steer ${agentName} while it works`) : `Ask ${agentName}, @ for files and panes, / for commands`}
+            placeholder={busy ? (steerWay === "none" ? `Queue a message for when ${agentName} is done` : `Steer ${agentName} while it works`) : `Ask ${agentName}, @ for files and panes, / for commands`}
             onChange={(event) => {
               setDraft(event.target.value);
               // A resting agent starts as the user begins to write.
@@ -1782,25 +1750,17 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
             }}
           />
           <div className="row">
-            {/* A thread beside you has a plain reply field (A2): no files, no session choices. */}
-            {!MIRROR && <button className="icon" type="button" aria-label="Add a file" onClick={() => {
+            <button className="icon" type="button" aria-label="Add a file" onClick={() => {
               const next = draft.endsWith(" ") || !draft ? `${draft}@` : `${draft} @`;
               setDraft(next);
               setMention({ start: next.length - 1, query: "" });
               input.current?.focus();
             }}>
               <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-            </button>}
+            </button>
             {/* While the agent still opens the session its history shows above, and the row says
                 so where the session's choices come once it is open. */}
-            {opening ? <span className="opening-line" role="status"><i className="pulse" />{opening}</span> : MIRROR ? (
-              // A thread beside you has its Steps or Results in the prompt too, as every ACP pane
-              // (Thread links, L9).
-              <button className="opt level" type="button" aria-label={`Detail: ${DETAIL_TITLES[level]}`} title={`How much of the work shows: ${DETAIL_TITLES[level]} (⌃O)`} onClick={onCycleLevel}>
-                <LevelIcon level={level} />
-                <span className="v">{DETAIL_TITLES[level]}</span>
-              </button>
-            ) : <>
+            {opening ? <span className="opening-line" role="status"><i className="pulse" />{opening}</span> : <>
               {showModes && (
                 <label className="opt" title={modesLabel(info.agent.id)}>
                   <span className="lb">{modesLabel(info.agent.id)}</span>
@@ -1827,10 +1787,13 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
                   <span className="lb">Approvals</span> <span className="v">{allowAll.on ? "Allow all" : "Ask"}</span>
                 </button>
               )}
-              <button className="opt level fold" type="button" aria-label={`Detail: ${DETAIL_TITLES[level]}`} title={`How much of the work shows: ${DETAIL_TITLES[level]} (⌃O)`} onClick={onCycleLevel}>
-                <LevelIcon level={level} />
-                <span className="v">{DETAIL_TITLES[level]}</span>
-              </button>
+              {/* A thread page has no Steps or Results (P9): every step is in its session (Show Session). */}
+              {!PAGE_OPTIONS.threadPresentation && (
+                <button className="opt level fold" type="button" aria-label={`Detail: ${DETAIL_TITLES[level]}`} title={`How much of the work shows: ${DETAIL_TITLES[level]} (⌃O)`} onClick={onCycleLevel}>
+                  <LevelIcon level={level} />
+                  <span className="v">{DETAIL_TITLES[level]}</span>
+                </button>
+              )}
               <MoreOptions options={moreOptions} session={session} agentId={info.agent.id}>
                 {/* What the row folds in when the field is too narrow for it (view.css). */}
                 {allowAll.offered && (
@@ -1838,9 +1801,11 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
                     <span>Approvals</span><span className={`mv${allowAll.on ? " on" : ""}`}>{allowAll.on ? "Allow all" : "Ask"}</span>
                   </button>
                 )}
-                <button className="it folded" type="button" title="How much of the work shows (⌃O)" onClick={onCycleLevel}>
-                  <span>Detail</span><span className="mv"><LevelIcon level={level} /> {DETAIL_TITLES[level]}</span>
-                </button>
+                {!PAGE_OPTIONS.threadPresentation && (
+                  <button className="it folded" type="button" title="How much of the work shows (⌃O)" onClick={onCycleLevel}>
+                    <span>Detail</span><span className="mv"><LevelIcon level={level} /> {DETAIL_TITLES[level]}</span>
+                  </button>
+                )}
               </MoreOptions>
             </>}
             <span className="sp" />
@@ -2159,13 +2124,15 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   // ⌃O cycles how much of the work shows, wherever the keyboard is in the view.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (PAGE_OPTIONS.threadPresentation) return;
       if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "o") { event.preventDefault(); cycleLevel(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [cycleLevel]);
   const detail = useMemo(() => ({
-    level,
+    // A thread page shows what the agent says, never its steps (P9).
+    level: PAGE_OPTIONS.threadPresentation ? "results" as DetailLevel : level,
     // A command's output opens in a pane beside, as a page of the host's.
     openOutput: (title: string, text: string) => {
       void hostJson("/api/output", { title, text }).catch(() => {});
@@ -2210,8 +2177,6 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   }, []);
 
   useEffect(() => {
-    // A thread beside you keeps the title its log gave it ("Threads › <title>").
-    if (MIRROR) return;
     document.title = shownTitle ? `${shownTitle} – ${info.agent.name}` : info.agent.name;
   }, [shownTitle, info.agent.name]);
   // Follow the conversation while it is read at the bottom; stay put while reading higher up.
@@ -2237,16 +2202,17 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
         }}>
           <div className={arrives ? "col arrive" : "col"}>
+            <ThreadBrief />
             {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
               <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working && index === turns.length - 1} cwd={info.cwd} />
             ))}
-            {working && permissions.length === 0 && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
+            {/* A thread page's work line is in its turn (WorkLine). */}
+            {working && permissions.length === 0 && !PAGE_OPTIONS.threadPresentation && <CurrentStep turn={lastTurn} now={now} cwd={info.cwd} />}
             {permissions.map((request, index) => (
               <Ask key={request.id} request={request} agentName={info.agent.name} session={session} focused={index === 0} cwd={info.cwd} />
             ))}
-            <SentToThread />
-            <TerminalPermissionRow asked={permissions.length > 0} />
+            {PAGE_OPTIONS.inlineQuestions && <TerminalQuestionCard agentName={info.agent.name} />}
             <ProposedCloseCard />
           </div>
         </div>
@@ -2442,7 +2408,9 @@ const TERMINAL_POLL_OPEN_MS = 1_500;
  * Watches the pane's terminal (the host's terminal-question.ts) for as long as a TUI or a shell
  * runs in it: a question there (Codex's hooks review, a folder to trust, a shell's [Y/n]) is
  * answered there. In Agents Next the view asks the app to show the terminal, and the app comes back
- * to the view once it is answered; elsewhere the view says what the terminal asks. With
+ * to the view once it is answered; elsewhere the view says what the terminal asks. A thread's
+ * view (questions=inline, P5) never asks the app to switch: it shows the question with Answer in
+ * terminal, as the conversation's last card while the conversation shows, else here. With
  * `showsTail`, after a while without a session and without a question, it shows the lines the
  * terminal stopped on (an error). A hand-off pane whose view has the session shows only the
  * view's transcript: the host answers nothing for it.
@@ -2468,8 +2436,9 @@ function TerminalWatch({ agentName, showsTail = false, pollMs = TERMINAL_POLL_MS
           // the question it showed counts as asked until a still screen shows it gone.
           if (next && !next.moving) {
             setScreen(next);
+            if (PAGE_OPTIONS.inlineQuestions) useTerminalAsk.setState({ question: next.question?.text ?? null });
             // Once per question: the app shows the terminal, and this page may stay loaded behind it.
-            if (next.question && !asked && inMacApp() && document.visibilityState === "visible") window.location.href = APP_ACTIONS.terminalQuestion;
+            else if (next.question && !asked && inMacApp() && document.visibilityState === "visible") window.location.href = APP_ACTIONS.terminalQuestion;
             asked = Boolean(next.question);
           }
         }
@@ -2477,10 +2446,12 @@ function TerminalWatch({ agentName, showsTail = false, pollMs = TERMINAL_POLL_MS
       }
     };
     void poll();
-    return () => { stopped = true; clearTimeout(timer); };
+    return () => { stopped = true; clearTimeout(timer); if (PAGE_OPTIONS.inlineQuestions) useTerminalAsk.setState({ question: null }); };
   }, []);
+  const inConversation = useTerminalAsk((state) => state.shown > 0);
   const question = screen?.question;
   const tail = showsTail && late && !question && screen?.tail.length ? screen.tail : null;
+  if (question && PAGE_OPTIONS.inlineQuestions) return inConversation ? null : <TerminalQuestion agentName={agentName} lines={question.text} floating />;
   if (question && inMacApp()) return null;
   if (!question && !tail) return null;
   const terminal = inMacApp()
@@ -2625,50 +2596,15 @@ function useHistoryCameIn(session: AcpSession | null, watching: boolean): boolea
   return session !== null && cameIn === session;
 }
 
-/** A thread shown from its log beside you (?mirror=1, with its worker's task and program). */
-const MIRROR: { task?: string; program?: string; reply?: boolean } | null = (() => {
-  const params = new URLSearchParams(location.search);
-  if (params.get("mirror") !== "1") return null;
-  return { ...(params.get("task") ? { task: params.get("task")! } : {}), ...(params.get("program") ? { program: params.get("program")! } : {}), ...(params.get("reply") === "1" ? { reply: true } : {}) };
-})();
+/** Where the page's fold is kept: per pane (its host's storage). */
+const usePageFold = makeFold("agents.fold:pane");
 
-/** What a thread beside you says beside its conversation: a close its coordinator proposed. */
-const useMirrorThread = create<{
-  proposedClose: { why: string } | null;
-  title?: string;
-  /** What you sent that the thread's log does not show yet (it reaches a resting or busy agent
-   *  later), with how many of your messages the log shows once it is there. */
-  sent: Array<{ id: number; text: string; at: number; shownWith: number }>;
-}>(() => ({ proposedClose: null, sent: [] }));
-
-/** Your messages in the thread's log: lines in an envelope from the user. */
-function userMessagesIn(items: SessionState["items"]): number {
-  return items.reduce((count, item) => count + (item.type === "user" && parseDelivery(item.text)?.from === "user" ? 1 : 0), 0);
-}
-
-/** Your messages sent into a thread beside you that its log does not show yet: shown at once, as
- *  waiting, so nothing you wrote seems lost while a resting agent wakes (Peter, 2026-11-27). */
-function SentToThread() {
-  const sent = useMirrorThread((state) => state.sent);
-  const items = useSession((state) => state.items);
-  const shown = useMemo(() => userMessagesIn(items), [items]);
-  useEffect(() => {
-    // The log shows one more of yours for each that arrived.
-    const waiting = sent.filter((item) => shown < item.shownWith);
-    if (waiting.length !== sent.length) useMirrorThread.setState({ sent: waiting });
-  }, [sent, shown]);
-  if (!MIRROR || sent.length === 0) return null;
-  return <>{sent.map((item) => <YouMessage key={item.id} text={item.text} pending at={item.at} />)}</>;
-}
-
-/** Where the page's fold is kept: per thread beside you, else per pane (its host's storage). */
-const usePageFold = makeFold(`agents.fold:${MIRROR ? `thread:${MIRROR.program ?? ""}:${MIRROR.task ?? ""}` : "pane"}`);
-
-/** Whether the page has a top line, and with it the fold: a thread beside you, a worker's or a
+/** Whether the page has a top line, and with it the fold: a thread's page, a worker's or a
  *  coordinator's pane. */
 function useHasPageLine(): boolean {
   const role = useCoordination((state) => state.role === "coordinator" || (state.role === "worker" && Boolean(state.coordinator)));
-  return Boolean(MIRROR?.program && MIRROR.task) || role;
+  const own = useOwnThread((state) => PAGE_OPTIONS.threadPresentation && state.thread !== null);
+  return role || own;
 }
 
 function FoldControl({ folded, toggle }: { folded: boolean; toggle: () => void }) {
@@ -2689,24 +2625,17 @@ function FoldControl({ folded, toggle }: { folded: boolean; toggle: () => void }
 function PageLine() {
   const folded = usePageFold((state) => state.folded);
   const toggle = usePageFold((state) => state.toggle);
-  const mirrorTitle = useMirrorThread((state) => state.title);
   const coordination = useCoordination();
+  const own = useOwnThread((state) => (PAGE_OPTIONS.threadPresentation ? state.thread : null));
   let line: ReactNode = null;
-  if (MIRROR?.program && MIRROR.task) {
-    const list = `/threads?${new URLSearchParams({ "agents-next": "acp-page", program: MIRROR.program, from: MIRROR.task })}${location.hash}`;
+  if ((coordination.role === "worker" && coordination.coordinator) || own) {
+    // A thread's page says it is a thread even while its coordinator's pane is gone.
+    const title = coordination.threadTitle ?? own?.title ?? coordination.task ?? own?.task;
     line = (
       <nav className="crumb" aria-label="Thread">
-        <button type="button" className="crumb-link" onClick={() => location.assign(list)}>Threads</button>
+        <a className="crumb-link" href={threadHref()} title={`Show the threads of ${coordination.programName ?? "its coordinator"}`}>Threads</a>
         <span className="crumb-sep" aria-hidden="true">›</span>
-        {!folded && <span className="crumb-here">{mirrorTitle ?? MIRROR.task}</span>}
-      </nav>
-    );
-  } else if (coordination.role === "worker" && coordination.coordinator) {
-    line = (
-      <nav className="crumb" aria-label="Thread">
-        <a className="crumb-link" href={threadHref()} title={`Show the threads of ${coordination.programName ?? "its coordinator"} beside`}>Threads</a>
-        <span className="crumb-sep" aria-hidden="true">›</span>
-        {!folded && <span className="crumb-here" title={coordination.task}>{coordination.threadTitle ?? coordination.task}</span>}
+        {!folded && <span className="crumb-here" title={coordination.task ?? own?.task}>{title}</span>}
       </nav>
     );
   } else if (coordination.role === "coordinator") {
@@ -2732,77 +2661,97 @@ function PageLine() {
   );
 }
 
-/** The coordinator proposed to close the thread (T8): the last row, with why, Close as done and
- *  Keep open. The app does either (agent resolve), as the Needs you list does. */
+/** The coordinator proposed to close the thread (P4, P8): the last row of the thread's own page,
+ *  with why, Close as done (or Close as dropped) and Keep open. The app does either (agent resolve)
+ *  for the thread its pane is, as the Needs you list does. */
 function ProposedCloseCard() {
-  const proposed = useMirrorThread((state) => state.proposedClose);
+  const thread = useOwnThread((state) => state.thread);
+  const settled = useOwnThread((state) => state.settled);
   const [pending, setPending] = useState(false);
-  if (!MIRROR || !proposed) return null;
+  const proposed = PAGE_OPTIONS.threadPresentation ? shownProposal(thread, settled) : null;
+  if (!proposed) return null;
   const act = (action: "close" | "keep-open") => {
     const app = appHandler(APP_HANDLERS.threadAction);
     if (!app) return;
     setPending(true);
-    void Promise.resolve(app.postMessage({ action, task: MIRROR.task, program: MIRROR.program }) as Promise<{ ok?: boolean } | undefined>)
-      .then((reply) => { if (reply?.ok) useMirrorThread.setState({ proposedClose: null }); })
+    // A thread's own page names no thread: its pane is the thread.
+    void Promise.resolve(app.postMessage({ action }) as Promise<{ ok?: boolean } | undefined>)
+      .then((reply) => { if (reply?.ok) useOwnThread.setState({ settled: proposalKey(proposed) }); })
       .finally(() => setPending(false));
   };
   return (
     <div className="close-card" role="group" aria-label="Proposed close">
       <div className="close-why"><span className="dim">The coordinator suggests closing this thread:</span> {proposed.why}</div>
       <div className="close-actions">
-        <button type="button" className="pbtn" disabled={pending} onClick={() => act("close")}>Close as done</button>
+        <button type="button" className="pbtn" disabled={pending} onClick={() => act("close")}>{proposed.as === "dropped" ? "Close as dropped" : "Close as done"}</button>
         <button type="button" className="pbtn quiet" disabled={pending} onClick={() => act("keep-open")}>Keep open</button>
       </div>
     </div>
   );
 }
 
-/** Esc closes a thread beside you, or the list in its place, as its tab's close does; not while
- *  something of the page takes it first (a menu, a field with text). */
-if (typeof window !== "undefined" && (MIRROR || location.pathname === "/threads" || location.pathname === "/worker")) {
-  window.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
-    const active = document.activeElement as HTMLTextAreaElement | HTMLInputElement | null;
-    if (active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT") && active.value) return;
-    if (document.querySelector(".pop, [role=menu], [role=listbox]")) return;
-    location.href = APP_ACTIONS.closeTab;
-  });
-}
-
-/** A permission the thread's agent asks in its terminal (S1): answered there, so the thread says
- *  what it asks and offers Go to pane. One the host holds shows as Allow once and Deny instead. */
-function TerminalPermissionRow({ asked }: { asked: boolean }) {
-  const [waiting, setWaiting] = useState<string | null>(null);
-  useEffect(() => {
-    const app = appHandler(APP_HANDLERS.threadAction);
-    if (!MIRROR || !app) return;
-    let live = true;
-    const ask = () => {
-      if (document.visibilityState !== "visible") return;
-      void Promise.resolve(app.postMessage({ action: "waiting" }) as Promise<{ permission?: string | null } | undefined>)
-        .then((reply) => { if (live) setWaiting(reply?.permission ?? null); }, () => undefined);
-    };
-    ask();
-    const timer = setInterval(ask, 3_000);
-    return () => { live = false; clearInterval(timer); };
-  }, []);
-  if (!MIRROR || asked || !waiting) return null;
+/** A thread page's brief, under its top line (C3): folded to three lines, "Brief ›" opens it. */
+function ThreadBrief() {
+  const brief = useOwnThread((state) => (PAGE_OPTIONS.threadPresentation ? state.thread?.brief : undefined));
+  const [open, setOpen] = useState(false);
+  if (!brief) return null;
   return (
-    <div className="close-card" role="group" aria-label="Permission in its terminal">
-      <div className="close-why"><span className="dim">It asks in its terminal:</span> {waiting}</div>
-      <div className="close-actions">
-        <button type="button" className="pbtn" onClick={() => appHandler(APP_HANDLERS.threadAction)?.postMessage({ action: "go-to-pane" })}>Go to pane</button>
+    <div className={`thread-brief${open ? " open" : ""}`}>
+      <button type="button" className="thread-brief-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        Brief <svg className="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+      </button>
+      <div className="thread-brief-body say">
+        <Suspense fallback={<p className="plain">{brief}</p>}><Markdown text={brief} streaming={false} /></Suspense>
       </div>
     </div>
   );
 }
 
-/** The app sends a reply from a mirror as the user's (agent send --from user). */
-function sendThreadReply(target: { session: string; task?: string; program?: string }, text: string, steer: boolean): Promise<MirrorReply> {
-  const app = appHandler(APP_HANDLERS.threadReply);
-  if (!app) return Promise.resolve({ ok: false, message: "Answering a thread from here works in Agents Next." });
-  return Promise.resolve(app.postMessage({ ...target, text, steer }) as Promise<MirrorReply | undefined>)
-    .then((reply) => reply ?? { ok: false, message: "The app did not answer." }, (error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : String(error) }));
+/** A turn's work on a thread page (P9): one line, "Working 2m · <gist>" while the agent works,
+ *  "Worked 2m" after. Its steps are in the session (Show Session). */
+function WorkLine({ turn, working, cwd }: { turn: Turn; working: boolean; cwd: string }) {
+  const now = useNow(working);
+  const plan = useSession((s) => s.plan);
+  let gist: string | undefined;
+  if (working) {
+    gist = planSummary(plan).current?.content;
+    const step = turn.steps.at(-1);
+    if (!gist && step?.type === "tool" && step.call.status !== "completed" && step.call.status !== "failed") {
+      const { verb, target } = describeCall(step.call, cwd);
+      gist = `${PRESENT[verb] ?? verb} ${target}`.trim().toLowerCase();
+    }
+  }
+  const text = workLine(turn, working, now, gist);
+  if (!text) return null;
+  return <div className={`work-line${working ? " working" : ""}`}>{working ? <span className="shim"><span className="txt">{text}</span></span> : text}</div>;
+}
+
+/** What the pane's terminal asks now (TerminalWatch), for a thread page that shows it in the
+ *  conversation (P5), and whether the conversation shows it. */
+const useTerminalAsk = create<{ question: string[] | null; shown: number }>(() => ({ question: null, shown: 0 }));
+
+/** A question the thread's terminal asks, as the page's last card (P5): the user answers it there
+ *  with Answer in terminal; the app never switches the tab to its terminal by itself. */
+function TerminalQuestionCard({ agentName }: { agentName: string }) {
+  const question = useTerminalAsk((state) => state.question);
+  useEffect(() => {
+    useTerminalAsk.setState((state) => ({ shown: state.shown + 1 }));
+    return () => useTerminalAsk.setState((state) => ({ shown: state.shown - 1 }));
+  }, []);
+  if (!question) return null;
+  return <TerminalQuestion agentName={agentName} lines={question} />;
+}
+
+function TerminalQuestion({ agentName, lines, floating = false }: { agentName: string; lines: string[]; floating?: boolean }) {
+  return (
+    <div className={floating ? "terminal-wait" : "close-card terminal-ask"} role="group" aria-label="Question in its terminal">
+      <div className={floating ? "terminal-wait-title" : "close-why"}>{agentName} asks in its terminal</div>
+      <pre className="terminal-wait-text">{lines.join("\n")}</pre>
+      {inMacApp()
+        ? <div className="close-actions"><button type="button" className="pbtn" onClick={() => { window.location.href = APP_ACTIONS.answerInTerminal; }}>Answer in terminal</button></div>
+        : <div className="terminal-wait-foot">Answer it in the pane's terminal; the view goes on once it is answered.</div>}
+    </div>
+  );
 }
 
 /** The session, loaded and followed live; with no session given, one the view starts. */
@@ -2815,10 +2764,7 @@ function SessionView({ info, sessionId }: { info: HostInfo; sessionId: string | 
   const [takeOvers, setTakeOvers] = useState(0);
   const takeOverHere = () => setTakeOvers((count) => count + 1);
   const opening = useOpeningConversation((s) => s.text);
-  const session = useMemo(() => !token ? null : MIRROR && sessionId
-    // A thread another pane has, beside you: drawn from its log; what you write goes as yours.
-    ? connectMirror({ token, target: { session: sessionId, ...MIRROR }, dispatch, send: (text, steer) => sendThreadReply({ session: sessionId, ...MIRROR }, text, steer), onThread: (thread) => useMirrorThread.setState({ proposedClose: thread.proposedClose ?? null, title: thread.title }) })
-    : connectSession({
+  const session = useMemo(() => !token ? null : connectSession({
       url: `ws://${location.host}/acp?token=${encodeURIComponent(token)}`,
       sessionId, cwd: info.cwd, agentId: info.agent.id, dispatch, takeOver: takeOvers > 0,
       onTakenOver: () => send({ type: "taken-over" }),
@@ -2950,21 +2896,12 @@ const OPEN_REVIEW_BESIDE = new URLSearchParams(location.search).get("agents-next
 const reviewId = decodeURIComponent(location.pathname.match(/^\/review\/([^/]+)/)?.[1] ?? "") || null;
 const beadId = decodeURIComponent(location.pathname.match(/^\/bead\/([^/]+)/)?.[1] ?? "") || null;
 const outputId = decodeURIComponent(location.pathname.match(/^\/output\/([^/]+)/)?.[1] ?? "") || null;
-/** A coordinator's threads, in the place of a thread beside you (/threads?program=&from=). */
+/** A coordinator's threads (/threads?program=&from=). */
 const threadsOf = location.pathname === "/threads" ? new URLSearchParams(location.search).get("program") : null;
 
-interface ListedThread { task: string; title: string; state: string; session: string | null; updatedAt?: string | null; resolvedAt?: string | null; agent?: string | null; line?: string | null; pane?: string | null; brief?: string | null; report?: string | null }
+interface ListedThread { task: string; title: string; state: string; updatedAt?: string | null; resolvedAt?: string | null; agent?: string | null; line?: string | null; pane?: string | null }
 
-/** A thread of a terminal (no session log, Thread links, L3), in the place of a thread beside you
- *  (/worker?program=&task=). */
-const workerOf = location.pathname === "/worker" ? (() => {
-  const params = new URLSearchParams(location.search);
-  const task = params.get("task");
-  const program = params.get("program");
-  return task && program ? { task, program } : null;
-})() : null;
-
-/** Asks the app to go to a thread's own pane (⌘-click, ⌘↩, Go to pane). */
+/** Asks the app to go to a thread's own tab: a thread lives in its own pane (R1, R4). */
 function goToThreadPane(task: string, program: string): void {
   void appHandler(APP_HANDLERS.threadAction)?.postMessage({ action: "go-to-pane", task, program });
 }
@@ -2998,16 +2935,8 @@ const THREAD_GROUPS: Array<{ title: string; states: string[] }> = [
   { title: "Resolved", states: ["resolved"] },
 ];
 
-/** The page of a thread, beside you: drawn from its log, or for one that runs in a terminal its
- *  brief and report. */
-function mirrorAddress(thread: ListedThread, program: string): string {
-  if (!thread.session) return `/worker?${new URLSearchParams({ "agents-next": "acp-page", task: thread.task, program })}${location.hash}`;
-  const query = new URLSearchParams({ "agents-next": "acp-page", mirror: "1", task: thread.task, program });
-  return `/thread/${encodeURIComponent(thread.session)}?${query}${location.hash}`;
-}
-
-/** The coordinator's threads by state, in the tab where a thread was: a row opens that thread
- *  here, and the thread you came from is the selected one, so Return goes back to it. */
+/** The coordinator's threads by state: a row, or Return on the selected one, goes to that thread's
+ *  own tab (R4); the thread you came from is the selected one. */
 function ThreadsPage({ program }: { program: string }) {
   const from = new URLSearchParams(location.search).get("from");
   const [listing, setListing] = useState<{ name: string; threads: ListedThread[] } | null | undefined>(undefined);
@@ -3029,9 +2958,7 @@ function ThreadsPage({ program }: { program: string }) {
         setSelected(ordered[next].task);
       } else if (event.key === "Enter" && at >= 0) {
         event.preventDefault();
-        // ⌘↩ goes to its pane, as a ⌘-click does (Thread links, L1).
-        if (event.metaKey && ordered[at].pane) goToThreadPane(ordered[at].task, program);
-        else location.assign(mirrorAddress(ordered[at], program));
+        if (ordered[at].pane) goToThreadPane(ordered[at].task, program);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -3043,13 +2970,10 @@ function ThreadsPage({ program }: { program: string }) {
     const detail = [agentLabel(thread.agent), thread.line].filter(Boolean).join(" · ");
     return (
       <button key={thread.task} type="button" className={`thread-row ${thread.state}${thread.task === selected ? " selected" : ""}`}
-        title={thread.pane ? "Click: show it here · ⌘-click or double-click: go to its pane" : undefined}
-        onClick={(event) => {
+        title={thread.pane ? "Go to its tab" : "It has no tab now"}
+        onClick={() => {
           setSelected(thread.task);
-          // ⌘-click and a double-click go to its pane, a click shows it here (Thread links, L1).
-          if ((event.metaKey || event.detail >= 2) && thread.pane) { goToThreadPane(thread.task, program); return; }
-          if (event.detail >= 2) return;
-          location.assign(mirrorAddress(thread, program));
+          if (thread.pane) goToThreadPane(thread.task, program);
         }}>
         <span className={`thread-mark ${markState(thread.state)}`}><StateMark state={markState(thread.state)} /></span>
         <span className="thread-text">
@@ -3083,60 +3007,6 @@ function ThreadsPage({ program }: { program: string }) {
         );
       })}
     </div></div></div></div>
-  );
-}
-
-/** A thread that runs in a terminal, beside you (Thread links, L3): there is no conversation to
- *  draw, so its brief, its last report and Go to pane. */
-function WorkerPage({ task, program }: { task: string; program: string }) {
-  const [thread, setThread] = useState<ListedThread | null | undefined>(undefined);
-  const [brief, setBrief] = useState<string | null>(null);
-  const [report, setReport] = useState<string | null>(null);
-  useEffect(() => {
-    hostJson<{ threads: ListedThread[] }>(`/api/threads?program=${encodeURIComponent(program)}`)
-      .then((value) => {
-        const found = value.threads.find((entry) => entry.task === task) ?? null;
-        setThread(found);
-        document.title = found?.title || task;
-        const text = (path: string | null | undefined, set: (value: string | null) => void, pick: (text: string) => string) => {
-          if (path) hostJson<{ text: string }>(`/api/text?path=${encodeURIComponent(path)}`).then((value) => set(pick(value.text).trim() || null), () => set(null));
-        };
-        // The brief file starts with its title and where it came from; the brief is under "## Brief".
-        text(found?.brief, setBrief, briefBody);
-        text(found?.report, setReport, (raw) => raw);
-      }, () => setThread(null));
-  }, [task, program]);
-  if (thread === undefined) return <Notice>Opening the thread…</Notice>;
-  if (thread === null) return <Notice>The thread {task} is not there any more.</Notice>;
-  const list = `/threads?${new URLSearchParams({ "agents-next": "acp-page", program, from: task })}${location.hash}`;
-  const age = shortAge(thread.updatedAt);
-  return (
-    <div className="view worker-page"><div className="main">
-      <div className="crumb-bar">
-        <nav className="crumb" aria-label="Thread">
-          <button type="button" className="crumb-link" onClick={() => location.assign(list)}>Threads</button>
-          <span className="crumb-sep" aria-hidden="true">›</span>
-          <span className="crumb-here">{thread.title || task}</span>
-          <span className={`thread-mark ${markState(thread.state)}`}><StateMark state={markState(thread.state)} /></span>
-        </nav>
-      </div>
-      <div className="scroll"><div className="col">
-        {brief && (
-          <section className="thread-group worker-part">
-            <h2>Brief</h2>
-            <div className="say"><Suspense fallback={<p className="plain">{brief}</p>}><Markdown text={brief} streaming={false} /></Suspense></div>
-          </section>
-        )}
-        <section className="thread-group worker-part">
-          <h2>Last report{age ? ` · ${age === "now" ? "now" : `${age} ago`}` : ""}</h2>
-          {report
-            ? <div className="say"><Suspense fallback={<p className="plain">{report}</p>}><Markdown text={report} streaming={false} /></Suspense></div>
-            : <p className="plain">{thread.line || "No report yet."}</p>}
-        </section>
-        <p className="plain dim">This thread runs in a terminal, so there is no conversation to draw.</p>
-        {thread.pane && <div className="close-actions"><button type="button" className="pbtn" onClick={() => goToThreadPane(task, program)}>Go to pane</button></div>}
-      </div></div>
-    </div></div>
   );
 }
 
@@ -3180,6 +3050,11 @@ function BeadPage({ id }: { id: string }) {
 function App() {
   const [info, setInfo] = useState<HostInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A thread's page follows what its host says of the thread: its title, brief and a proposed close.
+  useEffect(() => {
+    if (!token || !PAGE_OPTIONS.threadPresentation) return;
+    return followOwnThread(() => hostJson<{ thread: OwnThread | null }>("/api/thread"));
+  }, []);
   useEffect(() => {
     if (!token) return;
     fetch("/api/info", { headers: { Authorization: `Bearer ${token}` } })
@@ -3192,7 +3067,6 @@ function App() {
   if (beadId) return <BeadPage id={beadId} />;
   if (outputId) return <OutputPage id={outputId} />;
   if (threadsOf) return <ThreadsPage program={threadsOf} />;
-  if (workerOf) return <WorkerPage task={workerOf.task} program={workerOf.program} />;
   if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
   if (!info) return <Opening />;
   return <SessionGate info={info} />;

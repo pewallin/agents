@@ -36,7 +36,7 @@ function knownTask(program, task) {
 
 // How a thread ends (B1): done, dropped with a line on why, or replaced by another thread. A done
 // thread resolves as done; an unfinished one only with --dropped or --replaced-by.
-function resolveOutcome(program, task, params, who) {
+export function resolveOutcome(program, task, params, who) {
   const report = readJSON(taskPaths(program, task).reportJSON, undefined);
   if (params["replaced-by"] !== undefined) {
     const by = String(params["replaced-by"]);
@@ -46,6 +46,9 @@ function resolveOutcome(program, task, params, who) {
   }
   if (params.dropped !== undefined) return { kind: "dropped", why: params.dropped === true ? undefined : String(params.dropped), who };
   if (isFinished(report)) return { kind: "done", who };
+  // The user accepting a proposal to drop it (the close card's Close as dropped, P8).
+  const proposed = readJSON(taskPaths(program, task).meta, {})?.proposedClose;
+  if (proposed?.as === "dropped") return { kind: "dropped", why: typeof proposed.why === "string" ? proposed.why : undefined, who };
   fail(2, "outcomeRequired", `${task} is not done. Say how it ends: agent resolve ${task} --dropped "<why>", or --replaced-by <task>. Closing its pane (agent close) keeps it open instead.`, { task });
 }
 

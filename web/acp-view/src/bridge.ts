@@ -15,10 +15,8 @@ export const APP_HANDLERS = {
   menu: "agentsNextACPMenu",
   /** The title of a ticket the view links, read by the app with the user's logins (a reply). */
   ticketTitle: "agentsNextACPTicketTitle",
-  /** The user's answer to a thread shown beside them (a mirror of a worker's session): the app
-   *  sends it as the user's (`agent send --from user`) and replies how it went. */
-  threadReply: "agentsNextThreadReply",
-  /** A thread beside the user closed as done or kept open (its coordinator proposed closing it). */
+  /** A thread's own page closes its thread or keeps it open (its coordinator proposed closing it),
+   *  and the Threads list goes to a thread's tab (`go-to-pane`, with the row's task and program). */
   threadAction: "agentsNextThreadAction",
   /** The thread a coordinator's pane has open beside it (a reply: { task, title } or {}), named
    *  with what the user writes to the coordinator. */
@@ -49,12 +47,13 @@ export const APP_ACTIONS = {
   backToTerminal: "agents-next-action://back-to-terminal",
   /** The pane's terminal asks something: the app shows it, and comes back once it is answered. */
   terminalQuestion: "agents-next-action://back-to-terminal?question=1",
+  /** Answer in terminal, the user's click on a question a thread's terminal asks (P5): the app shows
+   *  the terminal, and the thread page again once it is answered. */
+  answerInTerminal: "agents-next-action://back-to-terminal?question=1&answer=1",
   restartViewHost: "agents-next-action://restart-view-host",
   /** The pane's agent starts again on its session, under the CLI's current host. */
   restartInACPMode: "agents-next-action://restart-acp",
   copyDiagnostics: "agents-next-action://copy-acp-diagnostics",
-  /** A thread beside the user (or the list in its place) closed with Esc: its tab closes. */
-  closeTab: "agents-next-action://close-tab",
 } as const;
 
 /** The app's scheme for thumbnails of files it draws. */

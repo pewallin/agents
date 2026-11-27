@@ -427,32 +427,40 @@ thread.jsonl's `turn` then has `notify: {why?, text}`, and the host's `onNotify`
 turn that ends without an answer drops the mark and stays quiet. A wake whose turn ended with no
 answer is not drawn from thread.jsonl at all (`threadUpdates`).
 
-## A thread beside you, drawn from its log (2026-11-26)
+## A thread's own page (Projects and Threads, 2026-11-27)
 
-`/thread/<session>?agents-next=acp-page&mirror=1&task=<task>&program=<program>` on any ACP host of
-the Mac shows a worker's thread without its agent: `GET /api/log?session&task&program` gives the
-thread's sessions (its sessions.jsonl in order, each with the sessions it goes on from) as the
-updates a view draws, the thread's title and the last session's meta; `GET /api/log/events`
-(SSE, `updates`) sends each line the log gets after that. So it is never a second view on the
-agent and never a second writer. The page's title is "Threads › <title>". What the user writes
-goes to Agents Next (`agentsNextThreadReply`, bridge version 5), which sends it as theirs (`agent
-send --from user`, the app's token checked over its socket); it shows when the thread's log has it,
-as the user's message (an envelope `from="user" words="verbatim"` is drawn as their bubble, its
-text from the message file). `/threads?program=<program>&from=<task>` is the coordinator's threads
-by state (`GET /api/threads`, what `agents threads` says of the program), in the same tab; ↑/↓ and
-Return, or a click, open one.
+A project's thread lives in one place, its agent's own pane (R1). There is no copy of it beside
+the coordinator any more: `/thread/<session>?mirror=1`, `/worker`, `GET /api/log`,
+`GET /api/log/events`, `GET`/`POST /api/asks`, the `agentsNextThreadReply` handler and Esc
+closing a tab (`close-tab`) are gone. `agent send --to <pane>` no longer reads a pane's page to
+find a thread in it.
 
-In the thread beside you (2026-11-26, step 4b): Enter sends an answer that waits for the agent's
-turn to end, and the field says "Waiting for <agent>'s turn to end" while it does; Option-Return
-sends it into the turn (`agent send --mode steer --from user`), or says the agent cannot take a
-message during its turn. The host's own session's open permission questions show there with Allow
-once and Deny only (`GET`/`POST /api/asks`; Always allow stays in the agent's pane). A close the
-coordinator proposed (`proposedClose` in task.json, given with `/api/log`) is the last row, with
-why, Close as done and Keep open (`agentsNextThreadAction`: `agent resolve`, or `agent resolve
---keep-open`, which only takes the proposal away). `POST /api/cancel` stops the turn of the
-session the host holds (the app's Stop Turn; 409 when the terminal has the session, where the app
-sends Esc). An answer to a thread whose pane is gone opens it again beside its coordinator (`agent
-reopen`) and goes to it once it is there.
+The app loads a thread's own view with two more query items:
+
+- `presentation=thread`: the thread page. Its top line ("Threads › <title>", also while its
+  coordinator's pane is gone), its brief folded to three lines ("Brief ›" opens it), then the
+  conversation with one work line per turn in place of its steps (P9): "Working 2m · <gist>"
+  while the agent works, the gist being its plan's current item or else what its current tool
+  call does, and "Worked 2m" after. There is no Steps or Results control and no ⌃O; the brief is
+  not shown again as the first turn's row. A close the coordinator proposed is the last card,
+  with why, Close as done (Close as dropped for `as: "dropped"`) and Keep open; it sends
+  `agentsNextThreadAction` `{action: "close" | "keep-open"}` without a task, since the pane is
+  the thread. `GET /api/thread` gives the page the thread its pane is (`@agents_role worker`,
+  `@agents_task`, `@agents_program`): its task, program, title, brief (what the brief file says
+  under "## Brief") and an unsettled `proposedClose`, or `{thread: null}`. The page reads it
+  every 5 s while it is seen. Show Session drops `presentation=thread`: the same view is then
+  the session as any agent pane has it.
+- `questions=inline`: a question the pane's terminal asks never makes the view ask the app to
+  show the terminal (P5). It shows as the conversation's last card, "<agent> asks in its
+  terminal", the question's lines and Answer in terminal, which navigates to
+  `agents-next-action://back-to-terminal?question=1&answer=1`; the app shows the terminal and the
+  thread page again once it is answered. Before the conversation shows, the same card floats as
+  the terminal's question did.
+
+`/threads?program=<program>&from=<task>` is the coordinator's threads by state (`GET /api/threads`,
+what `agents threads` says of the program). A row, or Return on the selected one, goes to the
+thread's own tab (`agentsNextThreadAction` `go-to-pane` with its task and program); a thread with
+no pane has no tab to go to.
 
 ## Thread links (2026-11-27)
 
@@ -464,29 +472,20 @@ the thread's state mark and title, the task in the peek; a worker's `%N` shows i
 too. A click asks the app (`agentsNextACPLink`, with the gesture): a plain click opens the thread
 beside the pane, ⌘-click and ⌘↩ go to its pane, and a pane in front of you is shown instead of a
 second view. A thread that waits on you opens with `reply=1` and the cursor in its reply field;
-any other opens for reading.
+any other opens for reading. Since Projects and Threads (step 1) the app takes a click on a thread
+to its own tab instead (above).
 
-`/worker?agents-next=acp-page&task=<task>&program=<program>` is the page beside you of a thread that
-runs in a terminal and has no session log: its brief, its last report and Go to pane
-(`agentsNextThreadAction` `go-to-pane`, which a Threads list row also sends with its task on ⌘-click
-or a double-click). `GET /api/threads` gives each thread's `pane`, `brief` and `report` for it.
-
-The pane's role is on the page's top line instead of its header: a thread beside you and a
+The pane's role is on the page's top line instead of its header: a thread's page and a
 worker's pane say "Threads › <title>" (Threads is the coordinator's list: in the same tab beside
 you, beside the pane from a worker's own view, as `agents-thread:` with no task), a coordinator's
 "<program> · 7 threads", the count opening its threads beside it. At the line's end one control
 folds the line (to its link) and the prompt (to a one-line field with its send button, no
 controls row); it is kept per pane, in the host's storage, and a pane that starts smaller than
-460 × 380 starts folded (fold.ts). Steps or Results is in the prompt of a thread beside you too;
-its tab header no longer has it (bridge version 6: `__agentsNextSetDetailLevel` is gone).
+460 × 380 starts folded (fold.ts). The tab header no longer has Steps or Results (bridge version 6: `__agentsNextSetDetailLevel` is gone).
 
-Pictures and files in a thread beside you (2026-11-27, Peter's report): what you paste or drop into
-its reply field is saved by the host (`/api/attachment`, names without spaces) and goes with your
-words as `@<path>`; a message that names an image or a saved attachment as `@<path>` shows it as
+Pictures and files: a message that names an image or a saved attachment as `@<path>` shows it as
 the message's picture, never as the path (a queued message to any pane carries its attachments
-the same way). What you send shows at once as waiting, until the thread's log has it (a resting
-or busy agent takes it later). `agent send --to <pane>` to a pane that shows a thread beside the
-user (its `@agents_view` or `@agents_web_page` is a thread page) sends to that thread.
+the same way).
 
 A coordinator woken for every message in its threads (2026-11-27): the user's message to a
 worker's thread (`agent send --from user`) and the worker's answer to the user (the turn the
