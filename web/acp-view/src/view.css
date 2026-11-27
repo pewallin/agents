@@ -850,6 +850,9 @@ button:disabled, select:disabled { cursor: default; }
 /* A coordinator's threads in the place of a thread beside you (/threads): drawn as the app's
    Conversations rows are, one line each: the thread's mark, its title, its age. */
 .threads-page .col { gap: 16px; }
+.worker-page .col { gap: 16px; }
+.worker-page .worker-part h2 { margin-left: 0; }
+.worker-part .say p, .worker-part .plain { margin: 0; }
 .thread-group { display: flex; flex-direction: column; gap: 1px; }
 .thread-group h2 { font-size: var(--fs-mono); font-weight: 600; color: var(--dim); margin: 0 0 4px 10px; }
 .thread-row { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 4px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: inherit; font-size: var(--fs); line-height: 20px; text-align: left; cursor: default; }
@@ -880,5 +883,18 @@ button:disabled, select:disabled { cursor: default; }
 .crumb-link { color: var(--fg2); font: inherit; border: 0; background: transparent; text-decoration: none; cursor: pointer; border-radius: 4px; padding: 0 3px; margin: 0 -3px; }
 .crumb-link:hover { color: var(--fg); background: var(--tint); }
 .crumb-here { color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.crumb-bar { flex: none; width: 100%; max-width: calc(var(--fs) * 70); margin: 0 auto; padding: 8px 26px 4px; box-sizing: border-box; }
-.crumb-bar .crumb { margin: 0; }
+.crumb-bar { flex: none; width: 100%; max-width: calc(var(--fs) * 70); margin: 0 auto; padding: 8px 20px 4px 26px; box-sizing: border-box; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.crumb-bar .crumb { margin: 0; min-width: 0; }
+.crumb-bar .sp { flex: 1 1 0; }
+.crumb-bar.folded { padding-top: 4px; padding-bottom: 2px; }
+.crumb-link.count { display: inline-flex; align-items: center; gap: 5px; }
+a.crumb-link { color: var(--fg2); text-decoration: none; }
+/* The fold of the line and the prompt (L11): it stays where it is, folded or not. */
+.fold-control { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 5px; background: transparent; color: var(--dim); cursor: pointer; padding: 0; }
+.fold-control:hover { color: var(--fg); background: var(--tint); }
+.fold-control svg { width: 10px; height: 10px; }
+/* Folded, the prompt is a one-line field and its send button: no controls row. */
+.dock.folded .box { flex-direction: row; align-items: flex-end; gap: 6px; padding: 5px 6px 5px 12px; }
+.dock.folded .box .input { flex: 1 1 auto; min-width: 0; max-height: calc(1.45em + 2px); overflow-y: auto; padding: 2px 0; }
+.dock.folded .box .row { flex: none; }
+.dock.folded .box .row > :not(.go) { display: none; }

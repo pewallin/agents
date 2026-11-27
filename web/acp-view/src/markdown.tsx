@@ -7,7 +7,8 @@ import { defaultRehypePlugins, Streamdown } from "streamdown";
 import "streamdown/styles.css";
 import { CodeBlock, Quote } from "./blocks";
 import { Chip, NamedChip } from "./chips";
-import { rehypeFileLinks, rehypePathRefs } from "./paths";
+import { useCoordination, type Coordination } from "./coordination";
+import { rehypeFileLinks, rehypePathRefs, rehypeTaskRefs } from "./paths";
 import { rehypeTicketLinks, useTicketRules, type TicketRule } from "./tickets";
 
 type Plugins = NonNullable<Parameters<typeof Streamdown>[0]["plugins"]>;
@@ -88,12 +89,29 @@ const controls = { code: { copy: true, download: false }, table: false, mermaid:
 const [sanitize, sanitizeSchema] = defaultRehypePlugins.sanitize as unknown as [unknown, { protocols?: Record<string, string[]> }];
 /** Ticket ids (rehypeTicketLinks) become links after the link filter, to the addresses of the
  *  user's own rules alone, and before the paths, so an id is not taken for one. */
+/** The program's task names, as the view last drew them. */
+let programTasks: readonly string[] = [];
+
+/** The program's task names as one string, worked out once for each coordination the app gives
+ *  (every message's Markdown asks). */
+let lastTasks: { state: Coordination; key: string } | undefined;
+function taskKeyOf(state: Coordination): string {
+  if (lastTasks?.state !== state) {
+    const tasks = [...state.workers.map((worker) => worker.task), ...(state.threads ?? []).map((thread) => thread.task)];
+    lastTasks = { state, key: [...new Set(tasks.filter((task): task is string => Boolean(task)))].sort().join("\n") };
+  }
+  return lastTasks.key;
+}
+
 const rehypePlugins = (tickets: readonly TicketRule[]) => [
   defaultRehypePlugins.raw,
   [sanitize, { ...sanitizeSchema, protocols: { ...sanitizeSchema.protocols, href: [...(sanitizeSchema.protocols?.href ?? []), "file"] } }],
   rehypeFileLinks,
   defaultRehypePlugins.harden,
   rehypeTicketLinks(tickets),
+  // A task name of the program is its thread (Thread links, L6), before paths take its words.
+  // Read when the text is drawn: Streamdown keeps the first processor its plugins made.
+  () => (tree: Parameters<ReturnType<ReturnType<typeof rehypeTaskRefs>>>[0]) => rehypeTaskRefs(programTasks)()(tree),
   rehypePathRefs,
 ] as Parameters<typeof Streamdown>[0]["rehypePlugins"];
 
@@ -102,6 +120,10 @@ const rehypePlugins = (tickets: readonly TicketRule[]) => [
 export default function Markdown({ text, streaming, fade = streaming }: { text: string; streaming: boolean; fade?: boolean }) {
   const [plugins, setPlugins] = useState<Plugins | undefined>(() => loadedPlugins);
   const tickets = useTicketRules();
+  // The program's task names, in the coordinator's view and its workers' (one string, so the
+  // plugins are made again only when a task comes or goes).
+  const taskKey = useCoordination(taskKeyOf);
+  programTasks = taskKey ? taskKey.split("\n") : [];
   const rehype = useMemo(() => rehypePlugins(tickets), [tickets]);
   useEffect(() => {
     if (plugins) return;
@@ -110,7 +132,8 @@ export default function Markdown({ text, streaming, fade = streaming }: { text: 
     return () => { cancelled = true; };
   }, [plugins]);
   return (
-    <Streamdown mode={streaming ? "streaming" : "static"} isAnimating={streaming} plugins={plugins}
+    // Drawn again when the program's tasks change: Streamdown keeps a block it has drawn.
+    <Streamdown key={taskKey} mode={streaming ? "streaming" : "static"} isAnimating={streaming} plugins={plugins}
       animated={fade ? STREAMING_FADE : false}
       components={components} controls={controls} rehypePlugins={rehype} linkSafety={{ enabled: false }}>
       {text}

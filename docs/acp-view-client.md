@@ -446,3 +446,29 @@ why, Close as done and Keep open (`agentsNextThreadAction`: `agent resolve`, or 
 session the host holds (the app's Stop Turn; 409 when the terminal has the session, where the app
 sends Esc). An answer to a thread whose pane is gone opens it again beside its coordinator (`agent
 reopen`) and goes to it once it is there.
+
+## Thread links (2026-11-27)
+
+Where a click on a worker or a thread goes (the design thread's "Thread links" page, L1 to L11,
+built for Peter to try). In a coordinator's view and in its workers' views, a task name of the
+program is that thread wherever the text names it, as a whole word with or without backticks
+(`rehypeTaskRefs` in paths.ts; a one-word task such as `docs` only in backticks). Its chip shows
+the thread's state mark and title, the task in the peek; a worker's `%N` shows its thread's mark
+too. A click asks the app (`agentsNextACPLink`, with the gesture): a plain click opens the thread
+beside the pane, ⌘-click and ⌘↩ go to its pane, and a pane in front of you is shown instead of a
+second view. A thread that waits on you opens with `reply=1` and the cursor in its reply field;
+any other opens for reading.
+
+`/worker?agents-next=acp-page&task=<task>&program=<program>` is the page beside you of a thread that
+runs in a terminal and has no session log: its brief, its last report and Go to pane
+(`agentsNextThreadAction` `go-to-pane`, which a Threads list row also sends with its task on ⌘-click
+or a double-click). `GET /api/threads` gives each thread's `pane`, `brief` and `report` for it.
+
+The pane's role is on the page's top line instead of its header: a thread beside you and a
+worker's pane say "Threads › <title>" (Threads is the coordinator's list: in the same tab beside
+you, beside the pane from a worker's own view, as `agents-thread:` with no task), a coordinator's
+"<program> · 7 threads", the count opening its threads beside it. At the line's end one control
+folds the line (to its link) and the prompt (to a one-line field with its send button, no
+controls row); it is kept per pane, in the host's storage, and a pane that starts smaller than
+460 × 380 starts folded (fold.ts). Steps or Results is in the prompt of a thread beside you too;
+its tab header no longer has it (bridge version 6: `__agentsNextSetDetailLevel` is gone).

@@ -1574,6 +1574,11 @@ function handleBridge(
             agent: thread.harness ?? (Array.isArray(thread.sessions) ? (thread.sessions[0] as { agent?: unknown } | undefined)?.agent ?? null : null),
             line: typeof thread.line === "string" ? thread.line : null,
             session: Array.isArray(thread.sessions) ? (thread.sessions[0] as { session?: unknown } | undefined)?.session ?? null : null,
+            // For the page of a thread that runs in a terminal (no session log): its brief, its
+            // report and its pane (Thread links, L3).
+            pane: typeof thread.pane === "string" ? thread.pane : null,
+            brief: typeof thread.brief === "string" ? thread.brief : null,
+            report: typeof thread.report === "string" ? thread.report : null,
           })),
         });
       } catch (failure) {

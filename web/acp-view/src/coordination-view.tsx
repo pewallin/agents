@@ -3,8 +3,8 @@
 // commands an agent runs as event rows, and a line at the top of a worker's view naming its
 // coordinator and thread. A coordinator's workers are its threads, listed in the app.
 import { lazy, Suspense, useContext, useEffect, useState, type ReactNode } from "react";
-import { Chip, ChipHostContext, NamedChip } from "./chips";
-import { describeAgentEvent, messageFileText, tasksIn, useCoordination, workerNamed, workerTitle, type AgentEvent } from "./coordination";
+import { Chip, ChipHostContext, NamedChip, StateMark } from "./chips";
+import { describeAgentEvent, messageFileText, tasksIn, threadNamed, useCoordination, workerNamed, workerTitle, type AgentEvent } from "./coordination";
 
 const Markdown = lazy(() => import("./markdown"));
 
@@ -27,8 +27,11 @@ export function WorkerChip({ task, pane }: { task: string; pane?: string }) {
   const id = worker?.pane ?? (coordination.workers.length === 0 && coordination.role !== "coordinator" ? pane : undefined);
   const label = workerTitle(coordination, task);
   if (!id) {
+    // Its thread's mark, from the one state the app gives every view (Thread links, L6).
+    const state = threadNamed(coordination, task)?.threadState;
     return (
-      <a className="chip thread" href={threadHref(task)} title={label === task ? "Show the thread" : `${label}\n${task} · Show the thread`}>
+      <a className="chip thread" href={threadHref(task)} title={label === task ? "Show the thread beside" : `${label}\n${task} · Show the thread beside`}>
+        {state && <StateMark state={state === "needs-you" ? "needs-you" : state === "done" ? "done" : state === "working" ? "working" : state === "resolved" ? "resolved" : "idle"} />}
         <span className="nm">{label}</span>
       </a>
     );
@@ -166,29 +169,6 @@ export function AgentEventLine({ event, failed }: { event: AgentEvent; failed: b
               : describeAgentEvent(event)}
         {event.kind === "report" && event.line && <span className="dim"> · {event.line}</span>}
         {failed && <span className="del"> · failed</span>}
-      </span>
-    </div>
-  );
-}
-
-/** At the top of a worker's view: whose worker it is, its task and its latest report. */
-/** The small square in a coordinator's colour before its name (decoration only). */
-export function CoordinatorBadge({ color }: { color?: string }) {
-  if (!color || !/^#[0-9a-f]{6}$/i.test(color)) return null;
-  return <span className="coord-badge" style={{ background: color }} aria-hidden="true" />;
-}
-
-export function WorkerLine() {
-  const { role, task, threadTitle, coordinator, report, reportLine, programName, programColor } = useCoordination();
-  if (role !== "worker" || !coordinator) return null;
-  return (
-    <div className="worker-line">
-      <Spark />
-      <span className="what">
-        Worker of <CoordinatorBadge color={programColor} /><Chip target={{ kind: "pane", id: coordinator.pane, state: coordinator.status }} label={programName ?? coordinator.title ?? coordinator.pane} />
-        {threadTitle ? <> · <span title={task}>{threadTitle}</span></> : task && <> · task <code>{task}</code></>}
-        {task && <> · <a className="threads-link" href={threadHref()} title="Show the coordinator's threads">threads</a></>}
-        {report && <span className="dim"> · {report}{reportLine ? `: ${reportLine}` : ""}</span>}
       </span>
     </div>
   );

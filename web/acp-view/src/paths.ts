@@ -144,3 +144,55 @@ export function rehypePathRefs() {
   };
   return (tree: HastNode) => visit(tree);
 }
+
+/** Whether a task name links where it stands in the prose as a plain word: a name of more than one
+ *  word (`wi01-dts`, `ios_tests`, `v2.notes`), never a common word such as "docs", which only links
+ *  in backticks. */
+export function linksAsWord(task: string): boolean {
+  return task.length >= 3 && /[-_.\d]/.test(task) && /[A-Za-z]/.test(task);
+}
+
+/** The task names of the program a run of prose names, each as a whole word (Thread links, L6:
+ *  the coordinator writes a worker's task name, the view shows it as that thread). */
+export function taskTokens(text: string, tasks: ReadonlySet<string>): TextToken[] {
+  if (tasks.size === 0) return [];
+  const found: TextToken[] = [];
+  for (const match of text.matchAll(/[A-Za-z0-9][\w.-]*[A-Za-z0-9]/g)) {
+    const at = match.index ?? 0;
+    // Part of a path or a longer name is not the task's.
+    if (at > 0 && /[\w/~%.-]/.test(text[at - 1])) continue;
+    const end = at + match[0].length;
+    if (end < text.length && /[\w/]/.test(text[end])) continue;
+    if (tasks.has(match[0])) found.push({ start: at, end, token: match[0] });
+  }
+  return found;
+}
+
+/** A rehype plugin, run before the one that finds paths: each task name of the program in the
+ *  prose becomes a `span[data-path-ref]`, which the view shows as that thread's chip. */
+export function rehypeTaskRefs(tasks: readonly string[]) {
+  const names = new Set(tasks.filter(linksAsWord));
+  const visit = (node: HastNode) => {
+    if (!node.children) return;
+    const children: HastNode[] = [];
+    for (const child of node.children) {
+      if (child.type === "element") {
+        if (!SKIPPED.has(child.tagName ?? "") && child.properties?.dataPathRef === undefined) visit(child);
+        children.push(child);
+        continue;
+      }
+      if (child.type !== "text" || !child.value) { children.push(child); continue; }
+      const tokens = taskTokens(child.value, names);
+      if (tokens.length === 0) { children.push(child); continue; }
+      let at = 0;
+      for (const token of tokens) {
+        if (token.start > at) children.push({ type: "text", value: child.value.slice(at, token.start) });
+        children.push({ type: "element", tagName: "span", properties: { dataPathRef: token.token }, children: [{ type: "text", value: token.token }] });
+        at = token.end;
+      }
+      if (at < child.value.length) children.push({ type: "text", value: child.value.slice(at) });
+    }
+    node.children = children;
+  };
+  return () => (tree: HastNode) => visit(tree);
+}

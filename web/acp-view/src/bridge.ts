@@ -3,7 +3,7 @@
 // version it speaks (data-acp-bridge on <html>), so a view and an app of different releases are
 // noticed in the pane's log instead of failing quietly. Bump BRIDGE_VERSION when a channel or its
 // message changes.
-export const BRIDGE_VERSION = 5;
+export const BRIDGE_VERSION = 6;
 
 /** The app's message handlers (window.webkit.messageHandlers.<name>.postMessage). */
 export const APP_HANDLERS = {
@@ -29,8 +29,6 @@ export const PAGE_ENTRIES = {
   applyCoordination: "__agentsNextApplyCoordination",
   openBeside: "__agentsNextOpenBeside",
   conversationFailed: "__agentsNextConversationFailed",
-  /** The detail a thread beside the user shows, from its tab's header (Steps or Results). */
-  setDetailLevel: "__agentsNextSetDetailLevel",
 } as const;
 
 /** Events the app dispatches on the page's window. */

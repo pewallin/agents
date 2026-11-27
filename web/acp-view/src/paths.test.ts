@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pathTokens, rehypePathRefs, workFolders } from "./paths";
+import { linksAsWord, pathTokens, rehypePathRefs, rehypeTaskRefs, taskTokens, workFolders } from "./paths";
 import type { ToolCall } from "./session-state";
 
 const tokens = (text: string) => pathTokens(text).map((token) => token.token);
@@ -53,5 +53,27 @@ describe("the folders the agent worked in", () => {
     const folders = workFolders(calls);
     expect(folders).toHaveLength(20);
     expect(folders[0]).toBe("/code/r29");
+  });
+});
+
+describe("task names in prose", () => {
+  const tasks = new Set(["wi01-dts", "wi07a-brandgate", "docs"]);
+  const found = (text: string) => taskTokens(text, tasks).map((token) => token.token);
+
+  it("finds a task name as a whole word", () => {
+    expect(found("- wi01-dts: item-creation-service #3 merged; wi07a-brandgate asks you.")).toEqual(["wi01-dts", "wi07a-brandgate"]);
+  });
+
+  it("leaves names inside paths and longer names", () => {
+    expect(found("see notes/wi01-dts.md and wi01-dts-old, xwi01-dts")).toEqual([]);
+  });
+
+  it("links a one-word task only in backticks", () => {
+    expect(linksAsWord("docs")).toBe(false);
+    expect(linksAsWord("wi01-dts")).toBe(true);
+    const tree = { type: "root", children: [{ type: "element", tagName: "p", children: [{ type: "text", value: "docs and wi01-dts" }] }] };
+    rehypeTaskRefs([...tasks])()(tree as never);
+    const p = tree.children[0] as { children: Array<{ value?: string; properties?: Record<string, unknown> }> };
+    expect(p.children.map((child) => child.value ?? child.properties?.dataPathRef)).toEqual(["docs and ", "wi01-dts"]);
   });
 });

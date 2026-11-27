@@ -23,8 +23,9 @@ import { ReviewPane } from "./review";
 import { LinkedText } from "./blocks";
 import { quoted } from "./compose";
 import { attachmentBlocks, attachmentsFromURIs, readAttachment, type Attachment } from "./attachments";
-import { AgentEventLine, BriefRow, DeliveryRow, useUserWords, WorkerLine } from "./coordination-view";
-import { parseAgentCommand, parseDelivery, parseWorkerPrompt } from "./coordination";
+import { AgentEventLine, BriefRow, DeliveryRow, threadHref, useUserWords } from "./coordination-view";
+import { parseAgentCommand, parseDelivery, parseWorkerPrompt, useCoordination, workerState } from "./coordination";
+import { makeFold } from "./fold";
 import { allCommands, choiceFor, filterChoices, filterCommands, needsInput, optionTarget, slashDraft, viewCommandPicks, viewCommands, type Choice, type SlashCommand, type ViewCommandId } from "./slash";
 import { filterConversations, openInLabel, pickConversation, relativeTime, type PaneConversation, type PaneHistory } from "./conversations";
 import { canExpand, DETAIL_TITLES, endingFailure, failedCalls, lastLines, useOpenedSteps, nextDetailLevel, setOpened as setOpenedStep, storeDetailLevel, storedDetailLevel, turnSummary, type DetailLevel } from "./detail";
@@ -1225,6 +1226,12 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
     onHeight(element.offsetHeight);
     return () => observer.disconnect();
   }, [onHeight]);
+  // A thread beside you that waits on you opens with the cursor in its reply field; any other
+  // opens for reading (Thread links, L8): the app says which (?reply=1).
+  useEffect(() => {
+    if (!MIRROR?.reply) return;
+    requestAnimationFrame(() => input.current?.focus());
+  }, []);
   // Quote in Reply, from the app's context menu: the selection goes into the field as a quote.
   useEffect(() => {
     const onQuote = (event: Event) => {
@@ -1572,9 +1579,12 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
   const allowAll = useAllowAll(session);
   const showModes = modes && modes.availableModes.length > 1 && !configOptions.some((option) => option.category === "mode");
   const busy = prompting || working;
+  // Folded with its page's line (L11): a one-line field and its send button.
+  const foldedLine = usePageFold((state) => state.folded);
+  const folded = useHasPageLine() && foldedLine;
 
   return (
-    <div className="dock" ref={dock}>
+    <div className={`dock${folded ? " folded" : ""}`} ref={dock}>
       <div className="inner">
         <OutdatedHost agentName={info.agent.name} typed={draft.trim() !== "" || attachments.length > 0} />
         <PlanLine />
@@ -1759,7 +1769,14 @@ function Dock({ session, info, now, onHeight, onSend, level, onCycleLevel, openi
             </button>}
             {/* While the agent still opens the session its history shows above, and the row says
                 so where the session's choices come once it is open. */}
-            {opening ? <span className="opening-line" role="status"><i className="pulse" />{opening}</span> : MIRROR ? null : <>
+            {opening ? <span className="opening-line" role="status"><i className="pulse" />{opening}</span> : MIRROR ? (
+              // A thread beside you has its Steps or Results in the prompt too, as every ACP pane
+              // (Thread links, L9).
+              <button className="opt level" type="button" aria-label={`Detail: ${DETAIL_TITLES[level]}`} title={`How much of the work shows: ${DETAIL_TITLES[level]} (⌃O)`} onClick={onCycleLevel}>
+                <LevelIcon level={level} />
+                <span className="v">{DETAIL_TITLES[level]}</span>
+              </button>
+            ) : <>
               {showModes && (
                 <label className="opt" title={modesLabel(info.agent.id)}>
                   <span className="lb">{modesLabel(info.agent.id)}</span>
@@ -2108,10 +2125,6 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   };
   const [level, setLevel] = useState<DetailLevel>(storedDetailLevel);
   const cycleLevel = useCallback(() => setLevel((current) => { const next = nextDetailLevel(current); storeDetailLevel(next); return next; }), []);
-  // A thread beside you takes its level from its tab's header (Steps or Results).
-  useEffect(() => {
-    definePageEntry(PAGE_ENTRIES.setDetailLevel, (next: unknown) => { if (next === "steps" || next === "results") setLevel(next); });
-  }, []);
   // ⌃O cycles how much of the work shows, wherever the keyboard is in the view.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -2192,8 +2205,9 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
     <PeekLayer>
     <div className={`view${review ? " reviewing" : ""}`} data-acp-ready="true" data-attention={state}>
       <div className="main" ref={main}>
-        {/* A thread beside you: its line stays above the conversation as it scrolls. */}
-        {MIRROR && <div className="crumb-bar"><MirrorCrumb /></div>}
+        {/* The page's top line (a thread beside you, a worker's or a coordinator's pane) stays
+            above the conversation as it scrolls. */}
+        <PageLine />
         <div className="scroll-wrap">
         <ScrollThumb target={scroller} />
         <div className="scroll under-dock" ref={scroller} onScroll={(event) => {
@@ -2201,7 +2215,6 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
         }}>
           <div className={arrives ? "col arrive" : "col"}>
-            <WorkerLine />
             {turns.length === 0 && <div className="empty">Nothing in the session yet. Write to {info.agent.name} below.</div>}
             {turns.map((turn, index) => (
               <TurnView key={turn.id} turn={turn} last={index === turns.length - 1} working={working && index === turns.length - 1} cwd={info.cwd}
@@ -2289,7 +2302,9 @@ function openChip(target: ChipTarget, options: { alternate: boolean; command?: b
       if (!postToApp(APP_HANDLERS.quickLook, { path: target.path })) window.open(`/api/raw?path=${encodeURIComponent(target.path)}&token=${encodeURIComponent(token ?? "")}`, "_blank");
       return;
     case "pane":
-      postToApp(APP_HANDLERS.link, { href: target.id });
+      // A worker's pane (by its name or its id) is its thread: the app opens it beside, ⌘ goes
+      // to the pane (Thread links, L1, L5).
+      postToApp(APP_HANDLERS.link, { href: target.id, gesture: options.command ? "external" : options.alternate ? "tab" : "open" });
       return;
     case "url":
     case "ticket":
@@ -2573,27 +2588,83 @@ function useHistoryCameIn(session: AcpSession | null, watching: boolean): boolea
 }
 
 /** A thread shown from its log beside you (?mirror=1, with its worker's task and program). */
-const MIRROR: { task?: string; program?: string } | null = (() => {
+const MIRROR: { task?: string; program?: string; reply?: boolean } | null = (() => {
   const params = new URLSearchParams(location.search);
   if (params.get("mirror") !== "1") return null;
-  return { ...(params.get("task") ? { task: params.get("task")! } : {}), ...(params.get("program") ? { program: params.get("program")! } : {}) };
+  return { ...(params.get("task") ? { task: params.get("task")! } : {}), ...(params.get("program") ? { program: params.get("program")! } : {}), ...(params.get("reply") === "1" ? { reply: true } : {}) };
 })();
 
 /** What a thread beside you says beside its conversation: a close its coordinator proposed. */
 const useMirrorThread = create<{ proposedClose: { why: string } | null; title?: string }>(() => ({ proposedClose: null }));
 
-/** The line above a thread beside you: "Threads › <title>", Threads a link to the coordinator's
- *  threads in the same tab (Peter, 2026-11-26: in the page, as Claude does). */
-function MirrorCrumb() {
-  const title = useMirrorThread((state) => state.title);
-  if (!MIRROR?.program || !MIRROR.task) return null;
-  const list = `/threads?${new URLSearchParams({ "agents-next": "acp-page", program: MIRROR.program, from: MIRROR.task })}${location.hash}`;
+/** Where the page's fold is kept: per thread beside you, else per pane (its host's storage). */
+const usePageFold = makeFold(`agents.fold:${MIRROR ? `thread:${MIRROR.program ?? ""}:${MIRROR.task ?? ""}` : "pane"}`);
+
+/** Whether the page has a top line, and with it the fold: a thread beside you, a worker's or a
+ *  coordinator's pane. */
+function useHasPageLine(): boolean {
+  const role = useCoordination((state) => state.role === "coordinator" || (state.role === "worker" && Boolean(state.coordinator)));
+  return Boolean(MIRROR?.program && MIRROR.task) || role;
+}
+
+function FoldControl({ folded, toggle }: { folded: boolean; toggle: () => void }) {
   return (
-    <nav className="crumb" aria-label="Thread">
-      <button type="button" className="crumb-link" onClick={() => location.assign(list)}>Threads</button>
-      <span className="crumb-sep" aria-hidden="true">›</span>
-      <span className="crumb-here">{title ?? MIRROR.task}</span>
-    </nav>
+    <button type="button" className="fold-control" aria-expanded={!folded}
+      aria-label={folded ? "Unfold the line and the prompt" : "Fold the line and the prompt"}
+      title={folded ? "Show the line and the prompt's controls" : "Fold the line and the prompt, for a small pane"} onClick={toggle}>
+      <svg viewBox="0 0 10 10" aria-hidden="true"><path d={folded ? "M2.5 4l2.5 2.5L7.5 4" : "M2.5 6l2.5-2.5L7.5 6"} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    </button>
+  );
+}
+
+/** The page's top line, which holds the pane's role (Thread links, L10; Peter, 2026-11-26: in the
+ *  page, as Claude does): a thread beside you and a worker's pane say "Threads › <title>", Threads
+ *  a link to the coordinator's threads (in the same tab beside you, beside the pane in a worker's);
+ *  a coordinator's says "<program> · 7 threads", the count a link to its threads beside it. At its
+ *  end the fold (L11): folded, the line keeps its link alone. */
+function PageLine() {
+  const folded = usePageFold((state) => state.folded);
+  const toggle = usePageFold((state) => state.toggle);
+  const mirrorTitle = useMirrorThread((state) => state.title);
+  const coordination = useCoordination();
+  let line: ReactNode = null;
+  if (MIRROR?.program && MIRROR.task) {
+    const list = `/threads?${new URLSearchParams({ "agents-next": "acp-page", program: MIRROR.program, from: MIRROR.task })}${location.hash}`;
+    line = (
+      <nav className="crumb" aria-label="Thread">
+        <button type="button" className="crumb-link" onClick={() => location.assign(list)}>Threads</button>
+        <span className="crumb-sep" aria-hidden="true">›</span>
+        {!folded && <span className="crumb-here">{mirrorTitle ?? MIRROR.task}</span>}
+      </nav>
+    );
+  } else if (coordination.role === "worker" && coordination.coordinator) {
+    line = (
+      <nav className="crumb" aria-label="Thread">
+        <a className="crumb-link" href={threadHref()} title={`Show the threads of ${coordination.programName ?? "its coordinator"} beside`}>Threads</a>
+        <span className="crumb-sep" aria-hidden="true">›</span>
+        {!folded && <span className="crumb-here" title={coordination.task}>{coordination.threadTitle ?? coordination.task}</span>}
+      </nav>
+    );
+  } else if (coordination.role === "coordinator") {
+    const threads = coordination.threads?.filter((thread) => thread.threadState !== "resolved");
+    const count = threads?.length ?? coordination.workers.length;
+    const needsYou = (threads ?? []).some((thread) => thread.threadState === "needs-you") || coordination.workers.some((worker) => workerState(worker) === "needs-you");
+    line = (
+      <nav className="crumb" aria-label="Coordinator">
+        {!folded && <><span className="crumb-here">{coordination.programName ?? "Coordinator"}</span><span className="crumb-sep" aria-hidden="true">·</span></>}
+        <a className="crumb-link count" href={threadHref()} title="Show its threads beside">
+          {needsYou && <StateMark state="needs-you" />}{count} {count === 1 ? "thread" : "threads"}
+        </a>
+      </nav>
+    );
+  }
+  if (!line) return null;
+  return (
+    <div className={`crumb-bar${folded ? " folded" : ""}`}>
+      {line}
+      <span className="sp" />
+      <FoldControl folded={folded} toggle={toggle} />
+    </div>
   );
 }
 
@@ -2624,7 +2695,7 @@ function ProposedCloseCard() {
 
 /** Esc closes a thread beside you, or the list in its place, as its tab's close does; not while
  *  something of the page takes it first (a menu, a field with text). */
-if (typeof window !== "undefined" && (MIRROR || location.pathname === "/threads")) {
+if (typeof window !== "undefined" && (MIRROR || location.pathname === "/threads" || location.pathname === "/worker")) {
   window.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
     const active = document.activeElement as HTMLTextAreaElement | HTMLInputElement | null;
@@ -2818,7 +2889,21 @@ const outputId = decodeURIComponent(location.pathname.match(/^\/output\/([^/]+)/
 /** A coordinator's threads, in the place of a thread beside you (/threads?program=&from=). */
 const threadsOf = location.pathname === "/threads" ? new URLSearchParams(location.search).get("program") : null;
 
-interface ListedThread { task: string; title: string; state: string; session: string | null; updatedAt?: string | null; resolvedAt?: string | null; agent?: string | null; line?: string | null }
+interface ListedThread { task: string; title: string; state: string; session: string | null; updatedAt?: string | null; resolvedAt?: string | null; agent?: string | null; line?: string | null; pane?: string | null; brief?: string | null; report?: string | null }
+
+/** A thread of a terminal (no session log, Thread links, L3), in the place of a thread beside you
+ *  (/worker?program=&task=). */
+const workerOf = location.pathname === "/worker" ? (() => {
+  const params = new URLSearchParams(location.search);
+  const task = params.get("task");
+  const program = params.get("program");
+  return task && program ? { task, program } : null;
+})() : null;
+
+/** Asks the app to go to a thread's own pane (⌘-click, ⌘↩, Go to pane). */
+function goToThreadPane(task: string, program: string): void {
+  void appHandler(APP_HANDLERS.threadAction)?.postMessage({ action: "go-to-pane", task, program });
+}
 
 /** An agent's name as the app writes it. */
 function agentLabel(agent: string | null | undefined): string {
@@ -2849,10 +2934,12 @@ const THREAD_GROUPS: Array<{ title: string; states: string[] }> = [
   { title: "Resolved", states: ["resolved"] },
 ];
 
-/** The page of a thread, beside you, drawn from its log. */
+/** The page of a thread, beside you: drawn from its log, or for one that runs in a terminal its
+ *  brief and report. */
 function mirrorAddress(thread: ListedThread, program: string): string {
+  if (!thread.session) return `/worker?${new URLSearchParams({ "agents-next": "acp-page", task: thread.task, program })}${location.hash}`;
   const query = new URLSearchParams({ "agents-next": "acp-page", mirror: "1", task: thread.task, program });
-  return `/thread/${encodeURIComponent(thread.session ?? "")}?${query}${location.hash}`;
+  return `/thread/${encodeURIComponent(thread.session)}?${query}${location.hash}`;
 }
 
 /** The coordinator's threads by state, in the tab where a thread was: a row opens that thread
@@ -2876,9 +2963,11 @@ function ThreadsPage({ program }: { program: string }) {
         event.preventDefault();
         const next = event.key === "ArrowDown" ? Math.min(ordered.length - 1, at + 1) : Math.max(0, at < 0 ? 0 : at - 1);
         setSelected(ordered[next].task);
-      } else if (event.key === "Enter" && at >= 0 && ordered[at].session) {
+      } else if (event.key === "Enter" && at >= 0) {
         event.preventDefault();
-        location.assign(mirrorAddress(ordered[at], program));
+        // ⌘↩ goes to its pane, as a ⌘-click does (Thread links, L1).
+        if (event.metaKey && ordered[at].pane) goToThreadPane(ordered[at].task, program);
+        else location.assign(mirrorAddress(ordered[at], program));
       }
     };
     window.addEventListener("keydown", onKey);
@@ -2890,8 +2979,14 @@ function ThreadsPage({ program }: { program: string }) {
     const detail = [agentLabel(thread.agent), thread.line].filter(Boolean).join(" · ");
     return (
       <button key={thread.task} type="button" className={`thread-row ${thread.state}${thread.task === selected ? " selected" : ""}`}
-        disabled={!thread.session} title={thread.session ? undefined : "This thread has no session log to show"}
-        onClick={() => { setSelected(thread.task); if (thread.session) location.assign(mirrorAddress(thread, program)); }}>
+        title={thread.pane ? "Click: show it here · ⌘-click or double-click: go to its pane" : undefined}
+        onClick={(event) => {
+          setSelected(thread.task);
+          // ⌘-click and a double-click go to its pane, a click shows it here (Thread links, L1).
+          if ((event.metaKey || event.detail >= 2) && thread.pane) { goToThreadPane(thread.task, program); return; }
+          if (event.detail >= 2) return;
+          location.assign(mirrorAddress(thread, program));
+        }}>
         <span className={`thread-mark ${markState(thread.state)}`}><StateMark state={markState(thread.state)} /></span>
         <span className="thread-text">
           <span className="thread-line1">
@@ -2924,6 +3019,60 @@ function ThreadsPage({ program }: { program: string }) {
         );
       })}
     </div></div></div></div>
+  );
+}
+
+/** A thread that runs in a terminal, beside you (Thread links, L3): there is no conversation to
+ *  draw, so its brief, its last report and Go to pane. */
+function WorkerPage({ task, program }: { task: string; program: string }) {
+  const [thread, setThread] = useState<ListedThread | null | undefined>(undefined);
+  const [brief, setBrief] = useState<string | null>(null);
+  const [report, setReport] = useState<string | null>(null);
+  useEffect(() => {
+    hostJson<{ threads: ListedThread[] }>(`/api/threads?program=${encodeURIComponent(program)}`)
+      .then((value) => {
+        const found = value.threads.find((entry) => entry.task === task) ?? null;
+        setThread(found);
+        document.title = found?.title || task;
+        const text = (path: string | null | undefined, set: (value: string | null) => void, pick: (text: string) => string) => {
+          if (path) hostJson<{ text: string }>(`/api/text?path=${encodeURIComponent(path)}`).then((value) => set(pick(value.text).trim() || null), () => set(null));
+        };
+        // The brief file starts with its title and where it came from; the brief is under "## Brief".
+        text(found?.brief, setBrief, (raw) => (raw.split(/^## Brief\s*$/m)[1] ?? raw).split(/^## /m)[0].replace(/^\s*ROLE:[^\n]*\n+/i, ""));
+        text(found?.report, setReport, (raw) => raw);
+      }, () => setThread(null));
+  }, [task, program]);
+  if (thread === undefined) return <Notice>Opening the thread…</Notice>;
+  if (thread === null) return <Notice>The thread {task} is not there any more.</Notice>;
+  const list = `/threads?${new URLSearchParams({ "agents-next": "acp-page", program, from: task })}${location.hash}`;
+  const age = shortAge(thread.updatedAt);
+  return (
+    <div className="view worker-page"><div className="main">
+      <div className="crumb-bar">
+        <nav className="crumb" aria-label="Thread">
+          <button type="button" className="crumb-link" onClick={() => location.assign(list)}>Threads</button>
+          <span className="crumb-sep" aria-hidden="true">›</span>
+          <span className="crumb-here">{thread.title || task}</span>
+          <span className={`thread-mark ${markState(thread.state)}`}><StateMark state={markState(thread.state)} /></span>
+        </nav>
+      </div>
+      <div className="scroll"><div className="col">
+        {brief && (
+          <section className="thread-group worker-part">
+            <h2>Brief</h2>
+            <div className="say"><Suspense fallback={<p className="plain">{brief}</p>}><Markdown text={brief} streaming={false} /></Suspense></div>
+          </section>
+        )}
+        <section className="thread-group worker-part">
+          <h2>Last report{age ? ` · ${age === "now" ? "now" : `${age} ago`}` : ""}</h2>
+          {report
+            ? <div className="say"><Suspense fallback={<p className="plain">{report}</p>}><Markdown text={report} streaming={false} /></Suspense></div>
+            : <p className="plain">{thread.line || "No report yet."}</p>}
+        </section>
+        <p className="plain dim">This thread runs in a terminal, so there is no conversation to draw.</p>
+        {thread.pane && <div className="close-actions"><button type="button" className="pbtn" onClick={() => goToThreadPane(task, program)}>Go to pane</button></div>}
+      </div></div>
+    </div></div>
   );
 }
 
@@ -2979,6 +3128,7 @@ function App() {
   if (beadId) return <BeadPage id={beadId} />;
   if (outputId) return <OutputPage id={outputId} />;
   if (threadsOf) return <ThreadsPage program={threadsOf} />;
+  if (workerOf) return <WorkerPage task={workerOf.task} program={workerOf.program} />;
   if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
   if (!info) return <Opening />;
   return <SessionGate info={info} />;
