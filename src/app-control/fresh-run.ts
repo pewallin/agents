@@ -1,8 +1,8 @@
 // @ts-nocheck
 // A coordinator run that starts fresh (T6): its live session goes on while it is warm (its last
 // turn under an hour ago, its context under half, conversation.ts nextRunStart); otherwise the
-// event that wakes it starts a new session in its pane, from its conversation, OVERVIEW.md,
-// MEMORY.md, the open threads and the event: the take-over and promote handover as the normal
+// event that wakes it starts a new session in its pane, from its conversation, MEMORY.md, the
+// open threads and the event: the take-over and promote handover as the normal
 // path. How the run started goes into its turn's details (`how`), never into the conversation.
 
 import fs from "node:fs";
@@ -81,7 +81,7 @@ export function startFreshRunIfCold(program, record, status, log = () => {}) {
   const cli = ensureSharedCLI();
   const text = coordinatorStartMessage({
     name: programName(program), program, protocol,
-    overview: path.join(program, "OVERVIEW.md"), context: path.join(program, "CONTEXT.md"), memoryFile: path.join(program, "MEMORY.md"),
+    context: path.join(program, "CONTEXT.md"), memoryFile: path.join(program, "MEMORY.md"),
     cli: shellQuote(cli), hint: asHint(coordinatorCLIName(record.uuid)), skill: skillFile(),
     instructions: userInstructions() ? userInstructionsPath() : undefined,
     start: "fresh",

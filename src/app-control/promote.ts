@@ -7,7 +7,7 @@ import path from "node:path";
 import { agentSessionFile } from "./agent-state.js";
 import { requestID } from "./app-socket.js";
 import { LANGUAGE_OPTION, asHint, coordinatorCLIName, coordinatorLanguage, ensureSharedCLI, languageSentence, threadTitle, writeBrief, writeStatusFile, writeTaskMeta, writeTaskReport, briefWarning, workerGuidePath } from "./briefs.js";
-import { coordinatorToTakeOver, giveCoordinatorBackground, goneCoordinators, inheritCoordinatorBackground, programNotes, protocolFile, protocolText, skillFile, starterContext, starterOverview, takeOver, userInstructions, userInstructionsPath, waitForSpawnedRecord } from "./coordinator.js";
+import { coordinatorToTakeOver, giveCoordinatorBackground, goneCoordinators, inheritCoordinatorBackground, programNotes, protocolFile, protocolText, skillFile, starterContext, takeOver, userInstructions, userInstructionsPath, waitForSpawnedRecord } from "./coordinator.js";
 import { shellQuote } from "./launch.js";
 import { enqueueMessage } from "./messages.js";
 import { fail, usage } from "./output.js";
@@ -20,7 +20,7 @@ import { runAgentSpawn } from "./spawn.js";
 import { noteSubWorker, subWorkerLead } from "./spawn-support.js";
 import { deliverQueuedNow } from "./steer.js";
 import { agentStatuses, ensureSupervisor } from "./supervisor-control.js";
-import { readSessionLines, recordCoordinatorSession, requireTitle, sessionsFile, threadRows, threadsEpoch, titleWarning, transcriptLookup } from "./threads.js";
+import { readSessionLines, recordCoordinatorSession, requireTitle, sessionsFile, titleSeed, threadRows, threadsEpoch, titleWarning, transcriptLookup } from "./threads.js";
 
 export async function runAgentPromote(command) {
   const params = command.params;
@@ -50,8 +50,7 @@ export async function runAgentPromote(command) {
   const language = coordinatorLanguage(params, record);
   const contextFile = path.join(program, "CONTEXT.md");
   if (!fs.existsSync(contextFile)) writeFileAtomic(contextFile, starterContext(record));
-  const overviewFile = path.join(program, "OVERVIEW.md");
-  if (!fs.existsSync(overviewFile)) writeFileAtomic(overviewFile, starterOverview());
+  // OVERVIEW.md is no longer kept: a file a program has from before is left as it is.
   const cli = ensureSharedCLI();
   // Another coordinator still leads this folder's earlier work, so this one got a program of its
   // own: if the user meant it to carry on that work, it takes the other over instead.
@@ -96,7 +95,7 @@ export async function runAgentPromote(command) {
       ? ` The coordinator before you ran as ${tookOver.previousSession.agent}; its transcript is ${tookOver.previousSession.file}. Read it only where MEMORY.md leaves a gap, and check what either says was done against the repository before you build on it.`
       : "";
     const text = coordinatorStartMessage({
-      name: programName(program), program, protocol, overview: overviewFile, context: contextFile, memoryFile: path.join(program, "MEMORY.md"),
+      name: programName(program), program, protocol, context: contextFile, memoryFile: path.join(program, "MEMORY.md"),
       cli: shellQuote(cli), hint: asHint(coordinatorCLIName(uuid)), skill: skillFile(), instructions: userInstructions() ? userInstructionsPath() : undefined,
       start: fresh ? "fresh" : notes.coordinatedBefore ? "carry-on" : "promoted",
       steps: [carryOn, memory, nameProgram, nameThreads, elsewhere, transcript],
@@ -125,7 +124,6 @@ export async function runAgentPromote(command) {
       name: programName(program),
       language,
       context: contextFile,
-      overview: overviewFile,
       tookOver,
       adopted: adopted.length ? adopted : undefined,
       background,
@@ -147,19 +145,19 @@ export async function runAgentPromote(command) {
 // coordinator's pane in place of the agent before it: it knows only what the program holds),
 // "promoted" (mid-conversation: it keeps what it knows and writes it down first) or "carry-on"
 // (mid-conversation, in a program coordinated before).
-export function coordinatorStartMessage({ name, program, protocol, overview, context, memoryFile, cli, hint, skill, instructions, start, steps = [] }) {
+export function coordinatorStartMessage({ name, program, protocol, context, memoryFile, cli, hint, skill, instructions, start, steps = [] }) {
   const fresh = start === "fresh";
   const first = [
     `Read the coordinator protocol at ${protocol} and follow it${fresh ? "" : " from now on"}.`,
     start === "promoted"
-      ? `Write what you know so far to ${context} and ${overview}, and open ${overview} beside you.`
+      ? `Write what you know so far to ${context} and ${memoryFile}.`
       : start === "carry-on"
-        ? `Open ${overview} beside you, and add to ${memoryFile} and ${overview} only what you know that they do not say yet.`
-        : `Open ${overview} beside you and keep it current.`,
-    ...steps.map(step => String(step || "").trim()).filter(Boolean),
-  ];
+        ? `Add to ${memoryFile} only what you know that it does not say yet.`
+        : "",
+    ...steps.map(step => String(step || "").trim()),
+  ].filter(Boolean);
   return [
-    `**You are ${fresh ? "" : "now also "}the coordinator of this work: “${name}”.** You hand the user's work to worker agents, one thread each, follow their reports and keep the user's overview current; the workers do the work, you do not.${fresh ? "" : " Keep all you know and keep answering the user in the language you have been using."}`,
+    `**You are ${fresh ? "" : "now also "}the coordinator of this work: “${name}”.** You hand the user's work to worker agents, one thread each, follow their reports and tell the user what they need to know; the workers do the work, you do not.${fresh ? "" : " Keep all you know and keep answering the user in the language you have been using."}`,
     "First:",
     first.map((step, index) => `${index + 1}. ${step}`).join("\n"),
     [
@@ -218,7 +216,7 @@ export async function runAgentAdopt(command) {
   if (!own.role) setPaneOption(localPaneRef(own.paneID), "@agents_role", "coordinator");
   // Its task in this program goes on under the same name when the coordinator names it.
   const continues = previous && previous.program === program && params.task === previous.task;
-  const task = continues ? previous.task : uniqueTaskName(command.text, records, program, params.task);
+  const task = continues ? previous.task : uniqueTaskName(titleSeed(params, command.text), records, program, params.task);
   if (previous && !continues) closeAdoptedTask(previous, target, own, program, task);
   const files = taskPaths(program, task);
   // A task that goes on under its name keeps its title; a new thread is named as it starts.

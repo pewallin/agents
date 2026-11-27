@@ -7,7 +7,7 @@ import { isCoordinatorPromptFor } from "./threads.js";
 
 const base = {
   name: "Security triage", program: "/h/.agents/programs/app", protocol: "/skills/coordinator.md",
-  overview: "/h/.agents/programs/app/OVERVIEW.md", context: "/h/.agents/programs/app/CONTEXT.md", memoryFile: "/h/.agents/programs/app/MEMORY.md",
+  context: "/h/.agents/programs/app/CONTEXT.md", memoryFile: "/h/.agents/programs/app/MEMORY.md",
   cli: "/h/.agents/agents-app/bin/agents-app-control", hint: "It finds your pane by itself.", skill: "/skills/SKILL.md",
 };
 
@@ -18,9 +18,10 @@ test("a coordinator's start says the role, then numbered first steps, then where
   assert.equal(heading, "First:");
   assert.deepEqual(steps.split("\n"), [
     "1. Read the coordinator protocol at /skills/coordinator.md and follow it.",
-    "2. Open /h/.agents/programs/app/OVERVIEW.md beside you and keep it current.",
-    "3. Name this program once.",
+    "2. Name this program once.",
   ]);
+  // OVERVIEW.md is no longer kept, and nothing opens beside the coordinator.
+  assert.doesNotMatch(text, /OVERVIEW|beside you/);
   assert.match(where, /^- Program directory: \/h\/\.agents\/programs\/app\n- The CLI: \/h\/\.agents\/agents-app\/bin\/agents-app-control\. It finds your pane by itself\.\n- Everything else/);
   assert.doesNotMatch(text, /user's own instructions/);
   // The repair pass still knows a coordinator's session by it.
@@ -33,5 +34,6 @@ test("an agent promoted mid-conversation keeps what it knows and writes it down 
   assert.match(promoted, /1\. Read the coordinator protocol at \/skills\/coordinator\.md and follow it from now on\.\n2\. Write what you know so far to \/h\/\.agents\/programs\/app\/CONTEXT\.md/);
   assert.match(promoted, /- The user's own instructions: \/h\/\.agents\/instructions\.md; follow them too\.$/);
   const carryOn = coordinatorStartMessage({ ...base, start: "carry-on" });
-  assert.match(carryOn, /2\. Open \/h\/\.agents\/programs\/app\/OVERVIEW\.md beside you, and add to \/h\/\.agents\/programs\/app\/MEMORY\.md/);
+  assert.match(carryOn, /2\. Add to \/h\/\.agents\/programs\/app\/MEMORY\.md only what you know that it does not say yet\./);
+  assert.doesNotMatch(promoted + carryOn, /OVERVIEW|beside you/);
 });

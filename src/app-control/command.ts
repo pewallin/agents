@@ -315,7 +315,14 @@ export function parseCommand(argv) {
     if (positional.length === 0) fail(64, "usage", "agent resolve requires task names.");
     const ways = ["dropped", "replaced-by", "propose", "keep-open"].filter(name => params[name] !== undefined);
     if (ways.length > 1) fail(64, "usage", "agent resolve takes one of --dropped, --replaced-by, --propose or --keep-open.");
+    if (params.as !== undefined && params.propose === undefined) fail(64, "usage", "agent resolve --as goes with --propose: --propose \"<why>\" --as done|dropped.");
     return { kind: "agent-resolve", tasks: positional, params };
+  }
+
+  if (command === "agent" && subcommand === "notify") {
+    const { positional, params } = parseOptions(rest);
+    if (positional.length === 0) fail(64, "usage", "agent notify needs the line the user reads: agent notify \"<line>\" [--why waiting|done|failed].");
+    return { kind: "agent-notify", text: positional.join(" "), params };
   }
 
   if (command === "agent" && subcommand === "remove") {

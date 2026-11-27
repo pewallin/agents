@@ -6,7 +6,7 @@ import path from "node:path";
 import { readAgentStateForPane } from "./agent-state.js";
 import { readToken, requestAppControl, requestID } from "./app-socket.js";
 import { LANGUAGE_OPTION, coordinatorLanguage, ensureSharedCLI, threadTitle, workerPrompt, writeBrief, writeTaskMeta, briefWarning } from "./briefs.js";
-import { requireTitle } from "./threads.js";
+import { requireTitle, titleSeed } from "./threads.js";
 import { inheritCoordinatorBackground } from "./coordinator.js";
 import { agentLaunch, agentNameFromLaunchCommand, agentProfile, assertOK, buildNewAgentArgv, controlHasArgument, normalizeAgentName, renderLaunchCommand } from "./launch.js";
 import { fail, setFailureContext, usage } from "./output.js";
@@ -65,7 +65,8 @@ export async function runAgentSpawn(command, currentSocketPath) {
     program = respawn?.program
       || (params.program && path.resolve(params.program))
       || resolveCoordinatorProgram(parentRecord, undefined, records).program;
-    task = respawn?.task || uniqueTaskName(command.prompt, records, program, params.task);
+    // The hidden task name is a slug of the thread's title (C7), else of its brief.
+    task = respawn?.task || uniqueTaskName(titleSeed(params, command.prompt), records, program, params.task);
   }
 
   const state = readAgentStateForPane(sourcePane);

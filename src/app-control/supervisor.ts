@@ -24,6 +24,12 @@ import { markResolved, markUnresolved, recordCoordinatorSession, recordTaskSessi
 import { agentStatuses, cliVersion, readFileOr, runningSupervisor, supervisorBeatFile } from "./supervisor-control.js";
 import { processWatches, readWatches } from "./watch.js";
 import { startFreshRunIfCold } from "./fresh-run.js";
+import { dropStaleNotify, settleTerminalNotify } from "./notify.js";
+import { wakeForQuietThreads } from "./quiet-threads.js";
+import { pendingTurnNotify } from "./conversation.js";
+
+// How often the supervisor looks for quiet threads (P8): they are quiet for days, so seldom.
+export const QUIET_CHECK_MS = 10 * 60 * 1000;
 
 // Typing into a prompt the user is writing in would mix the line into their draft and send both.
 // The app knows when the user last typed into a pane and whether that may still sit unsent.
@@ -149,6 +155,7 @@ export async function runSupervisor(command) {
   const notifiedFile = path.join(runDir, "notified.json");
   const panes = new Map();
   let quietTicks = 0;
+  let quietCheckedAt = 0;
   let unreachableTicks = 0;
   for (;;) {
     if (Number(readFileOr(pidFile, "").trim()) !== process.pid) {
@@ -199,6 +206,12 @@ export async function runSupervisor(command) {
       const status = statuses.get(record.paneID);
       if (status?.sessionId && status.agent) {
         recordCoordinatorSession(program, { via: "changed", agent: status.agent, session: status.sessionId, uuid: record.uuid });
+      }
+    }
+    // A turn the coordinator marked to notify, where no view host takes it with the turn (R7).
+    for (const record of records.filter(candidate => candidate.program === program && candidate.role === "coordinator" && !candidate.dead)) {
+      if (settleTerminalNotify(program, record, AT_PROMPT_STATES.has(statuses.get(record.paneID)?.status), now)) {
+        supervisorLog(`the coordinator in ${record.paneID} notifies the user of its turn`);
       }
     }
 
@@ -397,6 +410,26 @@ export async function runSupervisor(command) {
       const closedByCoordinator = tracked.uuid && readJSON(files.meta, {}).closedPane === tracked.uuid;
       if (resolvesOnClose(report) && !unfinished && !closedByCoordinator) markResolved(program, tracked.task, undefined, { kind: "done", who: "user" });
     }
+    // Threads quiet for two days: their coordinator is woken once to propose closing them (P8).
+    if (now - quietCheckedAt >= QUIET_CHECK_MS) {
+      quietCheckedAt = now;
+      const told = wakeForQuietThreads(program, records, {
+        now,
+        notified,
+        statusOf,
+        isWorker: isWorkerRecord,
+        // A line that reached its worker, or its agent's own hooks, are activity too.
+        deliveredAt: (forProgram, uuid) => {
+          const record = uuid && records.find(candidate => candidate.uuid === uuid);
+          const hookAt = record ? (Number(readAgentStateForPane(record.paneID)?.ts) || 0) * 1000 : 0;
+          return Math.max(deliveredAt(forProgram, uuid), hookAt);
+        },
+      });
+      if (told.length > 0) {
+        notifiedChanged = true;
+        supervisorLog(`quiet for ${told.length === 1 ? "two days or more" : "days"}: ${told.join(", ")}; its coordinator may propose closing`);
+      }
+    }
     if (notifiedChanged) writeFileAtomic(notifiedFile, `${JSON.stringify(notified, null, 2)}\n`);
     const state = JSON.stringify({ server, workers: Object.fromEntries(workers) });
     if (state !== savedState) {
@@ -469,7 +502,10 @@ export async function runSupervisor(command) {
 
     const offered = followOffers(program, records);
     const watching = processWatches(program);
-    quietTicks = programWorkers.length === 0 && pending === 0 && watching === 0 && offered === 0 ? quietTicks + 1 : 0;
+    // A notify mark waits for its coordinator's turn to end.
+    if (dropStaleNotify(program, now)) supervisorLog("a notify mark no turn took is dropped");
+    const notifying = pendingTurnNotify(program) && records.some(record => record.program === program && record.role === "coordinator" && !record.dead) ? 1 : 0;
+    quietTicks = programWorkers.length === 0 && pending === 0 && watching === 0 && offered === 0 && notifying === 0 ? quietTicks + 1 : 0;
     if (quietTicks >= 10) {
       supervisorLog("no workers, watches or queued lines; exiting");
       fs.rmSync(pidFile, { force: true });

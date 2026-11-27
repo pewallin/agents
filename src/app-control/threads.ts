@@ -148,9 +148,10 @@ export function markUnresolved(program, task) {
   });
 }
 
-// The coordinator's proposal to close a done thread, with why: the user closes it, or not.
-export function proposeClose(program, task, why, at = new Date().toISOString()) {
-  return updateTaskMeta(program, task, meta => ({ ...meta, proposedClose: { why, at } }));
+// The coordinator's proposal to close a thread, with why: as done (a done thread), or as dropped
+// (P8: one quiet for days). The user closes it, or not.
+export function proposeClose(program, task, why, at = new Date().toISOString(), as = "done") {
+  return updateTaskMeta(program, task, meta => ({ ...meta, proposedClose: { why, at, as } }));
 }
 
 // The worker's own done that its report ends on (lastWorkerReport), unless the thread was reopened
@@ -308,6 +309,11 @@ export function requireTitle(params, brief, commandName) {
   const line = String(brief || "").split("\n").map(text => text.trim().replace(/^[-*#>\s]+/, "")).find(text => text && !isRoleLine(text));
   const example = derivedTitle(line).split(" ").slice(0, 6).join(" ").replace(/"/g, "'") || "Fix Safari export button";
   fail(64, "titleRequired", `${commandName} needs --title, e.g. --title "${example}": verb first, 3-6 words, the user's words.`);
+}
+
+// What a new thread's task name is made from: its title, in the user's language, else its brief.
+export function titleSeed(params, brief) {
+  return typeof params.title === "string" && params.title.trim() ? params.title : brief;
 }
 
 // When a task's directory was last written, for a task with no time of its own.

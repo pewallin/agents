@@ -55,7 +55,8 @@ function subWorkerOutcome(outcome, task) {
 }
 
 // Marks threads resolved, each with its outcome; a thread that still has a pane is closed with it
-// (and its sub-workers). --propose only proposes closing a done thread, with why: the user closes.
+// (and its sub-workers). --propose only proposes closing, with why: a done thread as done, or with
+// --as dropped any open one (P8); the user closes it.
 export async function runAgentResolve(command) {
   const params = command.params;
   const { program, own } = commandProgram(params, "agent resolve");
@@ -69,15 +70,20 @@ export async function runAgentResolve(command) {
   if (params.propose !== undefined) {
     const why = oneLine(params.propose === true ? "" : params.propose, 300);
     if (!why) fail(64, "usage", "agent resolve --propose needs why, e.g. --propose \"The PR is merged and the build is out\".");
-    for (const task of command.tasks) {
-      if (!isFinished(readJSON(taskPaths(program, task).reportJSON, undefined))) {
-        fail(2, "notDone", `${task} is not done; only a done thread can be proposed for closing. An unfinished one stays open until the user drops it.`, { task });
+    // Closing as done, or (a thread quiet for days whose goal is no longer wanted, P8) as dropped.
+    const as = params.as === undefined ? "done" : String(params.as).toLowerCase();
+    if (!["done", "dropped"].includes(as)) fail(64, "usage", "agent resolve --propose --as is done or dropped.");
+    if (as === "done") {
+      for (const task of command.tasks) {
+        if (!isFinished(readJSON(taskPaths(program, task).reportJSON, undefined))) {
+          fail(2, "notDone", `${task} is not done, so it cannot be proposed for closing as done. If it is no longer wanted, propose dropping it: agent resolve ${task} --propose "<why>" --as dropped.`, { task });
+        }
       }
     }
-    for (const task of command.tasks) proposeClose(program, task, why);
+    for (const task of command.tasks) proposeClose(program, task, why, undefined, as);
     writeStatusFile(program);
     for (const record of coordinationPaneRecords().filter(candidate => candidate.program === program)) notifyApp(record.sessionName);
-    return { id: requestID("cli"), ok: true, result: { program, proposed: command.tasks, why, next: "The user sees it under Ready to close and closes the thread, or not. Nothing is resolved yet." } };
+    return { id: requestID("cli"), ok: true, result: { program, proposed: command.tasks, as, why, next: `The user sees a card in the thread proposing to close it as ${as}, and closes it or keeps it open. Nothing is resolved yet.` } };
   }
   const outcomes = new Map(command.tasks.map(task => [task, resolveOutcome(program, task, params, who)]));
   const records = coordinationPaneRecords().filter(record => record.program === program && isWorkerRecord(record));

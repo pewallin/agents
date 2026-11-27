@@ -420,6 +420,13 @@ it), and draws the pane from thread.jsonl only when it shows at least every mess
 those logs hold (`showsAtLeast`); otherwise from the sessions. A Codex coordinator (its prompts go to
 its TUI) is not covered.
 
+Since 2026-11-27 (Projects and Threads, step 6) a turn takes the coordinator's notify mark
+(`agent notify`, `<program>/.run/notify.json`) when the mark was made after the turn began:
+thread.jsonl's `turn` then has `notify: {why?, text}`, and the host's `onNotify` sets the pane's
+`@agents_notify` to `{turn, at, why?, text}` for the app (`paneNotify` in session-log-pane.ts). A
+turn that ends without an answer drops the mark and stays quiet. A wake whose turn ended with no
+answer is not drawn from thread.jsonl at all (`threadUpdates`).
+
 ## A thread beside you, drawn from its log (2026-11-26)
 
 `/thread/<session>?agents-next=acp-page&mirror=1&task=<task>&program=<program>` on any ACP host of

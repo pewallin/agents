@@ -7,6 +7,7 @@ import { runAgentAsk } from "./ask.js";
 import { ensureSharedCLI } from "./briefs.js";
 import { parseCommand } from "./command.js";
 import { runMCPServer } from "./mcp.js";
+import { runAgentNotify } from "./notify.js";
 import { writeFeedback } from "./feedback.js";
 import { outputResponse, setCommandArgv, usage } from "./output.js";
 import { runWorkspacePlacement } from "./placement.js";
@@ -74,6 +75,9 @@ export async function runAppControl(argv) {
   }
   if (command.kind === "agent-resolve") {
     outputResponse(await runAgentResolve(command));
+  }
+  if (command.kind === "agent-notify") {
+    outputResponse(await runAgentNotify(command));
   }
   if (command.kind === "agent-remove") {
     outputResponse(await runAgentRemove(command));

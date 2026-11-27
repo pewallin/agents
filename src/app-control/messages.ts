@@ -113,7 +113,11 @@ export function threadEvent(program, task, by, text) {
   const whole = `The whole thread: agents session-log --task ${shellQuote(task)} --program ${shellQuote(program)} --json`;
   return {
     summary,
-    text: `${summary}. ${whole}. If it changes nothing for you, end your turn without a reply.`,
+    // What the user writes in a thread is for that thread: the coordinator is told so that it
+    // knows, and acts only when asked or when it changes the project's plan.
+    text: by === "user"
+      ? `${summary}. It is for that thread; you are told so that you know. ${whole}. Act only when they ask you or it changes the project's plan; otherwise end your turn without a reply.`
+      : `${summary}. ${whole}. If it changes nothing for you, end your turn without a reply.`,
     event: { kind: "thread", thread: task, from: by === "user" ? "agents" : `worker:${task}` },
   };
 }

@@ -4,8 +4,10 @@
 //   message  {kind, id, at, from: "user", via, text, replyTo?}   what the user wrote to the
 //            coordinator (`agent send --from user`, from the app)
 //   turn     {kind, id, at, startedAt, agent, model?, session?, how: {start: fresh|continue, why?},
-//            wokeBy?, ms, summary?, steps (≤30 titles), reply}   a coordinator run that ended:
-//            its answer is what the user reads; how it started is in its details only
+//            wokeBy?, ms, summary?, steps (≤30 titles), reply, notify?: {why?, text}}   a
+//            coordinator run that ended: its answer is what the user reads; how it started is in
+//            its details only. `notify` is there when the coordinator chose to notify the user of
+//            this turn (`agent notify`, R7); every other turn is quiet.
 //
 // A reply over 16 KB is kept in <program>/replies/<id>.md and the line names it (replyFile). The
 // coordinator's pane shows this file, not its sessions' logs; a turn's Open session shows the run's
@@ -47,7 +49,24 @@ export interface ThreadTurn {
   steps?: string[];
   reply?: string;
   replyFile?: string;
+  notify?: TurnNotify;
 }
+
+/** Why a coordinator notifies the user of a turn (R7): a thread waits on them and it cannot answer
+ *  for them, a goal is done, or something failed. */
+export const NOTIFY_REASONS = ["waiting", "done", "failed"] as const;
+export type NotifyReason = (typeof NOTIFY_REASONS)[number];
+
+/** What a notification says: one line in the user's language, and why it is sent. */
+export interface TurnNotify {
+  why?: NotifyReason;
+  text: string;
+}
+
+/** The coordinator pane's option that carries its last notifying turn, for the app: JSON
+ *  {turn, at, why?, text}. The app notifies once per new `turn` and never for anything else of a
+ *  project's panes. */
+export const NOTIFY_OPTION = "@agents_notify";
 
 export type ThreadEntry = ThreadMessage | ThreadTurn;
 
@@ -183,16 +202,68 @@ export function takeNextRun(program: string): { start: "fresh" | "continue"; why
   }
 }
 
+function notifyFile(program: string): string {
+  return path.join(program, ".run", "notify.json");
+}
+
+/** The coordinator's choice to notify the user of the turn it is in (`agent notify`); the turn
+ *  that ends takes it. Marking again in the same turn replaces the line. */
+export function markTurnNotify(program: string, notify: TurnNotify, at = new Date()): TurnNotify & { at: string } {
+  const text = oneLine(notify.text, 300);
+  const value = { at: at.toISOString(), ...(notify.why ? { why: notify.why } : {}), text };
+  const dir = path.join(program, ".run");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = notifyFile(program);
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+  return value;
+}
+
+/** The notify mark as it stands, without taking it. */
+export function pendingTurnNotify(program: string): (TurnNotify & { at: string }) | undefined {
+  try {
+    const value = JSON.parse(fs.readFileSync(notifyFile(program), "utf8")) as { at?: unknown; why?: unknown; text?: unknown };
+    if (typeof value.at !== "string" || typeof value.text !== "string" || !value.text.trim()) return undefined;
+    const why = NOTIFY_REASONS.find((reason) => reason === value.why);
+    return { at: value.at, ...(why ? { why } : {}), text: value.text };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Takes the notify mark for a turn that started at `startedAt`: a mark from before the turn began
+ * belongs to an earlier one that ended without taking it, and goes without notifying. Taken once.
+ */
+export function takeTurnNotify(program: string, startedAt: Date): TurnNotify | undefined {
+  const pending = pendingTurnNotify(program);
+  fs.rmSync(notifyFile(program), { force: true });
+  if (!pending) return undefined;
+  // A little slack: the turn's start is when its prompt was sent, the mark's own clock is the CLI's.
+  if (Date.parse(pending.at) < startedAt.getTime() - 2_000) return undefined;
+  return { ...(pending.why ? { why: pending.why } : {}), text: pending.text };
+}
+
+/** The value of NOTIFY_OPTION for a turn that notifies: JSON in ASCII (\u escapes), since a tmux
+ *  client in a locale without UTF-8 stores other letters as "_". */
+export function notifyOptionValue(turn: string | undefined, at: string, notify: TurnNotify): string {
+  return JSON.stringify({ ...(turn ? { turn } : {}), at, ...(notify.why ? { why: notify.why } : {}), text: notify.text })
+    .replace(/[\u007f-\uffff]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 /**
  * The conversation as the ACP updates a view draws it from (the coordinator's pane shows this,
  * not its sessions): the user's messages, and per turn its steps as settled tool calls and its
  * answer. A turn a wake began, with no message of the user's before it, begins with that wake as
- * the envelope line the view shows as one quiet row.
+ * the envelope line the view shows as one quiet row. A wake that ended with nothing to say is not
+ * shown at all (C1, C4): its steps stay in its session.
  */
 export function threadUpdates(entries: ThreadEntry[]): Array<Record<string, unknown>> {
   const updates: Array<Record<string, unknown>> = [];
   let previous: ThreadEntry | undefined;
   for (const entry of entries) {
+    if (entry.kind === "turn" && entry.wokeBy && previous?.kind !== "message" && !entry.reply && !entry.replyFile) continue;
     if (entry.kind === "message") {
       updates.push({ sessionUpdate: "user_message_chunk", content: { type: "text", text: entry.text } });
     } else {

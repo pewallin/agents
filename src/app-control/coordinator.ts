@@ -98,39 +98,6 @@ export function userInstructions() {
   return readFileOr(userInstructionsPath(), "").trim();
 }
 
-// What the user sees beside the coordinator; the coordinator fills it in and keeps it current.
-export function starterOverview() {
-  return [
-    "# Overview",
-    "",
-    "<!-- In the user's language, to them. An executive summary first: where the work stands and",
-    "every next step for them, with its link, not only blockers. Then one short section per task,",
-    "most important first:",
-    "",
-    "## Needs you",
-    "",
-    "Login is fixed and in review; logout is done. Next for you:",
-    "",
-    "- Merge [auth-api !70](https://gitlab.example.com/group/auth-api/-/merge_requests/70), then rotate the Okta token",
-    "- Review [repo !45](https://gitlab.example.com/group/repo/-/merge_requests/45), the SSO redirect fix",
-    "- Try login on staging once the [deploy pipeline](https://gitlab.example.com/group/repo/-/pipelines/9876) is green",
-    "- Decide whether [Validate return URLs](http://127.0.0.1:9000/#/issue/bd-a1b2) comes before the release",
-    "",
-    "## fix-login: working",
-    "",
-    "Login lands on the start page after SSO; the redirect URL loses its return path.",
-    "",
-    "- [PROJ-123](https://jira.example.com/browse/PROJ-123)",
-    "- [repo !45](https://gitlab.example.com/group/repo/-/merge_requests/45): 1 of 2 approvals",
-    "- [repo !44](https://gitlab.example.com/group/repo/-/merge_requests/44): merged, [deploy pipeline](https://gitlab.example.com/group/repo/-/pipelines/9876) running",
-    "- [Validate return URLs](http://127.0.0.1:9000/#/issue/bd-a1b2): open",
-    "",
-    "## fix-logout: done",
-    "-->",
-    "",
-  ].join("\n");
-}
-
 export function starterContext(record) {
   const cwd = tmuxPaneOption(record.paneID, "@agents_command_cwd")
     || runTMux(["display-message", "-p", "-t", record.paneID, "#{pane_current_path}"]);
@@ -276,9 +243,9 @@ export function goneCoordinators(program, record, records) {
 // What a coordinator left for the next one, whatever agent it ran on: the notes in the program.
 export function programNotes(program) {
   const memory = path.join(program, "MEMORY.md");
-  const notes = [memory, path.join(program, "CONTEXT.md"), path.join(program, "OVERVIEW.md"), path.join(program, "STATUS.md")]
+  // OVERVIEW.md is no longer read or written; a program's earlier one is left untouched.
+  const notes = [memory, path.join(program, "CONTEXT.md"), path.join(program, "STATUS.md")]
     .filter(file => fs.existsSync(file));
-  // Promote writes OVERVIEW.md, so a program that has one had a coordinator.
-  const coordinatedBefore = fs.existsSync(memory) || fs.existsSync(path.join(program, "OVERVIEW.md")) || taskRows(program).length > 0;
+  const coordinatedBefore = fs.existsSync(memory) || taskRows(program).length > 0;
   return { coordinatedBefore, files: notes };
 }

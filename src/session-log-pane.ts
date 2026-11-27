@@ -3,6 +3,10 @@
 // the next), @agents_program and @agents_task name a worker's thread, and @agents_session_how
 // says how the pane's next session begins (a respawn and why), once.
 import { execFileSync } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { NOTIFY_OPTION } from "./app-control/conversation.js";
+import { getAppRuntimeDir } from "./paths.js";
 import type { SessionLogOrigin } from "./session-log.js";
 
 export const SESSION_LOG_OPTION = "@agents_session_log";
@@ -64,5 +68,20 @@ export function paneCoordinatorProgram(paneId: string): () => string | undefined
       program = paneOption(paneId, "@agents_role") === "coordinator" ? paneOption(paneId, "@agents_program") : undefined;
     }
     return program;
+  };
+}
+
+/** How a coordinator's pane tells the app of a turn that notifies (R7): NOTIFY_OPTION on the pane,
+ *  and a line in the app's event log, since tmux has no event for an option. */
+export function paneNotify(paneId: string): (value: string) => void {
+  return (value) => {
+    setPaneOption(paneId, NOTIFY_OPTION, value);
+    try {
+      const dir = join(getAppRuntimeDir(), "tmux-events");
+      mkdirSync(dir, { recursive: true });
+      appendFileSync(join(dir, "agents-app-events.log"), `${Math.floor(Date.now() / 1000)}\tagents-coordination\t\t\t\n`);
+    } catch {
+      // Without the app nothing reads it.
+    }
   };
 }

@@ -113,9 +113,14 @@ export function ensurePaneUUID(record) {
   return uuid;
 }
 
+// Letters that do not come apart into a base letter and a mark, as ASCII ("Bygg tjänsteskelett
+// för WI-03" -> "bygg-tjansteskelett-for-wi-03", "Ærø" -> "aero").
+const ASCII_LETTERS = { æ: "ae", ø: "o", œ: "oe", ß: "ss", ð: "d", đ: "d", þ: "th", ł: "l", ı: "i", ŋ: "ng" };
+
 export function slug(text, limit = 40) {
   return String(text || "")
     .toLowerCase()
+    .replace(/[æøœßðđþłıŋ]/g, letter => ASCII_LETTERS[letter])
     .normalize("NFKD")
     .replace(/[^\x00-\x7f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
@@ -346,6 +351,8 @@ export function uniqueTaskName(seed, records, program, explicit) {
     }
     return explicit;
   }
+  // A thread's task name is a short ASCII slug of its title, in whatever language the title is
+  // (C7): it never shows, the title does.
   const base = slug(String(seed).split(/\s+/).slice(0, 5).join(" "), 32) || "task";
   for (let suffix = 1; ; suffix += 1) {
     const name = suffix === 1 ? base : `${base}-${suffix}`;

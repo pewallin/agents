@@ -25,7 +25,7 @@ import { AcpCompaction, compactionWay } from "./acp-compaction.js";
 import type { StateUsage } from "./scanner-state-runtime.js";
 import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { TerminalReader } from "./terminal-question.js";
-import { appendThreadMessage, appendThreadTurn, readThread, seedMarker, seedThread, showsAtLeast, takeNextRun, threadUpdates } from "./app-control/conversation.js";
+import { appendThreadMessage, appendThreadTurn, notifyOptionValue, readThread, seedMarker, seedThread, showsAtLeast, takeNextRun, takeTurnNotify, threadUpdates } from "./app-control/conversation.js";
 import { parseEnvelopeLine } from "./agent-envelope.js";
 import { findSessionLog, markSessionLogInTui, sessionLogChain, sessionLogEntries, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions, type SessionLogTurn } from "./session-log.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
@@ -116,6 +116,8 @@ export interface AcpHostOptions {
   /** The program the pane coordinates now, if it does: the user's prompts from a view and each
    *  turn's answer go into its conversation (<program>/thread.jsonl, conversation.ts). */
   coordinatorProgram?: () => string | undefined;
+  /** Tells the app of a coordinator's turn that notifies the user (session-log-pane paneNotify). */
+  onNotify?: (value: string) => void;
   /** The pane's conversations; defaults to `agents history` for the pane (paneHistory). */
   history?: (limit: number) => Promise<PaneHistory>;
 }
@@ -409,7 +411,12 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
     const program = options.coordinatorProgram?.();
     if (!program) return;
     const woke = parseEnvelopeLine(turn.prompt);
-    appendThreadTurn(program, {
+    // Quiet unless the coordinator chose to notify in this turn (R7); a turn that ends with
+    // nothing to say never notifies.
+    const marked = takeTurnNotify(program, turn.startedAt);
+    const notify = marked && turn.reply.trim() ? marked : undefined;
+    if (marked && !notify) log("the coordinator marked a turn to notify that ended without an answer; it stays quiet");
+    const entry = appendThreadTurn(program, {
       startedAt: turn.startedAt.toISOString(),
       ...(options.historyAgent ? { agent: options.historyAgent } : {}),
       ...(turn.config.model ? { model: turn.config.model } : {}),
@@ -419,7 +426,9 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       ms: turn.ms,
       steps: turn.steps,
       ...(turn.reply ? { reply: turn.reply } : {}),
+      ...(notify ? { notify } : {}),
     });
+    if (notify) options.onNotify?.(notifyOptionValue(entry.id, entry.at, notify));
     // A view that loads the pane again shows the conversation, this turn in it (once seeded).
     const history = conversationHistory(turn.sessionId);
     if (history && hosted?.sessionId === turn.sessionId) hosted.replaceHistory(history);

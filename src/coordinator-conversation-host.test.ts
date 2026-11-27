@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { startAcpHost, type AcpHost } from "./acp-host.js";
-import { readThread } from "./app-control/conversation.js";
+import { markTurnNotify, readThread } from "./app-control/conversation.js";
 
 // The stand-in agent of acp-rest.test.ts.
 const AGENT = (dir: string) => `
@@ -113,6 +113,30 @@ describe("a coordinator's pane", () => {
       "agent_message_chunk:Hello",
     ]);
     again.close();
+  }, 20_000);
+
+  it("notifies only for a turn the coordinator marked, with the turn's id (R7)", async () => {
+    const told: string[] = [];
+    host = await startAcpHost({
+      paneId: "%8", agent: { id: "test-acp", name: "Test" }, runtimeTempDir: join(dir, "rt"), webRoot: join(dir, "web"), cwd: dir,
+      agentCommand: { command: process.execPath, args: ["-e", AGENT(dir)], env: process.env },
+      sessionLog: { harness: "test", root: join(dir, "sessions") },
+      coordinatorProgram: () => program,
+      onNotify: (value) => told.push(value),
+    });
+    const h = host;
+    await h.startHostedSession();
+    await h.hostedPrompt('<agents-event kind="wake" thread="login" from="agents" words="data">Worker login is done · read /p/m.md</agents-event>');
+    expect(told).toEqual([]);
+    // `agent notify` in the next turn: the mark is written while the turn runs.
+    const prompt = h.hostedPrompt('<agents-event kind="wake" thread="api" from="agents" words="data">Worker api is done · read /p/n.md</agents-event>');
+    markTurnNotify(program, { text: "api är klar", why: "done" });
+    await prompt;
+    const thread = readThread(program);
+    expect(thread.at(-2)).not.toHaveProperty("notify");
+    expect(thread.at(-1)).toMatchObject({ wokeBy: "Worker api is done", notify: { why: "done", text: "api är klar" } });
+    expect(told).toHaveLength(1);
+    expect(JSON.parse(told[0])).toEqual({ turn: thread.at(-1)!.id, at: thread.at(-1)!.at, why: "done", text: "api är klar" });
   }, 20_000);
 
   it("shows a run that started fresh below the runs it went on from in the pane", async () => {
