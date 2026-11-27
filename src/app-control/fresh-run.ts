@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { agentsCLI } from "./agent-state.js";
+import { agentSessionFile, agentsCLI } from "./agent-state.js";
 import { coordinatorStartMessage } from "./promote.js";
 import { noteNextRun, nextRunStart, readThread } from "./conversation.js";
 import { asHint, coordinatorCLIName, ensureSharedCLI } from "./briefs.js";
@@ -64,6 +64,9 @@ export function startFreshRunIfCold(program, record, status, log = () => {}) {
   if (!status?.sessionId) return false;
   const protocol = protocolFile();
   if (!protocol) return false;
+  // The session that goes cold: its transcript is how the new one learns what the conversation
+  // file does not hold yet (what came before the file was written, a TUI's turns).
+  const previous = agentSessionFile(record.paneID);
   // The agents CLI the supervisor asks for the panes' state (AGENTS_APP_AGENTS_BIN in tests).
   const socket = process.env.AGENTS_APP_TMUX_SOCKET;
   const resumed = spawnSync(agentsCLI(), ["resume", "--new-session", "--pane", record.paneID, "--json"], { encoding: "utf8", timeout: 30_000, env: { ...process.env, AGENTS_NO_AUTO_SETUP: "1", ...(socket ? { TMUX: `${socket},0,0` } : {}) } });
@@ -84,6 +87,7 @@ export function startFreshRunIfCold(program, record, status, log = () => {}) {
     start: "fresh",
     steps: [
       `You go on from earlier runs of this coordinator. Read ${path.join(program, "MEMORY.md")}, then ${contextFile}: the end of your conversation with the user and the open threads. Your answers so far are in ${path.join(program, "thread.jsonl")}; read more of it only when that is not enough.`,
+      previous ? `Your previous session (${previous.agent}) is ${previous.file}: read its end for what you and the user said last where those files do not say it, and check what it says was done before you build on it.` : "",
       "Then handle the event below, as the coordinator before you would have.",
     ],
   });
