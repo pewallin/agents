@@ -437,7 +437,7 @@ find a thread in it.
 
 The app loads a thread's own view with two more query items:
 
-- `presentation=thread`: the thread page. Its top line ("Threads › <title>", also while its
+- `presentation=thread`: the thread page. Its top line ("<project> › <title>", also while its
   coordinator's pane is gone), its brief folded to three lines ("Brief ›" opens it), then the
   conversation with one work line per turn in place of its steps (P9): "Working 2m · <gist>"
   while the agent works, the gist being its plan's current item or else what its current tool
@@ -466,10 +466,24 @@ that holds the other) shows the new text in place with "edited" after its time; 
 sight keeps its place while it changes. The answer of a turn under way is never replaced. Show
 Session shows what the agent said.
 
-`/threads?program=<program>&from=<task>` is the coordinator's threads by state (`GET /api/threads`,
-what `agents threads` says of the program). A row, or Return on the selected one, goes to the
-thread's own tab (`agentsNextThreadAction` `go-to-pane` with its task and program); a thread with
-no pane has no tab to go to.
+`/threads?program=<program>&from=<task>` is the project's Threads tab (Projects and Threads, P3
+and C3; threads-list.ts). The app hands it its rows whenever they change,
+`__agentsNextApplyThreads({program, name, threads: [{task, title, mark, line?, at?, pane?,
+place?}]})`, from its thread listing and its panes, so the tab changes with Needs you and ⌘K:
+`mark` is working, waits (orange), idle (no mark) or resolved; `line` the open question, else
+what the thread last said, else its brief's first line; `place` "here" when the thread's tab is in
+the Threads tab's workspace, else that workspace's name. Open threads keep the order they started
+in, so a row never moves; resolved ones fold at the foot. A page the app does not feed reads
+`GET /api/threads` once. A row, or Return on the selected one, sends `agentsNextThreadAction`
+`{action: "open", task, program}`: the app goes to the thread's tab, or brings a thread without
+one back as a tab. With no threads it reads "Threads your coordinator starts show here. Ask it on
+the left."
+
+Every top line starts with the project (C3): a thread's page "<project> › <title>", the Threads
+tab "<project> › Threads", a coordinator's "<project> · 8 threads · Notes". The project's name is
+`agents-coordinator:` (the app goes to the coordinator, or brings it back), the count
+`agents-thread:` (the app selects the project's one Threads tab, and opens it beside only when
+there is none), and Notes `agents-notes:` (the project's MEMORY.md, beside).
 
 ## Thread links (2026-11-27)
 
