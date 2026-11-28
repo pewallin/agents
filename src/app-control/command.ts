@@ -333,7 +333,7 @@ export function parseCommand(argv) {
   }
 
   if (command === "agent" && subcommand === "remove") {
-    const { positional, params } = parseOptions(rest);
+    const { positional, params } = parseOptions(rest, new Set(["stop"]));
     return { kind: "agent-remove", tasks: positional, params };
   }
 

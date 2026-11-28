@@ -139,7 +139,15 @@ export async function runAgentRemove(command) {
   const { program } = commandProgram(params, "agent remove");
   if (!fs.existsSync(program)) fail(2, "programUnavailable", `No program ${program}.`);
   for (const task of command.tasks) knownTask(program, task);
-  const records = coordinationPaneRecords().filter(record => record.program === program);
+  let records = coordinationPaneRecords().filter(record => record.program === program);
+  // Delete Project (the user's, from the app): its agents stop first, the coordinator and its
+  // threads, parked ones too; a parked session goes with its last window.
+  if (params.stop && command.tasks.length === 0) {
+    // Only its agents: other panes of the coordinator's session inherit its program too.
+    const agents = records.filter(record => !record.dead && (isWorkerRecord(record) || (record.role === "coordinator" && !record.task)));
+    for (const record of agents) runTMuxRequired(["kill-pane", "-t", record.paneID], "tmux kill-pane");
+    records = [];
+  }
   const workers = records.filter(isWorkerRecord);
   const tasks = command.tasks.length ? command.tasks : threadRows(program).map(row => row.task);
   const live = workers.filter(record => tasks.includes(record.task));
