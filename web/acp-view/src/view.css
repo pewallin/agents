@@ -913,3 +913,10 @@ a.crumb-link { color: var(--fg2); text-decoration: none; }
 .terminal-ask .terminal-wait-text { max-height: 40vh; overflow: auto; }
 /* An answer its agent edited: a small muted word after the time. */
 .receipt .edited { color: var(--faint); font-size: calc(var(--fs) - 1.5px); }
+/* Threads tab rows (Projects and Threads, C3): a second line with what the thread last said and,
+   at its end, where its tab is. */
+.thread-line2 { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.thread-line2 .thread-detail { flex: 1; min-width: 0; }
+.thread-place { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 40%; font-size: var(--fs-mono); line-height: 17px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-place .pane-glyph { flex: none; width: 11px; height: 11px; }
+.threads-empty { margin: 0 10px; color: var(--dim); }

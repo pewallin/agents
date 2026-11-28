@@ -35,6 +35,7 @@ import { typedTicketTokens, useTicketRules } from "./tickets";
 import { contextPercent, usageText, usageTitle, type SessionUsage } from "./usage";
 import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
 import { hostOutdated, outdatedHostAction, triedKey, viewBuild } from "./host-build";
+import { type RowMark, type ThreadRow, rowsFromListing, shortAge, splitRows, useThreadsList } from "./threads-list";
 import { editFor, followAnswerEdits, followOwnThread, PAGE_OPTIONS, proposalKey, showsEdits, shownProposal, useAnswerEdits, useOwnThread, workLine, type AnswerEdit, type OwnThread } from "./thread-page";
 import "./view.css";
 
@@ -2669,12 +2670,14 @@ function PageLine() {
   const coordination = useCoordination();
   const own = useOwnThread((state) => (PAGE_OPTIONS.threadPresentation ? state.thread : null));
   let line: ReactNode = null;
+  // Every top line starts with the project (C3): its name goes to the coordinator.
+  const project = coordination.programName ?? "Project";
   if ((coordination.role === "worker" && coordination.coordinator) || own) {
     // A thread's page says it is a thread even while its coordinator's pane is gone.
     const title = coordination.threadTitle ?? own?.title ?? coordination.task ?? own?.task;
     line = (
       <nav className="crumb" aria-label="Thread">
-        <a className="crumb-link" href={threadHref()} title={`Show the threads of ${coordination.programName ?? "its coordinator"}`}>Threads</a>
+        <a className="crumb-link" href={COORDINATOR_HREF} title="Go to the coordinator">{project}</a>
         <span className="crumb-sep" aria-hidden="true">›</span>
         {!folded && <span className="crumb-here" title={coordination.task ?? own?.task}>{title}</span>}
       </nav>
@@ -2685,10 +2688,11 @@ function PageLine() {
     const needsYou = (threads ?? []).some((thread) => thread.threadState === "needs-you") || coordination.workers.some((worker) => workerState(worker) === "needs-you");
     line = (
       <nav className="crumb" aria-label="Coordinator">
-        {!folded && <><span className="crumb-here">{coordination.programName ?? "Coordinator"}</span><span className="crumb-sep" aria-hidden="true">·</span></>}
-        <a className="crumb-link count" href={threadHref()} title="Show its threads beside">
+        {!folded && <><span className="crumb-here">{project}</span><span className="crumb-sep" aria-hidden="true">·</span></>}
+        <a className="crumb-link count" href={threadHref()} title="Go to its Threads tab">
           {needsYou && <StateMark state="needs-you" />}{count} {count === 1 ? "thread" : "threads"}
         </a>
+        {!folded && <><span className="crumb-sep" aria-hidden="true">·</span><a className="crumb-link" href={NOTES_HREF} title="Open the project's notes (MEMORY.md) beside">Notes</a></>}
       </nav>
     );
   }
@@ -2937,58 +2941,55 @@ const OPEN_REVIEW_BESIDE = new URLSearchParams(location.search).get("agents-next
 const reviewId = decodeURIComponent(location.pathname.match(/^\/review\/([^/]+)/)?.[1] ?? "") || null;
 const beadId = decodeURIComponent(location.pathname.match(/^\/bead\/([^/]+)/)?.[1] ?? "") || null;
 const outputId = decodeURIComponent(location.pathname.match(/^\/output\/([^/]+)/)?.[1] ?? "") || null;
+/** The project's name on a top line: the app goes to its coordinator. Notes: its MEMORY.md, beside. */
+const COORDINATOR_HREF = "agents-coordinator:";
+const NOTES_HREF = "agents-notes:";
+
 /** A coordinator's threads (/threads?program=&from=). */
 const threadsOf = location.pathname === "/threads" ? new URLSearchParams(location.search).get("program") : null;
 
-interface ListedThread { task: string; title: string; state: string; updatedAt?: string | null; resolvedAt?: string | null; agent?: string | null; line?: string | null; pane?: string | null }
-
-/** Asks the app to go to a thread's own tab: a thread lives in its own pane (R1, R4). */
-function goToThreadPane(task: string, program: string): void {
-  void appHandler(APP_HANDLERS.threadAction)?.postMessage({ action: "go-to-pane", task, program });
+/** Asks the app to go to a thread's own tab, or to bring a thread with none back as a tab (R4). */
+function openThreadRow(task: string, program: string, action: "open" | "show-session" = "open"): void {
+  void appHandler(APP_HANDLERS.threadAction)?.postMessage({ action, task, program });
 }
 
-/** An agent's name as the app writes it. */
-function agentLabel(agent: string | null | undefined): string {
-  const names: Record<string, string> = { claude: "Claude Code", codex: "Codex", kiro: "Kiro", opencode: "OpenCode", pi: "Pi", copilot: "Copilot" };
-  return agent ? names[agent] ?? agent : "";
+/** A row's mark: Working spins, Waits for you is orange, Idle shows nothing (States and marks). */
+function RowMarkView({ mark }: { mark: RowMark }) {
+  if (mark === "idle") return <span className="thread-mark idle" aria-label="Idle" />;
+  const state = mark === "waits" ? "needs-you" : mark;
+  return <span className={`thread-mark ${state}`}><StateMark state={state} /></span>;
 }
 
-/** A thread's state as its mark draws it (the app's Conversations marks). */
-function markState(state: string): "needs-you" | "done" | "working" | "idle" | "resolved" {
-  return state === "needs-you" || state === "done" || state === "working" || state === "resolved" ? state : "idle";
+/** The small pane icon the app uses for panes, before where a thread's tab is. */
+function PaneGlyph() {
+  return (
+    <svg viewBox="0 0 12 12" aria-hidden="true" className="pane-glyph">
+      <rect x="1.5" y="2" width="9" height="8" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M1.5 4.5h9" stroke="currentColor" strokeWidth="1.1" />
+    </svg>
+  );
 }
 
-/** How long ago, as the app's rows say it: "now", "5m", "3h", "2d". */
-function shortAge(at: string | null | undefined): string {
-  const ms = at ? Date.now() - Date.parse(at) : NaN;
-  if (!Number.isFinite(ms)) return "";
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
-}
-/** The list's groups, by where each thread stands (a stopped thread waits for a look too). */
-const THREAD_GROUPS: Array<{ title: string; states: string[] }> = [
-  { title: "Needs you", states: ["needs-you"] },
-  { title: "Ready for review", states: ["done", "stopped"] },
-  { title: "Working", states: ["working"] },
-  { title: "Resolved", states: ["resolved"] },
-];
-
-/** The coordinator's threads by state: a row, or Return on the selected one, goes to that thread's
- *  own tab (R4); the thread you came from is the selected one. */
+/** The project's Threads tab (P3, C3): its threads in the order they started, a row each with its
+ *  mark, title, one line, age and where its tab is; resolved ones folded at the foot. A click
+ *  goes to the thread's tab, or brings a closed one back as a tab. */
 function ThreadsPage({ program }: { program: string }) {
-  const from = new URLSearchParams(location.search).get("from");
-  const [listing, setListing] = useState<{ name: string; threads: ListedThread[] } | null | undefined>(undefined);
-  const [selected, setSelected] = useState<string | null>(from);
+  const { list, fromApp } = useThreadsList();
+  const [failed, setFailed] = useState(false);
+  const [selected, setSelected] = useState<string | null>(new URLSearchParams(location.search).get("from"));
   const [showsResolved, setShowsResolved] = useState(false);
+  useEffect(() => { document.title = "Threads"; }, []);
+  // A page the app does not feed reads the host's listing once.
   useEffect(() => {
-    hostJson<{ name: string; threads: ListedThread[] }>(`/api/threads?program=${encodeURIComponent(program)}`)
-      .then((value) => { setListing(value); document.title = "Threads"; }, () => setListing(null));
+    const timer = setTimeout(() => {
+      if (useThreadsList.getState().fromApp) return;
+      hostJson<{ name: string; threads: Array<{ task: string; title: string; state: string }> }>(`/api/threads?program=${encodeURIComponent(program)}`)
+        .then((value) => { if (!useThreadsList.getState().fromApp) useThreadsList.setState({ list: rowsFromListing(value, program) }); }, () => setFailed(true));
+    }, 1500);
+    return () => clearTimeout(timer);
   }, [program]);
-  const ordered = useMemo(() => THREAD_GROUPS.filter((group) => showsResolved || group.title !== "Resolved")
-    .flatMap((group) => (listing?.threads ?? []).filter((thread) => group.states.includes(thread.state))), [listing, showsResolved]);
+  const { open, resolved } = useMemo(() => splitRows(list?.threads ?? []), [list]);
+  const ordered = useMemo(() => (showsResolved ? [...open, ...resolved] : open), [open, resolved, showsResolved]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!ordered.length) return;
@@ -2999,54 +3000,50 @@ function ThreadsPage({ program }: { program: string }) {
         setSelected(ordered[next].task);
       } else if (event.key === "Enter" && at >= 0) {
         event.preventDefault();
-        if (ordered[at].pane) goToThreadPane(ordered[at].task, program);
+        openThreadRow(ordered[at].task, program);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [ordered, selected, program]);
-  if (listing === undefined) return <Notice>Opening the threads…</Notice>;
-  if (listing === null) return <Notice>The threads could not be read.</Notice>;
-  const row = (thread: ListedThread) => {
-    const detail = [agentLabel(thread.agent), thread.line].filter(Boolean).join(" · ");
-    return (
-      <button key={thread.task} type="button" className={`thread-row ${thread.state}${thread.task === selected ? " selected" : ""}`}
-        title={thread.pane ? "Go to its tab" : "It has no tab now"}
-        onClick={() => {
-          setSelected(thread.task);
-          if (thread.pane) goToThreadPane(thread.task, program);
-        }}>
-        <span className={`thread-mark ${markState(thread.state)}`}><StateMark state={markState(thread.state)} /></span>
-        <span className="thread-text">
-          <span className="thread-line1">
-            <span className="thread-title">{thread.title || thread.task}</span>
-            <span className="thread-age">{shortAge(thread.state === "resolved" ? thread.resolvedAt : thread.updatedAt)}</span>
-          </span>
-          {detail && <span className="thread-detail">{detail}</span>}
+  if (!list) return failed && !fromApp ? <Notice>The threads could not be read.</Notice> : <Notice>Opening the threads…</Notice>;
+  const row = (thread: ThreadRow) => (
+    <button key={thread.task} type="button" className={`thread-row ${thread.mark}${thread.task === selected ? " selected" : ""}`}
+      title={thread.pane ? "Go to its tab" : "Open it again as a tab"}
+      onClick={() => { setSelected(thread.task); openThreadRow(thread.task, program); }}>
+      <RowMarkView mark={thread.mark} />
+      <span className="thread-text">
+        <span className="thread-line1">
+          <span className="thread-title">{thread.title}</span>
+          <span className="thread-age">{shortAge(thread.at)}</span>
         </span>
-      </button>
-    );
-  };
+        {(thread.line || thread.place) && (
+          <span className="thread-line2">
+            <span className="thread-detail">{thread.line ?? ""}</span>
+            {thread.place && <span className="thread-place"><PaneGlyph />{thread.place}</span>}
+          </span>
+        )}
+      </span>
+    </button>
+  );
   return (
     <div className="view threads-page"><div className="main"><div className="scroll"><div className="col">
-      <nav className="crumb" aria-label="Threads"><span className="crumb-here">{listing.name} · Threads</span></nav>
-      {THREAD_GROUPS.map((group) => {
-        const threads = listing.threads.filter((thread) => group.states.includes(thread.state));
-        if (threads.length === 0) return null;
-        // Resolved threads fold at the foot, as Conversations folds them.
-        const folds = group.title === "Resolved";
-        return (
-          <section key={group.title} className="thread-group">
-            {folds
-              ? <button type="button" className="thread-fold" aria-expanded={showsResolved} onClick={() => setShowsResolved(!showsResolved)}>
-                  <svg viewBox="0 0 10 10" aria-hidden="true" className={showsResolved ? "open" : undefined}><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-                  {group.title} · {threads.length}
-                </button>
-              : <h2>{group.title} · {threads.length}</h2>}
-            {(!folds || showsResolved) && threads.map(row)}
-          </section>
-        );
-      })}
+      <nav className="crumb" aria-label="Threads">
+        <a className="crumb-link" href={COORDINATOR_HREF} title="Go to the coordinator">{list.name}</a>
+        <span className="crumb-sep" aria-hidden="true">›</span>
+        <span className="crumb-here">Threads</span>
+      </nav>
+      {open.length === 0 && resolved.length === 0 && <p className="threads-empty">Threads your coordinator starts show here. Ask it on the left.</p>}
+      {open.length > 0 && <section className="thread-group">{open.map(row)}</section>}
+      {resolved.length > 0 && (
+        <section className="thread-group">
+          <button type="button" className="thread-fold" aria-expanded={showsResolved} onClick={() => setShowsResolved(!showsResolved)}>
+            <svg viewBox="0 0 10 10" aria-hidden="true" className={showsResolved ? "open" : undefined}><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+            Resolved · {resolved.length}
+          </button>
+          {showsResolved && resolved.map(row)}
+        </section>
+      )}
     </div></div></div></div>
   );
 }
