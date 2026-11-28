@@ -2946,7 +2946,14 @@ const COORDINATOR_HREF = "agents-coordinator:";
 const NOTES_HREF = "agents-notes:";
 
 /** A coordinator's threads (/threads?program=&from=). */
-const threadsOf = location.pathname === "/threads" ? new URLSearchParams(location.search).get("program") : null;
+const threadsOf = location.pathname === "/threads"
+  ? (() => {
+      const params = new URLSearchParams(location.search);
+      const program = params.get("program") ?? "";
+      const folder = params.get("folder") ?? "";
+      return program || folder ? { program, folder } : null;
+    })()
+  : null;
 
 /** Asks the app to go to a thread's own tab, or to bring a thread with none back as a tab (R4). */
 function openThreadRow(task: string, program: string, action: "open" | "show-session" = "open"): void {
@@ -2973,7 +2980,7 @@ function PaneGlyph() {
 /** The project's Threads tab (P3, C3): its threads in the order they started, a row each with its
  *  mark, title, one line, age and where its tab is; resolved ones folded at the foot. A click
  *  goes to the thread's tab, or brings a closed one back as a tab. */
-function ThreadsPage({ program }: { program: string }) {
+function ThreadsPage({ program: named, folder }: { program: string; folder: string }) {
   const { list, fromApp } = useThreadsList();
   const [failed, setFailed] = useState(false);
   const [selected, setSelected] = useState<string | null>(new URLSearchParams(location.search).get("from"));
@@ -2983,11 +2990,14 @@ function ThreadsPage({ program }: { program: string }) {
   useEffect(() => {
     const timer = setTimeout(() => {
       if (useThreadsList.getState().fromApp) return;
-      hostJson<{ name: string; threads: Array<{ task: string; title: string; state: string }> }>(`/api/threads?program=${encodeURIComponent(program)}`)
-        .then((value) => { if (!useThreadsList.getState().fromApp) useThreadsList.setState({ list: rowsFromListing(value, program) }); }, () => setFailed(true));
+      const query = named ? `program=${encodeURIComponent(named)}` : `folder=${encodeURIComponent(folder)}`;
+      hostJson<{ name: string; program: string; threads: Array<{ task: string; title: string; state: string }> }>(`/api/threads?${query}`)
+        .then((value) => { if (!useThreadsList.getState().fromApp) useThreadsList.setState({ list: rowsFromListing(value, value.program ?? named) }); }, () => setFailed(true));
     }, 1500);
     return () => clearTimeout(timer);
-  }, [program]);
+  }, [named, folder]);
+  // A tab New Project made names its project's folder: the rows name its program.
+  const program = list?.program || named;
   const { open, resolved } = useMemo(() => splitRows(list?.threads ?? []), [list]);
   const ordered = useMemo(() => (showsResolved ? [...open, ...resolved] : open), [open, resolved, showsResolved]);
   useEffect(() => {
@@ -3109,7 +3119,7 @@ function App() {
   if (reviewId) return <ReviewPage id={reviewId} />;
   if (beadId) return <BeadPage id={beadId} />;
   if (outputId) return <OutputPage id={outputId} />;
-  if (threadsOf) return <ThreadsPage program={threadsOf} />;
+  if (threadsOf) return <ThreadsPage program={threadsOf.program} folder={threadsOf.folder} />;
   if (error) return <Notice>The pane's ACP host does not answer: {error}</Notice>;
   if (!info) return <Opening />;
   return <SessionGate info={info} />;
