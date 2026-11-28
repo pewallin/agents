@@ -2759,7 +2759,8 @@ function WorkLine({ turn, working, cwd }: { turn: Turn; working: boolean; cwd: s
     const step = turn.steps.at(-1);
     if (!gist && step?.type === "tool" && step.call.status !== "completed" && step.call.status !== "failed") {
       const { verb, target } = describeCall(step.call, cwd);
-      gist = `${PRESENT[verb] ?? verb} ${target}`.trim().toLowerCase();
+      // Only the verb is the line's own word; a path or command keeps its case.
+      gist = `${(PRESENT[verb] ?? verb).toLowerCase()} ${target}`.trim();
     }
   }
   const text = workLine(turn, working, now, gist);
