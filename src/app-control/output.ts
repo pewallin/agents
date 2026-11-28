@@ -51,6 +51,7 @@ export function usage() {
     "  agents app agent resolve <task>... [--dropped <why> | --replaced-by <task>] [--program <dir>] --json   (ends a thread: a done one as done, an unfinished one only dropped or replaced; closes its pane if it has one)",
     "  agents app agent resolve <task>... --propose <why> [--as done|dropped] --json   (proposes closing a thread: a done one as done, a quiet one as dropped; the user closes it)",
     "  agents app agent notify <line> [--why waiting|done|failed] --json   (coordinator: this turn notifies the user with the line; every other turn is quiet)",
+    "  agents app agent edit <new text>|--file <f> [--match <words>|--turn <n>] --json   (edit one of your earlier answers to the user in place; also agents thread edit)",
     "  agents app agent remove <task>... [--program <dir>] | --program <dir> --json   (deletes threads without a pane, or without tasks a whole program nobody leads; agents' own sessions stay)",
     "  agents app agent reopen <task> [<why>] [--title <title>] [--program <dir>] [--pane <pane-ref>] [--dry-run] --json   (a done thread says it was reopened and why; without a pane: resume its latest session, else respawn it, else read it)",
     "  agents app agent reopen --coordinator --program <dir> [--pane <pane-ref>] --json   (the program's coordinator as the same conversation: its latest session resumed beside the pane, its role given back without a start message)",

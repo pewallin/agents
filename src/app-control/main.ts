@@ -8,6 +8,7 @@ import { ensureSharedCLI } from "./briefs.js";
 import { parseCommand } from "./command.js";
 import { runMCPServer } from "./mcp.js";
 import { runAgentNotify } from "./notify.js";
+import { runAgentEdit } from "./answer-edits.js";
 import { writeFeedback } from "./feedback.js";
 import { outputResponse, setCommandArgv, usage } from "./output.js";
 import { runWorkspacePlacement } from "./placement.js";
@@ -78,6 +79,9 @@ export async function runAppControl(argv) {
   }
   if (command.kind === "agent-notify") {
     outputResponse(await runAgentNotify(command));
+  }
+  if (command.kind === "agent-edit") {
+    outputResponse(await runAgentEdit(command));
   }
   if (command.kind === "agent-remove") {
     outputResponse(await runAgentRemove(command));

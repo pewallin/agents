@@ -35,7 +35,7 @@ import { typedTicketTokens, useTicketRules } from "./tickets";
 import { contextPercent, usageText, usageTitle, type SessionUsage } from "./usage";
 import { planShown, planSummary, storedPlanOpen, storePlanOpen } from "./plan";
 import { hostOutdated, outdatedHostAction, triedKey, viewBuild } from "./host-build";
-import { followOwnThread, PAGE_OPTIONS, proposalKey, shownProposal, useOwnThread, workLine, type OwnThread } from "./thread-page";
+import { editFor, followAnswerEdits, followOwnThread, PAGE_OPTIONS, proposalKey, showsEdits, shownProposal, useAnswerEdits, useOwnThread, workLine, type AnswerEdit, type OwnThread } from "./thread-page";
 import "./view.css";
 
 announceBridge();
@@ -704,20 +704,28 @@ function Activity({ turn, working, stopped, cwd }: { turn: Turn; working: boolea
   );
 }
 
+/** No edits, one object, so a page without them draws nothing again. */
+const NO_EDITS: AnswerEdit[] = [];
+
+/** A turn as the page shows it: with an answer its agent edited, when. */
+type ShownTurn = Turn & { edited?: string };
+
 /** After a turn: a check mark (drawn once, for a turn seen live), when it ended and what it
  *  changed (Peter, 2026-11-27: no Review, Commit and Undo buttons; a file's counts open its changes). */
-function Receipt({ turn, cwd }: { turn: Turn; cwd: string }) {
+function Receipt({ turn, cwd }: { turn: ShownTurn; cwd: string }) {
   const changes = turn.changes;
   const added = changes.reduce((sum, change) => sum + change.added, 0);
   const removed = changes.reduce((sum, change) => sum + change.removed, 0);
   const live = turn.endedAt !== undefined;
-  if (!live && changes.length === 0) return null;
+  if (!live && changes.length === 0 && !turn.edited) return null;
   return (
     <div className={`receipt${live && Date.now() - turn.endedAt! < 4000 ? " draw" : ""}`}>
       <span className="done">
         <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7.4l2.6 2.6L11 4.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
         {live ? clockTime(turn.endedAt!) : "Done"}
       </span>
+      {/* The agent edited its answer (answer-edits.ts): the new text shows, the session keeps the old. */}
+      {turn.edited && <span className="edited" title={`Edited ${new Date(turn.edited).toLocaleString()}`}>edited</span>}
       {changes.length > 0 && (
         <>
           <span className="delta">{changes.length === 1 ? "1 file" : `${changes.length} files`} <span className="add">+{added}</span> <span className="del">−{removed}</span></span>
@@ -866,7 +874,7 @@ const TurnView = memo(function TurnView({ turn, last, working, cwd }: { turn: Tu
         </div>
       )}
       {!streaming && answerText && <ResultStrip answer={answerText} changes={turn.changes} version={String(turn.endedAt ?? "")} />}
-      {!streaming && (turn.answer.length > 0 || turn.changes.length > 0) && <Receipt turn={turn} cwd={cwd} />}
+      {!streaming && (turn.answer.length > 0 || turn.changes.length > 0) && <Receipt turn={turn as ShownTurn} cwd={cwd} />}
     </TurnChangesContext.Provider>
   );
 });
@@ -2040,7 +2048,7 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
   }, [items, toolCalls]);
   const gitTurns = useGitTurns(working, builtTurns.length);
   const merged = useRef(new WeakMap<Turn, { git: unknown; turn: Turn }>());
-  const turns = useMemo(() => builtTurns.map((turn, index) => {
+  const gitMerged = useMemo(() => builtTurns.map((turn, index) => {
     const git = gitTurns[index];
     if (!git) return turn;
     const known = merged.current.get(turn);
@@ -2049,6 +2057,20 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
     merged.current.set(turn, { git, turn: withGit });
     return withGit;
   }), [builtTurns, gitTurns]);
+  // An answer its agent edited shows its new text in place, on a thread page or a coordinator's
+  // conversation (a turn that did not change stays the object it was).
+  const edits = useAnswerEdits((state) => (showsEdits(PAGE_OPTIONS.threadPresentation, state.role) ? state.edits : NO_EDITS));
+  const editedTurns = useRef(new WeakMap<Turn, { edit: AnswerEdit; turn: ShownTurn }>());
+  const turns = useMemo(() => edits.length === 0 ? gitMerged : gitMerged.map((turn) => {
+    if (turn.answer.length === 0 || (working && turn === gitMerged.at(-1))) return turn;
+    const edit = editFor(turn.answer.map((item) => item.text).join("\n"), edits);
+    if (!edit) return turn;
+    const known = editedTurns.current.get(turn);
+    if (known?.edit === edit) return known.turn;
+    const shown: ShownTurn = { ...turn, answer: [{ ...turn.answer[0], text: edit.text, images: undefined }], edited: edit.at };
+    editedTurns.current.set(turn, { edit, turn: shown });
+    return shown;
+  }), [gitMerged, edits, working]);
   const now = useNow(working);
   const [review, setReview] = useState<FileChange[] | null>(null);
   const myReviews = useRef(new Set<string>());
@@ -2168,6 +2190,25 @@ function Conversation({ session, info, opening }: { session: AcpSession; info: H
     const element = scroller.current;
     if (element && pinned.current) element.scrollTop = element.scrollHeight;
   }, []);
+  // An edited answer changes in place (C5's one exception): what you read stays where it is. Before
+  // the page draws the edit, the first block in sight is noted; after, the scroll makes up for any
+  // change in height above it. At the bottom the page follows the end as always.
+  const editAnchor = useRef<{ element: Element; top: number } | null>(null);
+  useEffect(() => useAnswerEdits.subscribe(() => {
+    const element = scroller.current;
+    editAnchor.current = null;
+    if (!element || pinned.current) return;
+    const top = element.getBoundingClientRect().top;
+    const first = Array.from(element.querySelectorAll(".col > *")).find((block) => block.getBoundingClientRect().bottom > top);
+    if (first) editAnchor.current = { element: first, top: first.getBoundingClientRect().top };
+  }), []);
+  useLayoutEffect(() => {
+    const held = editAnchor.current;
+    editAnchor.current = null;
+    const element = scroller.current;
+    if (!held || !element || !held.element.isConnected) return;
+    element.scrollTop += held.element.getBoundingClientRect().top - held.top;
+  }, [edits]);
   // Sending brings the conversation to its end, where the message and the reply to it show,
   // however far up it was read.
   const toEnd = useCallback(() => {
@@ -3054,6 +3095,11 @@ function App() {
   useEffect(() => {
     if (!token || !PAGE_OPTIONS.threadPresentation) return;
     return followOwnThread(() => hostJson<{ thread: OwnThread | null }>("/api/thread"));
+  }, []);
+  // A project's pane follows the answers its agent edited (a host without /api/edits stops it).
+  useEffect(() => {
+    if (!token) return;
+    return followAnswerEdits(() => hostJson<{ follows?: boolean; role?: string | null; edits?: AnswerEdit[] }>("/api/edits").catch(() => ({ follows: false })));
   }, []);
   useEffect(() => {
     if (!token) return;

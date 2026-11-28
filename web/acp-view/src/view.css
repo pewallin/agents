@@ -911,3 +911,5 @@ a.crumb-link { color: var(--fg2); text-decoration: none; }
 .work-line { color: var(--dim); font-size: calc(var(--fs) - 0.5px); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-line.working { display: flex; }
 .terminal-ask .terminal-wait-text { max-height: 40vh; overflow: auto; }
+/* An answer its agent edited: a small muted word after the time. */
+.receipt .edited { color: var(--faint); font-size: calc(var(--fs) - 1.5px); }

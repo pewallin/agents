@@ -83,6 +83,12 @@ if (firstArg === "app" || firstArg === "app-control") {
   await (await import("./app-control/main.js")).runAppControl(args.slice(1));
   process.exit(0);
 }
+// An agent edits one of its own earlier answers to the user (`agents thread edit`, the same as
+// `agents app agent edit`; app-control/answer-edits.ts).
+if (firstArg === "thread" && args[1] === "edit") {
+  await (await import("./app-control/main.js")).runAppControl(["agent", "edit", ...args.slice(2)]);
+  process.exit(0);
+}
 // What was clumsy with these tools, while Agents Next's development setting collects it.
 if (firstArg === "feedback") {
   await (await import("./app-control/main.js")).runAppControl(args);
@@ -722,7 +728,7 @@ program
   .option("--json", "Output as JSON")
   .action(async (opts) => {
     const { readThread } = await import("./app-control/conversation.js");
-    const entries = readThread(opts.program, { after: opts.after, withReplies: true });
+    const entries = readThread(opts.program, { after: opts.after, withReplies: true, withEdits: true });
     if (opts.json || !process.stdout.isTTY) {
       console.log(JSON.stringify({ program: opts.program, entries }, null, 2));
       return;

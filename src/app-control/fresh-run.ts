@@ -21,7 +21,7 @@ import { threadRows } from "./threads.js";
 
 /** What the new session reads first beside its notes: the conversation's end and the open threads. */
 export function freshContext(program, limit = 20) {
-  const entries = readThread(program, { withReplies: true }).slice(-limit);
+  const entries = readThread(program, { withReplies: true, withEdits: true }).slice(-limit);
   const said = entries.map(entry => entry.kind === "message"
     ? `- ${entry.at.slice(0, 16).replace("T", " ")} The user: ${oneLine(entry.text, 1200)}`
     : `- ${entry.at.slice(0, 16).replace("T", " ")} You${entry.wokeBy ? ` (woken: ${entry.wokeBy})` : ""}: ${entry.reply ? oneLine(entry.reply, 1200) : "(no answer)"}`);

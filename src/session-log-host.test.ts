@@ -78,8 +78,13 @@ describe("the ACP host's session log", () => {
     const auth = { headers: { Authorization: `Bearer ${host.token}` } };
     const read = async () => (await (await fetch(`${host!.url}/api/thread`, auth)).json()) as { thread: unknown };
     expect(await read()).toEqual({ thread: { task: "fix", program, title: "Fixa inloggningen", brief: "## Goal\n\nThe login works again.", proposedClose: { why: "Klar och mergad", at: "2026-11-27T12:00:00.000Z" } } });
+    // The answers the thread edited, for its view (and none, with follows false, for no project's pane).
+    writeFileSync(join(program, "tasks", "fix", "edits.jsonl"), `${JSON.stringify({ kind: "edit", id: "e-1", at: "2026-11-28T11:00:00.000Z", by: "worker", original: "Klart.", text: "Klart, utom SSO." })}\n`);
+    const edits = async () => (await (await fetch(`${host!.url}/api/edits`, auth)).json()) as unknown;
+    expect(await edits()).toEqual({ follows: true, role: "worker", edits: [{ original: "Klart.", text: "Klart, utom SSO.", at: "2026-11-28T11:00:00.000Z" }] });
     own = undefined;
     expect(await read()).toEqual({ thread: null });
+    expect(await edits()).toEqual({ follows: false, role: null, edits: [] });
   });
 
   it("stops the turn of the session it holds when the app asks, and says so when it holds none", async () => {

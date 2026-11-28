@@ -160,6 +160,20 @@ export const MCP_TOOLS = [
     },
   },
   {
+    name: "edit",
+    description: "Edit one of your own earlier answers to the user in place, when it turned out wrong or needs a correction: the user sees the new text where that answer was, marked edited, and nobody is notified. By default your latest answer; match picks the latest that holds those words, turn one by number. A new result or question still goes in a new answer, so the user sees it at the bottom.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "The answer's whole new text." },
+        match: { type: "string", description: "Words from the answer to edit: the latest answer that holds them." },
+        turn: { type: "number", description: "Which answer: 1 your first, -1 your latest, -2 the one before." },
+        as: MCP_AS,
+      },
+      required: ["text"],
+    },
+  },
+  {
     name: "status",
     description: "List your workers (all: every task of the program) with their status, report line, latest question and queued messages.",
     inputSchema: { type: "object", properties: { all: { type: "boolean" }, as: MCP_AS } },
@@ -223,6 +237,13 @@ export function mcpArguments(name, input) {
       if (args[key] !== undefined) argv.push(flag, String(args[key]));
     }
     if (args.no_wake) argv.push("--no-wake");
+    return { argv };
+  }
+  case "edit": {
+    if (args.match !== undefined && args.turn !== undefined) return { error: "Give match or turn, not both." };
+    const argv = ["agent", "edit", text(args.text) || ""];
+    if (args.match !== undefined) argv.push("--match", String(args.match));
+    if (args.turn !== undefined) argv.push("--turn", String(args.turn));
     return { argv };
   }
   case "status":

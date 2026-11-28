@@ -27,6 +27,7 @@ import { harnessName, MessageQueue, steerInboxDirectory } from "./acp-queue.js";
 import { TerminalReader } from "./terminal-question.js";
 import { appendThreadMessage, appendThreadTurn, notifyOptionValue, readThread, seedMarker, seedThread, showsAtLeast, takeNextRun, takeTurnNotify, threadUpdates } from "./app-control/conversation.js";
 import { parseEnvelopeLine } from "./agent-envelope.js";
+import { readAnswerEdits, shownEdits } from "./app-control/answer-edits-store.js";
 import { markSessionLogInTui, sessionLogChain, readSessionLog, readSessionLogMeta, sessionLogChoices, sessionLogPath, sessionLogUpdates, SessionLogTap, type SessionLogTapOptions, type SessionLogTurn } from "./session-log.js";
 import { appControlTarget, openPageBeside, paneText, ReviewStore, sessionPanes, type AppControlTarget } from "./acp-bridge.js";
 import { changesSince, commitChanges, commitInfo, gitCommandSummary, IMAGE_EXTENSIONS, insideAllowed, readText, linkInfo, paneStates, peekFile, programDirectories, readBeads, resolveNames, saveAttachment, snapshotTree, treeDiff, versionsBetween, workRoots } from "./acp-peek.js";
@@ -686,6 +687,7 @@ export async function startAcpHost(options: AcpHostOptions): Promise<AcpHost> {
       )),
       terminal: options.handoff?.inView() ? undefined : terminal,
       ownThread: options.ownThread,
+      coordinatorProgram: options.coordinatorProgram,
       log,
     })) return;
     handleHttp(request, response, {
@@ -1434,6 +1436,8 @@ function handleBridge(
     terminal: TerminalReader | undefined;
     /** The thread the pane is, for its own page (GET /api/thread). */
     ownThread?: () => { program: string; task: string } | undefined;
+    /** The program the pane coordinates, for its edited answers (GET /api/edits). */
+    coordinatorProgram?: () => string | undefined;
     log: (message: string) => void;
   },
 ): boolean {
@@ -1442,7 +1446,7 @@ function handleBridge(
   const ours = path === "/api/events" || path === "/api/panes" || path.startsWith("/api/panes/")
     || path === "/api/review" || path.startsWith("/api/review/") || path === "/api/open-review"
     || path === "/api/session/first-turn" || path === "/api/steer" || path === "/api/queue" || path.startsWith("/api/queue/")
-    || path === "/api/history" || path === "/api/terminal-question" || path === "/api/thread" || path === "/api/threads"
+    || path === "/api/history" || path === "/api/terminal-question" || path === "/api/thread" || path === "/api/edits" || path === "/api/threads"
     || PEEK_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   if (!ours) return false;
   if (!authorized(request, context.token, url)) {
@@ -1533,6 +1537,16 @@ function handleBridge(
   }
   // The thread the pane is (a worker of a project), for its own page (presentation=thread): its
   // title, its brief and a close its coordinator proposed, from its task's files.
+  // The answers the pane's agent edited (a coordinator's or a thread's, answer-edits.ts): per answer
+  // its original text, its new text and when. `follows` is false for a pane of no project, whose
+  // view then stops asking.
+  if (path === "/api/edits" && request.method === "GET") {
+    const coordinated = context.coordinatorProgram?.();
+    const own = coordinated ? undefined : context.ownThread?.();
+    const edits = coordinated ? readAnswerEdits(coordinated) : own ? readAnswerEdits(own.program, own.task) : [];
+    sendJson(response, 200, { follows: Boolean(coordinated || own), role: coordinated ? "coordinator" : own ? "worker" : null, edits: shownEdits(edits) });
+    return true;
+  }
   if (path === "/api/thread" && request.method === "GET") {
     const own = context.ownThread?.();
     sendJson(response, 200, { thread: own ? ownThreadPage(own.program, own.task) : null });

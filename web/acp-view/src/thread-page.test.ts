@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { APP_ACTIONS, APP_HANDLERS } from "./bridge";
-import { followOwnThread, OWN_THREAD_POLL_MS, pageOptions, proposalKey, roundDuration, shownProposal, useOwnThread, workLine } from "./thread-page";
+import { editFor, followAnswerEdits, followOwnThread, OWN_THREAD_POLL_MS, pageOptions, proposalKey, roundDuration, showsEdits, shownProposal, useAnswerEdits, useOwnThread, workLine } from "./thread-page";
 
 describe("a thread's own view (Projects and Threads, R1, P5)", () => {
   it("is the thread page with presentation=thread, and shows terminal questions with questions=inline", () => {
@@ -72,5 +72,51 @@ describe("a thread page's close card (P4, P8)", () => {
     const calls = read.mock.calls.length;
     await vi.advanceTimersByTimeAsync(OWN_THREAD_POLL_MS * 3);
     expect(read.mock.calls.length).toBe(calls);
+  });
+});
+
+describe("an answer its agent edited", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    useAnswerEdits.setState({ edits: [], role: null });
+  });
+
+  it("is found by the text the agent gave, however the view joins it", () => {
+    const edits = [
+      { original: "auth-fix är klar.", text: "auth-fix är klar, men CI är röd.", at: "2026-11-28T11:00:00.000Z" },
+      { original: "Klart: steget är skrivet.\nPR:en är uppe och väntar på granskning av teamet.", text: "Klart.", at: "2026-11-28T11:05:00.000Z" },
+    ];
+    expect(editFor("auth-fix är klar.", edits)?.text).toBe("auth-fix är klar, men CI är röd.");
+    expect(editFor("  auth-fix   är klar. ", edits)?.text).toBe("auth-fix är klar, men CI är röd.");
+    expect(editFor("Klart: steget är skrivet. PR:en är uppe och väntar på granskning av teamet.", edits)?.text).toBe("Klart.");
+    expect(editFor("auth-fix", edits)).toBeUndefined();
+    expect(editFor("", edits)).toBeUndefined();
+  });
+
+  it("shows on a thread page and in a coordinator's conversation, never in a session", () => {
+    expect(showsEdits(true, "worker")).toBe(true);
+    expect(showsEdits(false, "coordinator")).toBe(true);
+    expect(showsEdits(false, "worker")).toBe(false);
+    expect(showsEdits(false, null)).toBe(false);
+  });
+
+  it("is followed while the page is seen, changes the page only when an edit changed, and stops for no project's pane", async () => {
+    vi.useFakeTimers();
+    let answer: { follows?: boolean; role?: string | null; edits?: Array<{ original: string; text: string; at: string }> } = { follows: true, role: "worker", edits: [{ original: "a", text: "b", at: "x" }] };
+    const read = vi.fn(async () => answer);
+    let changes = 0;
+    const unsubscribe = useAnswerEdits.subscribe(() => { changes += 1; });
+    const stop = followAnswerEdits(read);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useAnswerEdits.getState()).toMatchObject({ role: "worker", edits: [{ text: "b" }] });
+    await vi.advanceTimersByTimeAsync(OWN_THREAD_POLL_MS * 2);
+    expect(changes).toBe(1);
+    answer = { follows: false };
+    await vi.advanceTimersByTimeAsync(OWN_THREAD_POLL_MS);
+    const calls = read.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(OWN_THREAD_POLL_MS * 3);
+    expect(read.mock.calls.length).toBe(calls);
+    stop();
+    unsubscribe();
   });
 });

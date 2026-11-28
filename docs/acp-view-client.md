@@ -457,6 +457,15 @@ The app loads a thread's own view with two more query items:
   thread page again once it is answered. Before the conversation shows, the same card floats as
   the terminal's question did.
 
+An answer its agent edited (`agents thread edit`, 2026-11-28): `GET /api/edits` gives the pane's
+edits, `{follows, role, edits: [{original, text, at}]}` (a coordinator's from thread.jsonl, a
+thread's from its edits.jsonl; `follows: false` for a pane of no project, and the page stops
+asking). The page reads it every 5 s while it is seen. On a thread page or a coordinator's
+conversation an answer whose text is an edit's `original` (whitespace aside; for a long answer one
+that holds the other) shows the new text in place with "edited" after its time; the first block in
+sight keeps its place while it changes. The answer of a turn under way is never replaced. Show
+Session shows what the agent said.
+
 `/threads?program=<program>&from=<task>` is the coordinator's threads by state (`GET /api/threads`,
 what `agents threads` says of the program). A row, or Return on the selected one, goes to the
 thread's own tab (`agentsNextThreadAction` `go-to-pane` with its task and program); a thread with

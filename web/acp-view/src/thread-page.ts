@@ -93,3 +93,61 @@ export function followOwnThread(read: () => Promise<{ thread: OwnThread | null }
   void tick();
   return () => { stopped = true; if (timer) clearTimeout(timer); };
 }
+
+/** An answer an agent edited (GET /api/edits): its text as it gave it, its new text, and when. */
+export interface AnswerEdit {
+  original: string;
+  text: string;
+  at: string;
+}
+
+export const useAnswerEdits = create<{ edits: AnswerEdit[]; role: "coordinator" | "worker" | null }>(() => ({ edits: [], role: null }));
+
+/** An answer's text as the CLI compares it (answer-edits-store.ts): whitespace runs as one space. */
+export function answerKey(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** The edit of an answer, found by the text the agent gave: the same text, or for a long answer one
+ *  that holds the other (the view joins an answer's messages a little differently from the log). */
+export function editFor(answer: string, edits: AnswerEdit[]): AnswerEdit | undefined {
+  const key = answerKey(answer);
+  if (!key) return undefined;
+  for (let index = edits.length - 1; index >= 0; index -= 1) {
+    const original = answerKey(edits[index].original);
+    if (original === key) return edits[index];
+    if (key.length >= 40 && original.length >= 40 && (key.includes(original) || original.includes(key))) return edits[index];
+  }
+  return undefined;
+}
+
+/** Whether the page shows answers as edited: a thread page, or a coordinator's conversation. A
+ *  session (Show Session) shows what the agent said. */
+export function showsEdits(threadPresentation: boolean, role: string | null): boolean {
+  return threadPresentation || role === "coordinator";
+}
+
+/** Follows the edits of the pane's answers while the page is seen; stops for a pane of no project. */
+export function followAnswerEdits(read: () => Promise<{ follows?: boolean; role?: string | null; edits?: AnswerEdit[] }>): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let last = "";
+  const tick = async () => {
+    if (stopped) return;
+    if (typeof document === "undefined" || document.visibilityState === "visible") {
+      const answer = await read().catch(() => null);
+      if (stopped) return;
+      if (answer && answer.follows === false) return;
+      if (answer) {
+        const role = answer.role === "coordinator" || answer.role === "worker" ? answer.role : null;
+        const edits = Array.isArray(answer.edits) ? answer.edits : [];
+        const seen = JSON.stringify([role, edits]);
+        // Nothing changes on the page while nothing changed.
+        if (seen !== last) { last = seen; useAnswerEdits.setState({ role, edits }); }
+      }
+    }
+    timer = setTimeout(() => void tick(), OWN_THREAD_POLL_MS);
+  };
+  void tick();
+  return () => { stopped = true; if (timer) clearTimeout(timer); };
+}

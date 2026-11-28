@@ -50,6 +50,20 @@ export interface ThreadTurn {
   reply?: string;
   replyFile?: string;
   notify?: TurnNotify;
+  /** When the coordinator last edited its answer (readThread withEdits: `reply` is then the new text). */
+  edited?: string;
+}
+
+/** The coordinator's edit of one of its answers (answer-edits.ts): the turn, its answer as it was
+ *  and its new text. */
+export interface ThreadEdit {
+  kind: "edit";
+  id: string;
+  at: string;
+  by: "coordinator";
+  turn?: string;
+  original: string;
+  text: string;
 }
 
 /** Why a coordinator notifies the user of a turn (R7): a thread waits on them and it cannot answer
@@ -143,24 +157,37 @@ export function appendThreadTurn(program: string, turn: Omit<ThreadTurn, "kind" 
   return entry;
 }
 
-/** The conversation, entries after `after` (an id) only; a line that does not parse is skipped. */
-export function readThread(program: string, options: { after?: string; withReplies?: boolean } = {}): ThreadEntry[] {
+/** Records the coordinator's edit of one of its answers; the turn itself stays as it was said. */
+export function appendThreadEdit(program: string, edit: ThreadEdit): void {
+  withThreadLock(program, () => fs.appendFileSync(threadFile(program), `${JSON.stringify(edit)}\n`, { mode: 0o600 }));
+}
+
+/** The conversation, entries after `after` (an id) only; a line that does not parse is skipped.
+ *  `withEdits`: a turn whose answer the coordinator edited has the new text, and `edited`. */
+export function readThread(program: string, options: { after?: string; withReplies?: boolean; withEdits?: boolean } = {}): ThreadEntry[] {
   let text = "";
   try { text = fs.readFileSync(threadFile(program), "utf8"); } catch { return []; }
   const entries: ThreadEntry[] = [];
+  const edits = new Map<string, ThreadEdit>();
   for (const raw of text.split("\n")) {
     if (!raw.trim()) continue;
     try {
-      const value = JSON.parse(raw) as ThreadEntry;
+      const value = JSON.parse(raw) as ThreadEntry | ThreadEdit;
       if (value && (value.kind === "message" || value.kind === "turn") && typeof value.id === "string") entries.push(value);
+      else if (options.withEdits && value?.kind === "edit" && typeof value.turn === "string" && typeof value.text === "string") edits.set(value.turn, value);
     } catch { /* a torn line */ }
   }
   const from = options.after ? entries.findIndex((entry) => entry.id === options.after) + 1 : 0;
   const shown = entries.slice(from);
-  if (!options.withReplies) return shown;
+  const edited = (entry: ThreadEntry): ThreadEntry => {
+    if (entry.kind !== "turn") return entry;
+    const edit = edits.get(entry.id);
+    return edit ? { ...entry, reply: edit.text, edited: edit.at } : entry;
+  };
+  if (!options.withReplies) return edits.size ? shown.map(edited) : shown;
   return shown.map((entry) => {
-    if (entry.kind !== "turn" || !entry.replyFile) return entry;
-    try { return { ...entry, reply: fs.readFileSync(entry.replyFile, "utf8").trimEnd() }; } catch { return entry; }
+    if (entry.kind !== "turn" || !entry.replyFile) return edited(entry);
+    try { return edited({ ...entry, reply: fs.readFileSync(entry.replyFile, "utf8").trimEnd() }); } catch { return edited(entry); }
   });
 }
 

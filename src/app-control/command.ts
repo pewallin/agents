@@ -325,6 +325,13 @@ export function parseCommand(argv) {
     return { kind: "agent-notify", text: positional.join(" "), params };
   }
 
+  if (command === "agent" && subcommand === "edit") {
+    const { positional, params } = parseOptions(rest);
+    if (positional.length === 0 && params.file === undefined) fail(64, "usage", "agent edit needs the answer's new text: agent edit \"<new text>\" [--match \"<words from the answer>\" | --turn <n>], or --file <file>.");
+    if (params.match !== undefined && params.turn !== undefined) fail(64, "usage", "agent edit takes --match or --turn, not both.");
+    return { kind: "agent-edit", text: positional.join(" "), params };
+  }
+
   if (command === "agent" && subcommand === "remove") {
     const { positional, params } = parseOptions(rest);
     return { kind: "agent-remove", tasks: positional, params };
