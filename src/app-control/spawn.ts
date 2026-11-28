@@ -61,6 +61,12 @@ export async function runAgentSpawn(command, currentSocketPath) {
   let task;
   let program;
   const sub = subWorkerLead(parentRecord, params, records, "start", !respawn);
+  // Threads start from a project's coordinator, or from one of its threads (Projects and Threads,
+  // Project lifecycle): an ordinary pane no longer becomes a coordinator by starting a worker.
+  if (parentRecord && !respawn && !params.program && parentRecord.role !== "coordinator" && parentRecord.role !== "worker") {
+    releaseSpawnLock();
+    fail(2, "noProject", "There is no project here, so this pane cannot start a thread. Ask the user to start one with New Project (in the plus menu or ⌘K) in this folder; its coordinator starts the threads. To start an agent that is no thread, add --no-parent.");
+  }
   if (parentRecord) {
     program = respawn?.program
       || (params.program && path.resolve(params.program))

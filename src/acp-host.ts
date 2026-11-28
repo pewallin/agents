@@ -1555,17 +1555,23 @@ function handleBridge(
   // A coordinator's threads, for the Threads list (/threads): what `agents threads` says of the
   // program, run as its own process. A row goes to the thread's own tab (the app's go-to-pane).
   if (path === "/api/threads" && request.method === "GET") {
-    const program = url.searchParams.get("program") ?? "";
-    let folder: string | undefined;
-    try { folder = (JSON.parse(readFileSync(join(program, "program.json"), "utf8")) as { folder?: unknown }).folder as string | undefined; } catch { /* none */ }
-    if (!program || typeof folder !== "string") { sendJson(response, 404, { message: "That program is not known here." }); return true; }
+    // By its program, or by its project's folder (a Threads tab New Project made).
+    const named = url.searchParams.get("program") ?? "";
+    let folder: string | undefined = url.searchParams.get("folder") || undefined;
+    if (named) {
+      try { folder = (JSON.parse(readFileSync(join(named, "program.json"), "utf8")) as { folder?: unknown }).folder as string | undefined; } catch { folder = undefined; }
+    }
+    if (typeof folder !== "string" || !folder) { sendJson(response, 404, { message: "That program is not known here." }); return true; }
     const [command, ...prefix] = getSelfArgv();
     execFile(command, [...prefix, "threads", "--json", "--cwd", folder], { encoding: "utf8", timeout: 30_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, AGENTS_NO_AUTO_SETUP: "1" } }, (error, stdout) => {
       if (error) { sendJson(response, 502, { message: `agents threads failed: ${error.message}` }); return; }
       try {
         const listing = JSON.parse(stdout) as { programs?: Array<{ program?: string; name?: string; threads?: Array<Record<string, unknown>> }> };
-        const entry = listing.programs?.find((item) => item.program === program);
-        if (!entry) { sendJson(response, 404, { message: "That program has no threads." }); return; }
+        const entry = named
+          ? listing.programs?.find((item) => item.program === named)
+          : listing.programs?.find((item) => (item as { folder?: string }).folder === folder) ?? listing.programs?.[0];
+        if (!entry?.program) { sendJson(response, 404, { message: "That program has no threads." }); return; }
+        const program = entry.program;
         sendJson(response, 200, {
           program,
           name: entry.name ?? program.split("/").pop(),
